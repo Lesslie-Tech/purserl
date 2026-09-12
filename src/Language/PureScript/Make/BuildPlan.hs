@@ -1,6 +1,7 @@
 module Language.PureScript.Make.BuildPlan
   ( BuildPlan(bpEnv, bpIndex)
   , BuildJobResult(..)
+  , ResultTiming(..)
   , bpExterns
   , construct
   , construct2
@@ -15,6 +16,8 @@ module Language.PureScript.Make.BuildPlan
   , collectResults
   , markComplete
   , markComplete2
+  , markExternsComplete
+  , markCompleteImmediate
   , needsRebuild
   ) where
 
@@ -89,9 +92,19 @@ data Prebuilt = Prebuilt
   }
   deriving (Show)
 
-newtype BuildJob = BuildJob
-  { bjResult :: C.MVar BuildJobResult
-    -- ^ Note: an empty MVar indicates that the build job has not yet finished.
+data BuildJob = BuildJob
+  { bjExterns :: C.MVar BuildJobResult
+    -- ^ Filled as soon as this module's ExternsFile is known (i.e. right
+    -- after typechecking finishes), independently of whether/when this
+    -- module's codegen has finished. Other modules that only need our
+    -- ExternsFile to proceed with their own typechecking should block on
+    -- this MVar rather than 'bjResult', so they don't needlessly wait on our
+    -- codegen. Note: an empty MVar indicates that typechecking has not yet
+    -- finished (or won't -- e.g. this module was skipped).
+  , bjResult :: C.MVar BuildJobResult
+    -- ^ Filled once this module's entire build (typecheck *and* codegen) has
+    -- finished. Note: an empty MVar indicates that the build job has not yet
+    -- finished.
   }
 
 data BuildJobResult
@@ -123,17 +136,19 @@ data RebuildStatus = RebuildStatus
     -- ^ Externs, even if the source file is changed or the timestamp check fails.
   }
 
--- | Called when we finished compiling a module and want to report back the
--- compilation result, as well as any potential errors that were thrown.
+-- | Called when we finished compiling a module (both typecheck *and*
+-- codegen) and want to report back the final compilation result, as well as
+-- any potential errors that were thrown. This only fills 'bjResult' -- see
+-- 'markExternsComplete' for publishing the ExternsFile to dependents earlier,
+-- right after typechecking.
 markComplete
   :: (MonadBaseControl IO m)
   => MakeActions m
   -> BuildPlan
   -> ModuleName
-  -> Maybe ExternsFile
   -> BuildJobResult
   -> m ()
-markComplete ma buildPlan moduleName oldExt result = do
+markComplete _ma buildPlan moduleName result = do
   liftBase $ case result of
       BuildJobSucceeded _ _ ->
         putStrLn $ "### CS.BuildJobSucceeded[" <> T.unpack (runModuleName moduleName) <> "]"
@@ -144,10 +159,44 @@ markComplete ma buildPlan moduleName oldExt result = do
       BuildJobSkippedFullCacheHit ->
         -- putStrLn $ "### CS.BuildJobSkippedFullCacheHit[" <> T.unpack (runModuleName moduleName) <> "]"
         pure ()
-  let BuildJob rVar = fromMaybe (internalError "make: markComplete no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
+  let BuildJob { bjResult = rVar } = fromMaybe (internalError "make: markComplete no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
   putMVar rVar result
 
+-- | Called as soon as a module's ExternsFile is known (right after
+-- typechecking finishes, before codegen runs). Fills 'bjExterns' so that
+-- dependent modules blocked on our externs (via 'getResult' with 'Early')
+-- can proceed without waiting for our codegen, and updates 'bpCacheResult'
+-- (via 'markComplete2') since that decision is likewise purely a function of
+-- typecheck output.
+markExternsComplete
+  :: (MonadBaseControl IO m)
+  => MakeActions m
+  -> BuildPlan
+  -> ModuleName
+  -> Maybe ExternsFile
+  -> BuildJobResult
+  -> m ()
+markExternsComplete ma buildPlan moduleName oldExt result = do
+  let BuildJob { bjExterns = eVar } = fromMaybe (internalError "make: markExternsComplete no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
+  putMVar eVar result
+
   markComplete2 ma buildPlan moduleName oldExt result
+
+-- | Convenience wrapper for the skip/fail paths that have no typecheck/codegen
+-- split of their own (the module was never actually built this run) --
+-- publishes the same result to both 'bjExterns' and 'bjResult' (plus
+-- 'bpCacheResult') immediately.
+markCompleteImmediate
+  :: (MonadBaseControl IO m)
+  => MakeActions m
+  -> BuildPlan
+  -> ModuleName
+  -> Maybe ExternsFile
+  -> BuildJobResult
+  -> m ()
+markCompleteImmediate ma buildPlan moduleName oldExt result = do
+  markExternsComplete ma buildPlan moduleName oldExt result
+  markComplete ma buildPlan moduleName result
 
 
 -- | Called when we finished compiling a module and want to report back the
@@ -231,23 +280,34 @@ collectResults buildPlan = do
   barrierResults <- traverse (readMVar . bjResult) $ bpBuildJobs buildPlan
   pure (M.union prebuiltResults barrierResults)
 
+-- | Whether to read a module's build result as soon as its ExternsFile is
+-- known ('Early', right after typechecking -- use this when another module
+-- only needs our externs to proceed with its own typechecking) or only once
+-- its entire build including codegen has finished ('Final' -- use this for
+-- whole-build accounting, e.g. 'collectResults').
+data ResultTiming = Early | Final
+
 -- | Gets the the build result for a given module name independent of whether it
 -- was rebuilt or prebuilt. Prebuilt modules always return no warnings.
 getResult
   :: (MonadBaseControl IO m)
-  => BuildPlan
+  => ResultTiming
+  -> BuildPlan
   -> ModuleName
   -> m BuildJobResult
-getResult buildPlan moduleName = do
+getResult timing buildPlan moduleName = do
   case M.lookup moduleName (bpPrebuilt buildPlan) of
     Just es ->
       pure (BuildJobSucceeded (MultipleErrors []) (pbExternsFile es))
     Nothing -> do
-      readMVar $ bjResult $ fromMaybe (internalError "make: no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
+      let BuildJob { bjExterns, bjResult } = fromMaybe (internalError "make: no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
+      readMVar $ case timing of
+        Early -> bjExterns
+        Final -> bjResult
 
-fetchMissingExtern :: Show meta => MonadBaseControl IO m => meta -> MakeActions m -> BuildPlan -> ModuleName -> m BuildJobResult
-fetchMissingExtern meta MakeActions{..} buildPlan moduleName = do
-  mExts <- getResult buildPlan moduleName
+fetchMissingExtern :: Show meta => MonadBaseControl IO m => ResultTiming -> meta -> MakeActions m -> BuildPlan -> ModuleName -> m BuildJobResult
+fetchMissingExtern timing meta MakeActions{..} buildPlan moduleName = do
+  mExts <- getResult timing buildPlan moduleName
   case mExts of
     BuildJobSucceeded warns v -> pure mExts
     BuildJobFailed err -> pure mExts
@@ -283,9 +343,9 @@ fetchMissingExtern meta MakeActions{..} buildPlan moduleName = do
                 pure (BuildJobSucceeded (MultipleErrors []) extern)
                 ) `onException` putMVar mvar Nothing
 
-fetchMissingExterns :: Show meta => MonadBaseControl IO m => meta -> MakeActions m -> BuildPlan -> [ModuleName] -> m (M.Map ModuleName BuildJobResult)
-fetchMissingExterns meta ma buildPlan deps =
-  M.fromList <$> traverse (\dep -> (dep,) <$> fetchMissingExtern meta ma buildPlan dep) deps
+fetchMissingExterns :: Show meta => MonadBaseControl IO m => ResultTiming -> meta -> MakeActions m -> BuildPlan -> [ModuleName] -> m (M.Map ModuleName BuildJobResult)
+fetchMissingExterns timing meta ma buildPlan deps =
+  M.fromList <$> traverse (\dep -> (dep,) <$> fetchMissingExtern timing meta ma buildPlan dep) deps
 
 data CacheShapeDiffResult
   = PleaseRebuild [(ModuleName, DBOpaque)]
@@ -396,7 +456,7 @@ construct MakeActions{..} cacheDb (sorted, graph) = do
         )
   where
     makeBuildJob prev moduleName = do
-      buildJob <- BuildJob <$> C.newEmptyMVar
+      buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
       pure (M.insert moduleName buildJob prev)
 
     getRebuildStatus :: ModuleName -> m RebuildStatus
@@ -527,7 +587,7 @@ construct2 MakeActions{..} cacheDb (sorted, graph) = do
   env <- C.newMVar primEnv
   idx <- C.newMVar 1
   let makeBuildJob prev moduleName = do
-        buildJob <- BuildJob <$> C.newEmptyMVar
+        buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
         pure (M.insert moduleName buildJob prev)
   buildJobs <- foldM makeBuildJob M.empty sortedModuleNames
   mapOfEmptyCacheResults <- foldM (\m mn -> (\v -> M.insert mn v m) <$> newEmptyMVar) M.empty sortedModuleNames

@@ -36,7 +36,7 @@ import Language.PureScript.AST (ErrorMessageHint(..), Module(..), SourceSpan(..)
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.CST qualified as CST
 import Language.PureScript.Docs.Convert qualified as Docs
-import Language.PureScript.Environment (initEnvironment)
+import Language.PureScript.Environment (Environment, initEnvironment)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, defaultPPEOptions, errorMessage', errorMessage'', prettyPrintMultipleErrors)
 -- import Language.PureScript.Externs (ExternsFile, applyExternsFileToEnvironment, moduleToExternsFile)
 import Language.PureScript.Externs
@@ -54,9 +54,7 @@ import Language.PureScript.Make.Monad as Monad
 import Language.PureScript.CoreFn qualified as CF
 import System.Directory (doesFileExist)
 import System.FilePath (replaceExtension)
-import System.Environment (lookupEnv)
 import Debug.Trace
-import System.IO.Unsafe (unsafePerformIO)
 import PrettyPrint
 import Data.Text qualified as T
 import Data.Text.IO qualified as T
@@ -93,7 +91,32 @@ rebuildModule'
   -> m ExternsFile
 rebuildModule' act env ext mdl = rebuildModuleWithIndex act env ext mdl Nothing UnknownRecompileReason
 
-rebuildModuleWithIndex
+-- | Everything phase B (codegen) needs, produced by phase A (typecheck).
+data ModuleCheckResult = ModuleCheckResult
+  { mcrUpstreamEnv :: Environment
+    -- ^ The `Environment` built purely from upstream `externs` -- this is
+    -- deliberately *not* `env'` (the post-typecheck environment including
+    -- this module's own declarations); `codegen` only ever consumed the
+    -- upstream one, even before this split.
+  , mcrCheckedEnv :: Environment
+    -- ^ `env'`, the post-typecheck environment including this module's own
+    -- declarations -- only needed for docs conversion (phase B); NOT the
+    -- same value `codegen` itself is given (see `mcrUpstreamEnv`).
+  , mcrOriginalModule :: Module
+  , mcrExternsInput :: [ExternsFile]
+  , mcrExEnv :: Env
+  , mcrRenamed :: CF.Module CF.Ann
+  , mcrExterns :: ExternsFile
+  , mcrNextVar :: Integer
+  }
+
+-- | Phase A of rebuilding a single module: parse (already done by the
+-- caller) through typecheck, CoreFn generation/optimization, renaming, and
+-- ffiCodegen -- i.e. everything needed to fully determine this module's
+-- `ExternsFile`. Deliberately excludes the backend-specific `codegen` call
+-- (phase B, see `rebuildModuleCodegen`), since that doesn't affect `exts` and
+-- can safely be deferred so dependent modules aren't blocked on it.
+rebuildModuleTypecheck
   :: forall m
    . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
   => MakeActions m
@@ -102,8 +125,8 @@ rebuildModuleWithIndex
   -> Module
   -> Maybe (Int, Int)
   -> RecompileReason
-  -> m ExternsFile
-rebuildModuleWithIndex MakeActions{..} exEnv externs m@(Module _ _ moduleName _ _) moduleIndex causedByModule = do
+  -> m ModuleCheckResult
+rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ _) moduleIndex causedByModule = do
   progress $ CompilingModule moduleName moduleIndex causedByModule
   progress $ CompileMeta ("### CS.goBuildEnv13[" <> runModuleName moduleName <> "]")
   let env = foldl' (flip applyExternsFileToEnvironment) initEnvironment externs
@@ -150,8 +173,37 @@ rebuildModuleWithIndex MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
       exts = moduleToExternsFile upstreamDBs mod' env' renamedIdents
   ffiCodegen renamed
 
+  pure ModuleCheckResult
+    { mcrUpstreamEnv = env
+    , mcrCheckedEnv = env'
+    , mcrOriginalModule = m
+    , mcrExternsInput = externs
+    , mcrExEnv = exEnv
+    , mcrRenamed = renamed
+    , mcrExterns = exts
+    , mcrNextVar = nextVar''
+    }
+
+-- | Phase B of rebuilding a single module: docs conversion and the
+-- backend-specific `codegen` call (Erlang/JS AST generation, optimization,
+-- pretty-printing, file I/O). Takes the `ExternsFile` as an input and does
+-- not further modify it -- see the NOTE at its call site about grabbing a
+-- copy of the old externs file before running this if you want to diff them.
+--
+-- Docs conversion is deliberately done here rather than in phase A: it's
+-- only ever consumed by `codegen` below, doesn't affect `exts`, and (for a
+-- module with a large/complex signature) can itself be expensive -- keeping
+-- it out of phase A means it can't delay publishing this module's externs to
+-- dependents.
+rebuildModuleCodegen
+  :: forall m
+   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
+  => MakeActions m
+  -> ModuleName
+  -> ModuleCheckResult
+  -> m ()
+rebuildModuleCodegen MakeActions{..} moduleName ModuleCheckResult{..} = do
   progress $ CompileMeta ("### CS.goCodegen7[" <> runModuleName moduleName <> "]")
-  -- progress $ CompilingModule moduleName moduleIndex "7"
   -- It may seem more obvious to write `docs <- Docs.convertModule m env' here,
   -- but I have not done so for two reasons:
   -- 1. This should never fail; any genuine errors in the code should have been
@@ -159,17 +211,32 @@ rebuildModuleWithIndex MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
   -- a bug in the compiler, which should be reported as such.
   -- 2. We do not want to perform any extra work generating docs unless the
   -- user has asked for docs to be generated.
-  let docs = case Docs.convertModule externs exEnv env' m of
+  let docs = case Docs.convertModule mcrExternsInput mcrExEnv mcrCheckedEnv mcrOriginalModule of
                Left errs -> internalError $
                  "Failed to produce docs for " ++ T.unpack (runModuleName moduleName)
                  ++ "; details:\n" ++ prettyPrintMultipleErrors defaultPPEOptions errs
                Right d -> d
+  evalSupplyT mcrNextVar $ codegen mcrUpstreamEnv mcrRenamed docs mcrExterns
 
-  -- NOTE[drathier]: codegen updates the ExternsFile cache, so we have to grab a copy of the old externs file before running codegen if we want to diff them
-  -- progress $ CompilingModule moduleName moduleIndex "8"
-  evalSupplyT nextVar'' $ codegen env renamed docs exts
-  -- progress $ CompilingModule moduleName moduleIndex "9"
-  return exts
+-- | Rebuild a single module, running both phase A (typecheck) and phase B
+-- (codegen) in sequence. Used by callers that don't need (or can't use) the
+-- phase split that `Make.make`'s concurrent build orchestration relies on --
+-- e.g. the REPL and psc-ide's fast-rebuild workflows, which rebuild one
+-- module at a time outside of any `BuildPlan`.
+rebuildModuleWithIndex
+  :: forall m
+   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
+  => MakeActions m
+  -> Env
+  -> [ExternsFile]
+  -> Module
+  -> Maybe (Int, Int)
+  -> RecompileReason
+  -> m ExternsFile
+rebuildModuleWithIndex ma exEnv externs m@(Module _ _ moduleName _ _) moduleIndex causedByModule = do
+  checkResult <- rebuildModuleTypecheck ma exEnv externs m moduleIndex causedByModule
+  rebuildModuleCodegen ma moduleName checkResult
+  pure (mcrExterns checkResult)
 
 -- | Compiles in "make" mode, compiling each module separately to a @.js@ file and an @externs.cbor@ file.
 --
@@ -264,9 +331,9 @@ make ma@MakeActions{..} ms = do
       False -> do
         -- progress $ CompileMeta (T.pack $ show (moduleName, "-- DR.3.1", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate)))
         oldExterns <- BuildPlan.getExternFromLastSuccessfulPreviousBuild ma buildPlan moduleName
-        mResults <- BuildPlan.fetchMissingExterns ("mod", "b", moduleName) ma buildPlan deps
+        mResults <- BuildPlan.fetchMissingExterns BuildPlan.Early ("mod", "b", moduleName) ma buildPlan deps
         case assertAllExternsExists mResults of
-          Left bjRes -> bumpCompilationCounter >> BuildPlan.markComplete ma buildPlan moduleName Nothing bjRes
+          Left bjRes -> bumpCompilationCounter >> BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing bjRes
           Right results -> goBuild oldExterns results SourceChangedOrDependencyFailedToBuildInPreviousCompilationOrSomethingElse
       True -> do
         -- -- progress $ CompileMeta (T.pack $ show (moduleName, -- DR.3.2", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate)))
@@ -276,27 +343,27 @@ make ma@MakeActions{..} ms = do
           BuildPlan.FailRebuildDepsFailed causedByModule -> do
             -- progress $ CompileMeta (T.pack $ show (moduleName, "-- DR.3.2.1", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate), "FailRebuildDepsFailed", causedByModule))
             bumpCompilationCounter
-            BuildPlan.markComplete ma buildPlan moduleName Nothing BuildJobSkipped
+            BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing BuildJobSkipped
             pure ()
 
           BuildPlan.FullDepsCacheHit -> do
             -- -- progress $ CompileMeta (T.pack $ show (moduleName, -- DR.3.2.2", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate), "FullDepsCacheHit"))
             bumpCompilationCounter
-            BuildPlan.markComplete ma buildPlan moduleName Nothing BuildJobSkippedFullCacheHit
+            BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing BuildJobSkippedFullCacheHit
             pure ()
 
           BuildPlan.DepsChangedPleaseRebuildIfNeeded causedByModule -> do
             -- progress $ CompileMeta (T.pack $ show (moduleName, "-- DR.3.2.3", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate), "DepsChangedPleaseRebuildIfNeeded", causedByModule))
             oldExterns <- BuildPlan.getExternFromLastSuccessfulPreviousBuild ma buildPlan moduleName
-            mResults <- BuildPlan.fetchMissingExterns ("mod", "a", moduleName) ma buildPlan deps
+            mResults <- BuildPlan.fetchMissingExterns BuildPlan.Early ("mod", "a", moduleName) ma buildPlan deps
             case assertAllExternsExists mResults of
-              Left bjRes -> bumpCompilationCounter >> BuildPlan.markComplete ma buildPlan moduleName Nothing bjRes
+              Left bjRes -> bumpCompilationCounter >> BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing bjRes
               Right results ->
                 case BuildPlan.needsRebuildEvenAfterDiffingCacheShapes oldExterns (fmap snd results) of
                   BuildPlan.NoRebuildNeeded -> do
                     -- progress $ CompileMeta ("-- DR 3.2.3.1 upstreamDiffWasEmpty[" <> runModuleName moduleName <> "]")
                     bumpCompilationCounter
-                    BuildPlan.markComplete ma buildPlan moduleName Nothing BuildJobSkippedFullCacheHit
+                    BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing BuildJobSkippedFullCacheHit
                     pure ()
                   BuildPlan.PleaseRebuild errs -> do
                     -- progress $ CompileMeta ("-- DR 3.2.3.2 upstreamDiffFound[" <> runModuleName moduleName <> "] " <> T.pack (show errs))
@@ -307,9 +374,10 @@ make ma@MakeActions{..} ms = do
       -- but also e.g. in BuildPlan.fetchMissingExterns/anyDepChanged, which run
       -- before buildModule is ever called. An uncaught exception here would
       -- otherwise kill this forked thread silently, leaving this module's
-      -- bjResult/bpCacheResult/bpExterns MVars empty forever and deadlocking
-      -- every other thread that's waiting on them (e.g. in collectResults).
-      `onException` (BuildPlan.markComplete ma buildPlan (getModuleName . CST.resPartial $ m) Nothing (BuildJobFailed mempty))
+      -- bjExterns/bjResult/bpCacheResult/bpExterns MVars empty forever and
+      -- deadlocking every other thread that's waiting on them (e.g. in
+      -- collectResults).
+      `onException` (BuildPlan.markCompleteImmediate ma buildPlan (getModuleName . CST.resPartial $ m) Nothing (BuildJobFailed mempty))
 
   -- progress $ CompileMeta (T.pack $ show ("-- DR.5", "all solo modules done, pre collection"))
   externs <- traverse tryReadMVar $ M.elems $ BuildPlan.bpExterns buildPlan
@@ -334,7 +402,7 @@ make ma@MakeActions{..} ms = do
   -- externs while building.
   resolvedResults <- M.traverseWithKey
     (\mn result -> case result of
-        BuildJobSkippedFullCacheHit -> BuildPlan.fetchMissingExtern ("mod", "collectResults", mn) ma buildPlan mn
+        BuildJobSkippedFullCacheHit -> BuildPlan.fetchMissingExtern BuildPlan.Final ("mod", "collectResults", mn) ma buildPlan mn
         other -> pure other
     )
     collectedResults
@@ -422,8 +490,14 @@ make ma@MakeActions{..} ms = do
   buildModule lock buildPlan moduleName cnt oldExts results recompileReason fp pwarnings mres deps = do
     progress $ CompileMeta ("### CS.goParse12[" <> runModuleName moduleName <> "]")
 
+    -- Phase A: parse, then typecheck through ffiCodegen -- i.e. everything
+    -- needed to know this module's ExternsFile. Published via
+    -- markExternsComplete as soon as it's ready (below), so dependent
+    -- modules waiting on our externs can proceed with their own phase A
+    -- without waiting on our codegen (phase B).
+    --
     -- NOTE[drathier]: catchError here only ever fires if there's an error in a module we're building; it does not fire if a module is skipped because upstream modules failed to build.
-    result <- flip catchError (return . BuildJobFailed) $ do
+    phaseAResult <- flip catchError (return . Left) $ do
       let pwarnings' = CST.toMultipleWarnings fp pwarnings
       tell pwarnings'
       m <- CST.unwrapParserError fp mres
@@ -431,71 +505,67 @@ make ma@MakeActions{..} ms = do
       -- module should be rebuilt, so the first thing to do is to wait on the
       -- MVars for the module's dependencies.
 
-      do
-          -- We need to ensure that all dependencies have been included in Env
-          C.modifyMVar_ (bpEnv buildPlan) $ \env -> do
-            let
-              go :: Env -> ModuleName -> m Env
-              go e dep = case M.lookup dep results of
-                Just (_, exts)
-                  | not (M.member dep e) -> externsEnv e exts
-                _ -> return e
-            foldM go env deps
-          env <- C.readMVar (bpEnv buildPlan)
-          idx <- C.takeMVar (bpIndex buildPlan)
-          C.putMVar (bpIndex buildPlan) (idx + 1)
-          -- nothingIfNeedsRecompileBecauseOutputFileIsMissing <- touchOutputTimestamp moduleName
+      -- We need to ensure that all dependencies have been included in Env
+      C.modifyMVar_ (bpEnv buildPlan) $ \env -> do
+        let
+          go :: Env -> ModuleName -> m Env
+          go e dep = case M.lookup dep results of
+            Just (_, exts)
+              | not (M.member dep e) -> externsEnv e exts
+            _ -> return e
+        foldM go env deps
+      env <- C.readMVar (bpEnv buildPlan)
+      idx <- C.takeMVar (bpIndex buildPlan)
+      C.putMVar (bpIndex buildPlan) (idx + 1)
 
-          let doCompile wasCacheHit badExts =
-                do
-                  -- Bracket all of the per-module work behind the semaphore, including
-                  -- forcing the result. This is done to limit concurrency and keep
-                  -- memory usage down; see comments above.
-                  (exts, warnings) <- bracket_ (C.waitQSem lock) (C.signalQSem lock) $ do
-                      -- Eventlog markers for profiling; see debug/eventlog.js
-                      liftBase $ traceMarkerIO $ T.unpack (runModuleName moduleName) <> " start"
-                      -- liftBase $ traceM $ T.unpack (runModuleName moduleName) <> " start"
-                      -- Force the externs and warnings to avoid retaining excess module
-                      -- data after the module is finished compiling.
-                      extsAndWarnings <- evaluate . force <=< listen $ do
-                        rebuildModuleWithIndex ma env (snd <$> M.elems results) m (Just (idx, cnt)) recompileReason
+      -- Bracket phase A's work behind the semaphore, including forcing the
+      -- result, same as before this was split into two phases -- this just
+      -- limits concurrency and keeps memory usage down while *this* phase
+      -- runs; the permit is released again below as soon as phase A is done,
+      -- so it can be picked up by another waiting module instead of being
+      -- held for the whole of our codegen too.
+      (checkResult, warningsA) <- bracket_ (C.waitQSem lock) (C.signalQSem lock) $ do
+          -- Eventlog markers for profiling; see debug/eventlog.js
+          liftBase $ traceMarkerIO $ T.unpack (runModuleName moduleName) <> " typecheck start"
+          (checkResult, warningsA) <- listen $
+            rebuildModuleTypecheck ma env (snd <$> M.elems results) m (Just (idx, cnt)) recompileReason
+          -- Force the externs and warnings to avoid retaining excess module
+          -- data after phase A is finished. (We don't force the rest of
+          -- checkResult here -- the CoreFn module/docs/env it also carries
+          -- for phase B -- since it's about to be consumed by phase B in
+          -- this same thread anyway, so there's no cross-thread retention to
+          -- guard against the way there was for the externs themselves.)
+          _ <- evaluate . force $ (mcrExterns checkResult, warningsA)
+          liftBase $ traceMarkerIO $ T.unpack (runModuleName moduleName) <> " typecheck end"
+          return (checkResult, warningsA)
 
-                      -- liftBase $ traceM $ T.unpack (runModuleName moduleName) <> " end"
-                      liftBase $ traceMarkerIO $ T.unpack (runModuleName moduleName) <> " end"
-                      return extsAndWarnings
+      pure $ Right (pwarnings' <> warningsA, checkResult)
 
-                  return $ BuildJobSucceeded (pwarnings' <> warnings) exts
+    case phaseAResult of
+      Left errs ->
+        BuildPlan.markCompleteImmediate ma buildPlan moduleName oldExts (BuildJobFailed errs)
+      Right (warningsA, checkResult) -> do
+        let exts = mcrExterns checkResult
+        BuildPlan.markExternsComplete ma buildPlan moduleName oldExts (BuildJobSucceeded warningsA exts)
 
-          -- [drathier]: so that we can quickly go back and forth between caching and non-caching versions when testing this out
-          experimentalCachingDisabledViaEnvvar <- do
-            v <- pure $ unsafePerformIO $ lookupEnv "PURS_DISABLE_EXPERIMENTAL_CACHE"
-            pure $ case v of
-              Just "0" -> False
-              Just "no" -> False
-              Just "false" -> False
-              Just "False" -> False
-              Just "FALSE" -> False
-              Just "" -> False
-              Nothing -> False
-              _ -> True
+        -- Phase B: codegen. Only runs after our externs are already
+        -- published above, so it no longer blocks any dependent module --
+        -- only the overall build result and our own output files depend on
+        -- it now.
+        phaseBResult <- flip catchError (return . Left) $ do
+          ((), warningsB) <- bracket_ (C.waitQSem lock) (C.signalQSem lock) $ do
+              liftBase $ traceMarkerIO $ T.unpack (runModuleName moduleName) <> " codegen start"
+              r <- evaluate . force <=< listen $
+                rebuildModuleCodegen ma moduleName checkResult
+              liftBase $ traceMarkerIO $ T.unpack (runModuleName moduleName) <> " codegen end"
+              return r
+          pure $ Right warningsB
 
-          doCompile WasCacheMiss Nothing
---          case BuildPlan.shouldRecompile buildPlan moduleName externs of
---            Right badExts | experimentalCachingDisabledViaEnvvar -> doCompile WasCacheHit (Just badExts)
---            Left badExts | experimentalCachingDisabledViaEnvvar -> doCompile WasCacheMiss badExts
---            --
---            Right exts
---              -- touch the already up-to-date output files so that the next compile run thinks that they're up to date, or recompile if anything was missing
---              | Just () <- nothingIfNeedsRecompileBecauseOutputFileIsMissing
---              ->
---              return $ BuildJobSucceeded pwarnings' exts
---            Right badExts -> doCompile WasCacheHit (Just badExts)
---            Left badExts -> doCompile WasCacheMiss badExts
+        let finalResult = case phaseBResult of
+              Left errs -> BuildJobFailed errs
+              Right warningsB -> BuildJobSucceeded (warningsA <> warningsB) exts
 
-    BuildPlan.markComplete ma buildPlan moduleName oldExts result
-
-
-data WasCacheHit = WasCacheHit | WasCacheMiss
+        BuildPlan.markComplete ma buildPlan moduleName finalResult
 
 -- | Infer the module name for a module by looking for the same filename with
 -- a .js extension.
