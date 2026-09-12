@@ -41,7 +41,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Traversable (for)
 import Data.List.NonEmpty qualified as NEL
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 import Data.IntSet qualified as IS
 

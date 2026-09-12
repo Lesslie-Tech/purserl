@@ -20,7 +20,7 @@ import Control.Monad.Writer (MonadWriter(..))
 
 import Data.List.NonEmpty qualified as NEL
 import Data.Maybe (fromMaybe, mapMaybe)
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 
 import Language.PureScript.AST

@@ -10,21 +10,16 @@ module Language.PureScript.Make.Cache
 
 import Prelude
 
-import Control.Category ((>>>))
-import Control.Monad ((>=>))
-import Crypto.Hash (HashAlgorithm, Digest, SHA512)
-import Crypto.Hash qualified as Hash
+import Codec.Serialise (Serialise(..))
 import Data.Aeson qualified as Aeson
 import Data.Align (align)
-import Data.ByteArray.Encoding (Base(Base16), convertToBase, convertFromBase)
 import Data.ByteString qualified as BS
+import Data.Hashable (hashWithSalt)
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Monoid (All(..))
 import Data.Set (Set)
-import Data.Text (Text)
-import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import Data.These (These(..))
 import Data.Time.Clock (UTCTime)
 import Data.Traversable (for)
@@ -38,34 +33,23 @@ import System.IO.Unsafe (unsafePerformIO)
 import Control.Monad (when)
 --
 
-digestToHex :: Digest a -> Text
-digestToHex = decodeUtf8 . convertToBase Base16
-
-digestFromHex :: forall a. HashAlgorithm a => Text -> Maybe (Digest a)
-digestFromHex =
-  encodeUtf8
-  >>> either (const Nothing) Just . convertFromBase Base16
-  >=> (Hash.digestFromByteString :: BS.ByteString -> Maybe (Digest a))
-
 -- | Defines the hash algorithm we use for cache invalidation of input files.
+-- This is a fast, non-cryptographic hash. It's used purely to detect content
+-- changes (there's no adversarial threat model here), so a cryptographic
+-- hash like the SHA512 this used to be would just spend CPU for no benefit.
 newtype ContentHash = ContentHash
-  { unContentHash :: Digest SHA512 }
+  { unContentHash :: (Int, Int) }
   deriving (Show, Eq, Ord, NFData)
+  deriving newtype (Serialise)
 
 instance Aeson.ToJSON ContentHash where
-  toJSON = Aeson.toJSON . digestToHex . unContentHash
+  toJSON = Aeson.toJSON . unContentHash
 
 instance Aeson.FromJSON ContentHash where
-  parseJSON x = do
-    str <- Aeson.parseJSON x
-    case digestFromHex str of
-      Just digest ->
-        pure $ ContentHash digest
-      Nothing ->
-        fail "Unable to decode ContentHash"
+  parseJSON = fmap ContentHash . Aeson.parseJSON
 
 hash :: BS.ByteString -> ContentHash
-hash = ContentHash . Hash.hash
+hash bs = ContentHash (hashWithSalt 0 bs, hashWithSalt 1 bs)
 
 type CacheDb = Map ModuleName CacheInfo
 
@@ -74,7 +58,7 @@ type CacheDb = Map ModuleName CacheInfo
 newtype CacheInfo = CacheInfo
   { unCacheInfo :: Map FilePath (UTCTime, ContentHash) }
   deriving stock (Show)
-  deriving newtype (Eq, Ord, Semigroup, Monoid, Aeson.FromJSON, Aeson.ToJSON)
+  deriving newtype (Eq, Ord, Semigroup, Monoid, Aeson.FromJSON, Aeson.ToJSON, Serialise)
 
 -- | Given a module name, and a map containing the associated input files
 -- together with current metadata i.e. timestamps and hashes, check whether the

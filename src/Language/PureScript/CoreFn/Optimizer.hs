@@ -1,6 +1,6 @@
 module Language.PureScript.CoreFn.Optimizer (optimizeCoreFn) where
 
-import Protolude hiding (Type, moduleName, traceM)
+import Protolude hiding (Type, moduleName, traceM, State, evalState)
 import Prelude (error)
 
 import Control.Monad.Supply (Supply)
@@ -15,12 +15,11 @@ import System.IO.Unsafe
 import Language.PureScript.Names (Ident(..), runIdent, ModuleName(..), QualifiedBy(..), runModuleName)
 import Control.DeepSeq (force)
 import Control.Monad.Trans.RWS.Strict (evalRWST, asks, local, RWST)
-import Control.Monad.State
+import Control.Monad.State.Strict
 import Data.Text (Text, append, pack)
 import Debug.Trace (traceM)
-import Control.Monad.State
 import Data.Text (Text)
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import Data.Map (Map)
 import Language.PureScript.CoreFn.Binders (Binder(..))
 import Data.Text qualified as T

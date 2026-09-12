@@ -137,28 +137,34 @@ readCborFileIO path = do
 -- compiler.
 readExternsFile :: (MonadIO m, MonadError MultipleErrors m) => Maybe ExternsMemCache -> FilePath -> m (Maybe ExternsFile)
 readExternsFile mmemCacheRef path = do
-  -- TODO[drathier]: hash externs file too, so we know if it changed
-  mNewHash <- hashFileMaybe path
-  mCache <-
-    case mmemCacheRef of
-      Nothing -> pure Nothing
-      Just memCacheRef -> do
-        liftIO $ IORef.atomicModifyIORef' memCacheRef (\x ->
-            ( x
-            , case MS.lookup path x of
-                Just (oldHash, externs) | Just oldHash == mNewHash -> pure externs
-                _ -> Nothing
-            )
-          )
-  case mCache of
-    Just cache -> do
-      -- caching liftIO $ putStrLn ("readExternsFile cache hit: " <> path)
-      return (Just cache)
-    Nothing -> do
-      -- caching liftIO $ putStrLn ("readExternsFile cache miss: " <> path)
-      mexterns <- readExternsFileImpl path
-      maybeWriteExternsToMemCache mmemCacheRef path mNewHash mexterns
-      pure mexterns
+  -- Read the file once, and derive both the cache-lookup hash and the
+  -- deserialised value from those same bytes, instead of hashing the file
+  -- and then separately re-reading it from disk to decode it.
+  mBytes <- makeIO ("read Binary file: " <> Text.pack path) $ catchDoesNotExist $ B.readFile path
+  case mBytes of
+    Nothing -> pure Nothing
+    Just bytes -> do
+      let mNewHash = Just (hash bytes)
+      mCache <-
+        case mmemCacheRef of
+          Nothing -> pure Nothing
+          Just memCacheRef -> do
+            liftIO $ IORef.atomicModifyIORef' memCacheRef (\x ->
+                ( x
+                , case MS.lookup path x of
+                    Just (oldHash, externs) | Just oldHash == mNewHash -> pure externs
+                    _ -> Nothing
+                )
+              )
+      case mCache of
+        Just cache -> do
+          -- caching liftIO $ putStrLn ("readExternsFile cache hit: " <> path)
+          return (Just cache)
+        Nothing -> do
+          -- caching liftIO $ putStrLn ("readExternsFile cache miss: " <> path)
+          mexterns <- readExternsFileImplFromBytes path bytes
+          maybeWriteExternsToMemCache mmemCacheRef path mNewHash mexterns
+          pure mexterns
 
 type ExternsMemCache = IORef (MS.HashMap FilePath (ContentHash, ExternsFile))
 
@@ -177,9 +183,14 @@ maybeWriteExternsToMemCache mmemCacheRef path mexternsHash mexterns = do
                 IORef.atomicModifyIORef' memCacheRef (\x -> (MS.insert path (force (externsHash, externs)) x, ()))
       pure ()
 
-readExternsFileImpl :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> m (Maybe ExternsFile)
-readExternsFileImpl path = do
-  mexterns <- readCborFile path
+readExternsFileImplFromBytes :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> BS.ByteString -> m (Maybe ExternsFile)
+readExternsFileImplFromBytes path bytes = do
+  mexterns <- case Serialise.deserialiseOrFail (BSL.fromStrict bytes) of
+    Left _ -> do
+      liftIO $ putStrLn ("### corrupt-cbor:" <> path)
+      pure Nothing
+    Right externs ->
+      pure (Just externs)
   return $ do
     externs <- mexterns
     guard $ externsIsCurrentVersion externs
@@ -189,11 +200,6 @@ hashFile :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> m ContentHas
 hashFile path = do
   makeIO ("hash file: " <> Text.pack path)
     (hash <$> B.readFile path)
-
-hashFileMaybe :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> m (Maybe ContentHash)
-hashFileMaybe path =
-  makeIO ("hash file: " <> Text.pack path) $ catchDoesNotExist $ do
-    hash <$> B.readFile path
 
 -- | If the provided action threw an 'isDoesNotExist' error, catch it and
 -- return Nothing. Otherwise return Just the result of the inner action.
@@ -221,7 +227,6 @@ catchDeserialiseFailure path inner = do
 writeTextFile :: FilePath -> B.ByteString -> Make ()
 writeTextFile path text = makeIO ("write file: " <> Text.pack path) $ do
   createParentDirectory path
-  currentText <- catchDoesNotExist $ B.readFile path
   shouldRunAgain <- do
     v <- lookupEnv "PURS_LOOP_EVERY_SECOND"
     pure $ case v of
@@ -233,6 +238,9 @@ writeTextFile path text = makeIO ("write file: " <> Text.pack path) $ do
       Just "" -> False
       Nothing -> False
       _ -> True
+  -- Only read the file back if we're going to use it (loop-mode diffing);
+  -- avoid the wasted read on a normal, non-looping build.
+  currentText <- if shouldRunAgain then catchDoesNotExist $ B.readFile path else pure Nothing
   -- always write the file, so timestamps are updated for next rebuild
   B.writeFile path text
   -- fully write the file before printing to stdout
@@ -255,10 +263,14 @@ writeJSONFile path value = makeIO ("write JSON file: " <> Text.pack path) $ do
 writeCborFile :: (MonadIO m, MonadError MultipleErrors m) => Maybe ExternsMemCache -> FilePath -> ExternsFile -> m ()
 writeCborFile mmemCacheRef path value = do
   -- caching liftIO $ putStrLn ("writeCborFile: " <> path)
-  res <- makeIO ("write Cbor file: " <> Text.pack path) (writeCborFileIO path value)
-  mNewHash <- hashFileMaybe path
-  maybeWriteExternsToMemCache mmemCacheRef path mNewHash (Just value)
-  pure res
+  -- Hash the bytes we already serialised in memory instead of writing the
+  -- file and then reading it back from disk just to hash it.
+  newHash <- makeIO ("write Cbor file: " <> Text.pack path) $ do
+    createParentDirectory path
+    let contents = Serialise.serialise value
+    BSL.writeFile path contents
+    pure (hash (BSL.toStrict contents))
+  maybeWriteExternsToMemCache mmemCacheRef path (Just newHash) (Just value)
 
 writeCborFileIO :: Serialise a => FilePath -> a -> IO ()
 writeCborFileIO path value = do

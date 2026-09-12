@@ -14,7 +14,7 @@ import Data.Functor.Identity (runIdentity)
 import Data.List (mapAccumL)
 import Data.Maybe (mapMaybe)
 import Data.List.NonEmpty qualified as NEL
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 
 import Language.PureScript.AST.Binders (Binder(..), binderNames)
@@ -56,44 +56,120 @@ everywhereOnValues
 everywhereOnValues f g h = (f', g', h')
   where
   f' :: Declaration -> Declaration
-  f' (DataBindingGroupDeclaration ds) = f (DataBindingGroupDeclaration (fmap f' ds))
+  f' (DataBindingGroupDeclaration ds) =
+    let !ds' = fmap f' ds
+    in f (DataBindingGroupDeclaration ds')
   f' (ValueDecl sa name nameKind bs val) =
-     f (ValueDecl sa name nameKind (fmap h' bs) (fmap (mapGuardedExpr handleGuard g') val))
-  f' (BoundValueDeclaration sa b expr) = f (BoundValueDeclaration sa (h' b) (g' expr))
-  f' (BindingGroupDeclaration ds) = f (BindingGroupDeclaration (fmap (\(name, nameKind, val) -> (name, nameKind, g' val)) ds))
-  f' (TypeClassDeclaration sa name args implies deps ds) = f (TypeClassDeclaration sa name args implies deps (fmap f' ds))
-  f' (TypeInstanceDeclaration sa na ch idx name cs className args ds) = f (TypeInstanceDeclaration sa na ch idx name cs className args (mapTypeInstanceBody (fmap f') ds))
+    let !bs' = fmap h' bs
+        !val' = fmap (mapGuardedExpr handleGuard g') val
+    in f (ValueDecl sa name nameKind bs' val')
+  f' (BoundValueDeclaration sa b expr) =
+    let !b' = h' b
+        !expr' = g' expr
+    in f (BoundValueDeclaration sa b' expr')
+  f' (BindingGroupDeclaration ds) =
+    let !ds' = fmap (\(name, nameKind, val) -> (name, nameKind, g' val)) ds
+    in f (BindingGroupDeclaration ds')
+  f' (TypeClassDeclaration sa name args implies deps ds) =
+    let !ds' = fmap f' ds
+    in f (TypeClassDeclaration sa name args implies deps ds')
+  f' (TypeInstanceDeclaration sa na ch idx name cs className args ds) =
+    let !ds' = mapTypeInstanceBody (fmap f') ds
+    in f (TypeInstanceDeclaration sa na ch idx name cs className args ds')
   f' other = f other
 
   g' :: Expr -> Expr
-  g' (Literal ss l) = g (Literal ss (lit g' l))
-  g' (UnaryMinus ss v) = g (UnaryMinus ss (g' v))
-  g' (BinaryNoParens op v1 v2) = g (BinaryNoParens (g' op) (g' v1) (g' v2))
-  g' (Parens v) = g (Parens (g' v))
-  g' (Accessor prop v) = g (Accessor prop (g' v))
-  g' (ObjectUpdate obj vs) = g (ObjectUpdate (g' obj) (fmap (fmap g') vs))
-  g' (ObjectUpdateNested obj vs) = g (ObjectUpdateNested (g' obj) (fmap g' vs))
-  g' (Abs binder v) = g (Abs (h' binder) (g' v))
-  g' (App v1 v2) = g (App (g' v1) (g' v2))
-  g' (VisibleTypeApp v ty) = g (VisibleTypeApp (g' v) ty)
-  g' (Unused v) = g (Unused (g' v))
-  g' (IfThenElse v1 v2 v3) = g (IfThenElse (g' v1) (g' v2) (g' v3))
-  g' (Case vs alts) = g (Case (fmap g' vs) (fmap handleCaseAlternative alts))
-  g' (TypedValue check v ty) = g (TypedValue check (g' v) ty)
-  g' (Let w ds v) = g (Let w (fmap f' ds) (g' v))
-  g' (Do m es) = g (Do m (fmap handleDoNotationElement es))
-  g' (Ado m es v) = g (Ado m (fmap handleDoNotationElement es) (g' v))
-  g' (PositionedValue pos com v) = g (PositionedValue pos com (g' v))
+  g' (Literal ss l) =
+    let !l' = lit g' l
+    in g (Literal ss l')
+  g' (UnaryMinus ss v) =
+    let !v' = g' v
+    in g (UnaryMinus ss v')
+  g' (BinaryNoParens op v1 v2) =
+    let !op' = g' op
+        !v1' = g' v1
+        !v2' = g' v2
+    in g (BinaryNoParens op' v1' v2')
+  g' (Parens v) =
+    let !v' = g' v
+    in g (Parens v')
+  g' (Accessor prop v) =
+    let !v' = g' v
+    in g (Accessor prop v')
+  g' (ObjectUpdate obj vs) =
+    let !obj' = g' obj
+        !vs' = fmap (fmap g') vs
+    in g (ObjectUpdate obj' vs')
+  g' (ObjectUpdateNested obj vs) =
+    let !obj' = g' obj
+        !vs' = fmap g' vs
+    in g (ObjectUpdateNested obj' vs')
+  g' (Abs binder v) =
+    let !binder' = h' binder
+        !v' = g' v
+    in g (Abs binder' v')
+  g' (App v1 v2) =
+    let !v1' = g' v1
+        !v2' = g' v2
+    in g (App v1' v2')
+  g' (VisibleTypeApp v ty) =
+    let !v' = g' v
+    in g (VisibleTypeApp v' ty)
+  g' (Unused v) =
+    let !v' = g' v
+    in g (Unused v')
+  g' (IfThenElse v1 v2 v3) =
+    let !v1' = g' v1
+        !v2' = g' v2
+        !v3' = g' v3
+    in g (IfThenElse v1' v2' v3')
+  g' (Case vs alts) =
+    let !vs' = fmap g' vs
+        !alts' = fmap handleCaseAlternative alts
+    in g (Case vs' alts')
+  g' (TypedValue check v ty) =
+    let !v' = g' v
+    in g (TypedValue check v' ty)
+  g' (Let w ds v) =
+    let !ds' = fmap f' ds
+        !v' = g' v
+    in g (Let w ds' v')
+  g' (Do m es) =
+    let !es' = fmap handleDoNotationElement es
+    in g (Do m es')
+  g' (Ado m es v) =
+    let !es' = fmap handleDoNotationElement es
+        !v' = g' v
+    in g (Ado m es' v')
+  g' (PositionedValue pos com v) =
+    let !v' = g' v
+    in g (PositionedValue pos com v')
   g' other = g other
 
   h' :: Binder -> Binder
-  h' (ConstructorBinder ss ctor bs) = h (ConstructorBinder ss ctor (fmap h' bs))
-  h' (BinaryNoParensBinder b1 b2 b3) = h (BinaryNoParensBinder (h' b1) (h' b2) (h' b3))
-  h' (ParensInBinder b) = h (ParensInBinder (h' b))
-  h' (LiteralBinder ss l) = h (LiteralBinder ss (lit h' l))
-  h' (NamedBinder ss name b) = h (NamedBinder ss name (h' b))
-  h' (PositionedBinder pos com b) = h (PositionedBinder pos com (h' b))
-  h' (TypedBinder t b) = h (TypedBinder t (h' b))
+  h' (ConstructorBinder ss ctor bs) =
+    let !bs' = fmap h' bs
+    in h (ConstructorBinder ss ctor bs')
+  h' (BinaryNoParensBinder b1 b2 b3) =
+    let !b1' = h' b1
+        !b2' = h' b2
+        !b3' = h' b3
+    in h (BinaryNoParensBinder b1' b2' b3')
+  h' (ParensInBinder b) =
+    let !b' = h' b
+    in h (ParensInBinder b')
+  h' (LiteralBinder ss l) =
+    let !l' = lit h' l
+    in h (LiteralBinder ss l')
+  h' (NamedBinder ss name b) =
+    let !b' = h' b
+    in h (NamedBinder ss name b')
+  h' (PositionedBinder pos com b) =
+    let !b' = h' b
+    in h (PositionedBinder pos com b')
+  h' (TypedBinder t b) =
+    let !b' = h' b
+    in h (TypedBinder t b')
   h' other = h other
 
   lit :: (a -> a) -> Literal a -> Literal a
@@ -131,44 +207,120 @@ everywhereOnValuesTopDownM f g h = (f' <=< f, g' <=< g, h' <=< h)
   where
 
   f' :: Declaration -> m Declaration
-  f' (DataBindingGroupDeclaration ds) = DataBindingGroupDeclaration <$> traverse (f' <=< f) ds
-  f' (ValueDecl sa name nameKind bs val) =
-     ValueDecl sa name nameKind <$> traverse (h' <=< h) bs <*> traverse (guardedExprM handleGuard (g' <=< g)) val
-  f' (BindingGroupDeclaration ds) = BindingGroupDeclaration <$> traverse (\(name, nameKind, val) -> (name, nameKind, ) <$> (g val >>= g')) ds
-  f' (TypeClassDeclaration sa name args implies deps ds) = TypeClassDeclaration sa name args implies deps <$> traverse (f' <=< f) ds
-  f' (TypeInstanceDeclaration sa na ch idx name cs className args ds) = TypeInstanceDeclaration sa na ch idx name cs className args <$> traverseTypeInstanceBody (traverse (f' <=< f)) ds
-  f' (BoundValueDeclaration sa b expr) = BoundValueDeclaration sa <$> (h' <=< h) b <*> (g' <=< g) expr
+  f' (DataBindingGroupDeclaration ds) = do
+    !ds' <- traverse (f' <=< f) ds
+    pure (DataBindingGroupDeclaration ds')
+  f' (ValueDecl sa name nameKind bs val) = do
+    !bs' <- traverse (h' <=< h) bs
+    !val' <- traverse (guardedExprM handleGuard (g' <=< g)) val
+    pure (ValueDecl sa name nameKind bs' val')
+  f' (BindingGroupDeclaration ds) = do
+    !ds' <- traverse (\(name, nameKind, val) -> (name, nameKind, ) <$> (g val >>= g')) ds
+    pure (BindingGroupDeclaration ds')
+  f' (TypeClassDeclaration sa name args implies deps ds) = do
+    !ds' <- traverse (f' <=< f) ds
+    pure (TypeClassDeclaration sa name args implies deps ds')
+  f' (TypeInstanceDeclaration sa na ch idx name cs className args ds) = do
+    !ds' <- traverseTypeInstanceBody (traverse (f' <=< f)) ds
+    pure (TypeInstanceDeclaration sa na ch idx name cs className args ds')
+  f' (BoundValueDeclaration sa b expr) = do
+    !b' <- (h' <=< h) b
+    !expr' <- (g' <=< g) expr
+    pure (BoundValueDeclaration sa b' expr')
   f' other = f other
 
   g' :: Expr -> m Expr
-  g' (Literal ss l) = Literal ss <$> litM (g >=> g') l
-  g' (UnaryMinus ss v) = UnaryMinus ss <$> (g v >>= g')
-  g' (BinaryNoParens op v1 v2) = BinaryNoParens <$> (g op >>= g') <*> (g v1 >>= g') <*> (g v2 >>= g')
-  g' (Parens v) = Parens <$> (g v >>= g')
-  g' (Accessor prop v) = Accessor prop <$> (g v >>= g')
-  g' (ObjectUpdate obj vs) = ObjectUpdate <$> (g obj >>= g') <*> traverse (sndM (g' <=< g)) vs
-  g' (ObjectUpdateNested obj vs) = ObjectUpdateNested <$> (g obj >>= g') <*> traverse (g' <=< g) vs
-  g' (Abs binder v) = Abs <$> (h binder >>= h') <*> (g v >>= g')
-  g' (App v1 v2) = App <$> (g v1 >>= g') <*> (g v2 >>= g')
-  g' (VisibleTypeApp v ty) = VisibleTypeApp <$> (g v >>= g') <*> pure ty
-  g' (Unused v) = Unused <$> (g v >>= g')
-  g' (IfThenElse v1 v2 v3) = IfThenElse <$> (g v1 >>= g') <*> (g v2 >>= g') <*> (g v3 >>= g')
-  g' (Case vs alts) = Case <$> traverse (g' <=< g) vs <*> traverse handleCaseAlternative alts
-  g' (TypedValue check v ty) = TypedValue check <$> (g v >>= g') <*> pure ty
-  g' (Let w ds v) = Let w <$> traverse (f' <=< f) ds <*> (g v >>= g')
-  g' (Do m es) = Do m <$> traverse handleDoNotationElement es
-  g' (Ado m es v) = Ado m <$> traverse handleDoNotationElement es <*> (g v >>= g')
-  g' (PositionedValue pos com v) = PositionedValue pos com <$> (g v >>= g')
+  g' (Literal ss l) = do
+    !l' <- litM (g >=> g') l
+    pure (Literal ss l')
+  g' (UnaryMinus ss v) = do
+    !v' <- g v >>= g'
+    pure (UnaryMinus ss v')
+  g' (BinaryNoParens op v1 v2) = do
+    !op' <- g op >>= g'
+    !v1' <- g v1 >>= g'
+    !v2' <- g v2 >>= g'
+    pure (BinaryNoParens op' v1' v2')
+  g' (Parens v) = do
+    !v' <- g v >>= g'
+    pure (Parens v')
+  g' (Accessor prop v) = do
+    !v' <- g v >>= g'
+    pure (Accessor prop v')
+  g' (ObjectUpdate obj vs) = do
+    !obj' <- g obj >>= g'
+    !vs' <- traverse (sndM (g' <=< g)) vs
+    pure (ObjectUpdate obj' vs')
+  g' (ObjectUpdateNested obj vs) = do
+    !obj' <- g obj >>= g'
+    !vs' <- traverse (g' <=< g) vs
+    pure (ObjectUpdateNested obj' vs')
+  g' (Abs binder v) = do
+    !binder' <- h binder >>= h'
+    !v' <- g v >>= g'
+    pure (Abs binder' v')
+  g' (App v1 v2) = do
+    !v1' <- g v1 >>= g'
+    !v2' <- g v2 >>= g'
+    pure (App v1' v2')
+  g' (VisibleTypeApp v ty) = do
+    !v' <- g v >>= g'
+    pure (VisibleTypeApp v' ty)
+  g' (Unused v) = do
+    !v' <- g v >>= g'
+    pure (Unused v')
+  g' (IfThenElse v1 v2 v3) = do
+    !v1' <- g v1 >>= g'
+    !v2' <- g v2 >>= g'
+    !v3' <- g v3 >>= g'
+    pure (IfThenElse v1' v2' v3')
+  g' (Case vs alts) = do
+    !vs' <- traverse (g' <=< g) vs
+    !alts' <- traverse handleCaseAlternative alts
+    pure (Case vs' alts')
+  g' (TypedValue check v ty) = do
+    !v' <- g v >>= g'
+    pure (TypedValue check v' ty)
+  g' (Let w ds v) = do
+    !ds' <- traverse (f' <=< f) ds
+    !v' <- g v >>= g'
+    pure (Let w ds' v')
+  g' (Do m es) = do
+    !es' <- traverse handleDoNotationElement es
+    pure (Do m es')
+  g' (Ado m es v) = do
+    !es' <- traverse handleDoNotationElement es
+    !v' <- g v >>= g'
+    pure (Ado m es' v')
+  g' (PositionedValue pos com v) = do
+    !v' <- g v >>= g'
+    pure (PositionedValue pos com v')
   g' other = g other
 
   h' :: Binder -> m Binder
-  h' (LiteralBinder ss l) = LiteralBinder ss <$> litM (h >=> h') l
-  h' (ConstructorBinder ss ctor bs) = ConstructorBinder ss ctor <$> traverse (h' <=< h) bs
-  h' (BinaryNoParensBinder b1 b2 b3) = BinaryNoParensBinder <$> (h b1 >>= h') <*> (h b2 >>= h') <*> (h b3 >>= h')
-  h' (ParensInBinder b) = ParensInBinder <$> (h b >>= h')
-  h' (NamedBinder ss name b) = NamedBinder ss name <$> (h b >>= h')
-  h' (PositionedBinder pos com b) = PositionedBinder pos com <$> (h b >>= h')
-  h' (TypedBinder t b) = TypedBinder t <$> (h b >>= h')
+  h' (LiteralBinder ss l) = do
+    !l' <- litM (h >=> h') l
+    pure (LiteralBinder ss l')
+  h' (ConstructorBinder ss ctor bs) = do
+    !bs' <- traverse (h' <=< h) bs
+    pure (ConstructorBinder ss ctor bs')
+  h' (BinaryNoParensBinder b1 b2 b3) = do
+    !b1' <- h b1 >>= h'
+    !b2' <- h b2 >>= h'
+    !b3' <- h b3 >>= h'
+    pure (BinaryNoParensBinder b1' b2' b3')
+  h' (ParensInBinder b) = do
+    !b' <- h b >>= h'
+    pure (ParensInBinder b')
+  h' (NamedBinder ss name b) = do
+    !b' <- h b >>= h'
+    pure (NamedBinder ss name b')
+  h' (PositionedBinder pos com b) = do
+    !b' <- h b >>= h'
+    pure (PositionedBinder pos com b')
+  h' (TypedBinder t b) = do
+    !b' <- h b >>= h'
+    pure (TypedBinder t b')
   h' other = h other
 
   handleCaseAlternative :: CaseAlternative -> m CaseAlternative
@@ -201,44 +353,120 @@ everywhereOnValuesM f g h = (f', g', h')
   where
 
   f' :: Declaration -> m Declaration
-  f' (DataBindingGroupDeclaration ds) = (DataBindingGroupDeclaration <$> traverse f' ds) >>= f
-  f' (ValueDecl sa name nameKind bs val) =
-    ValueDecl sa name nameKind <$> traverse h' bs <*> traverse (guardedExprM handleGuard g') val >>= f
-  f' (BindingGroupDeclaration ds) = (BindingGroupDeclaration <$> traverse (\(name, nameKind, val) -> (name, nameKind, ) <$> g' val) ds) >>= f
-  f' (BoundValueDeclaration sa b expr) = (BoundValueDeclaration sa <$> h' b <*> g' expr) >>= f
-  f' (TypeClassDeclaration sa name args implies deps ds) = (TypeClassDeclaration sa name args implies deps <$> traverse f' ds) >>= f
-  f' (TypeInstanceDeclaration sa na ch idx name cs className args ds) = (TypeInstanceDeclaration sa na ch idx name cs className args <$> traverseTypeInstanceBody (traverse f') ds) >>= f
+  f' (DataBindingGroupDeclaration ds) = do
+    !ds' <- traverse f' ds
+    f (DataBindingGroupDeclaration ds')
+  f' (ValueDecl sa name nameKind bs val) = do
+    !bs' <- traverse h' bs
+    !val' <- traverse (guardedExprM handleGuard g') val
+    f (ValueDecl sa name nameKind bs' val')
+  f' (BindingGroupDeclaration ds) = do
+    !ds' <- traverse (\(name, nameKind, val) -> (name, nameKind, ) <$> g' val) ds
+    f (BindingGroupDeclaration ds')
+  f' (BoundValueDeclaration sa b expr) = do
+    !b' <- h' b
+    !expr' <- g' expr
+    f (BoundValueDeclaration sa b' expr')
+  f' (TypeClassDeclaration sa name args implies deps ds) = do
+    !ds' <- traverse f' ds
+    f (TypeClassDeclaration sa name args implies deps ds')
+  f' (TypeInstanceDeclaration sa na ch idx name cs className args ds) = do
+    !ds' <- traverseTypeInstanceBody (traverse f') ds
+    f (TypeInstanceDeclaration sa na ch idx name cs className args ds')
   f' other = f other
 
   g' :: Expr -> m Expr
-  g' (Literal ss l) = (Literal ss <$> litM g' l) >>= g
-  g' (UnaryMinus ss v) = (UnaryMinus ss <$> g' v) >>= g
-  g' (BinaryNoParens op v1 v2) = (BinaryNoParens <$> g' op <*> g' v1 <*> g' v2) >>= g
-  g' (Parens v) = (Parens <$> g' v) >>= g
-  g' (Accessor prop v) = (Accessor prop <$> g' v) >>= g
-  g' (ObjectUpdate obj vs) = (ObjectUpdate <$> g' obj <*> traverse (sndM g') vs) >>= g
-  g' (ObjectUpdateNested obj vs) = (ObjectUpdateNested <$> g' obj <*> traverse g' vs) >>= g
-  g' (Abs binder v) = (Abs <$> h' binder <*> g' v) >>= g
-  g' (App v1 v2) = (App <$> g' v1 <*> g' v2) >>= g
-  g' (VisibleTypeApp v ty) = (VisibleTypeApp <$> g' v <*> pure ty) >>= g
-  g' (Unused v) = (Unused <$> g' v) >>= g
-  g' (IfThenElse v1 v2 v3) = (IfThenElse <$> g' v1 <*> g' v2 <*> g' v3) >>= g
-  g' (Case vs alts) = (Case <$> traverse g' vs <*> traverse handleCaseAlternative alts) >>= g
-  g' (TypedValue check v ty) = (TypedValue check <$> g' v <*> pure ty) >>= g
-  g' (Let w ds v) = (Let w <$> traverse f' ds <*> g' v) >>= g
-  g' (Do m es) = (Do m <$> traverse handleDoNotationElement es) >>= g
-  g' (Ado m es v) = (Ado m <$> traverse handleDoNotationElement es <*> g' v) >>= g
-  g' (PositionedValue pos com v) = (PositionedValue pos com <$> g' v) >>= g
+  g' (Literal ss l) = do
+    !l' <- litM g' l
+    g (Literal ss l')
+  g' (UnaryMinus ss v) = do
+    !v' <- g' v
+    g (UnaryMinus ss v')
+  g' (BinaryNoParens op v1 v2) = do
+    !op' <- g' op
+    !v1' <- g' v1
+    !v2' <- g' v2
+    g (BinaryNoParens op' v1' v2')
+  g' (Parens v) = do
+    !v' <- g' v
+    g (Parens v')
+  g' (Accessor prop v) = do
+    !v' <- g' v
+    g (Accessor prop v')
+  g' (ObjectUpdate obj vs) = do
+    !obj' <- g' obj
+    !vs' <- traverse (sndM g') vs
+    g (ObjectUpdate obj' vs')
+  g' (ObjectUpdateNested obj vs) = do
+    !obj' <- g' obj
+    !vs' <- traverse g' vs
+    g (ObjectUpdateNested obj' vs')
+  g' (Abs binder v) = do
+    !binder' <- h' binder
+    !v' <- g' v
+    g (Abs binder' v')
+  g' (App v1 v2) = do
+    !v1' <- g' v1
+    !v2' <- g' v2
+    g (App v1' v2')
+  g' (VisibleTypeApp v ty) = do
+    !v' <- g' v
+    g (VisibleTypeApp v' ty)
+  g' (Unused v) = do
+    !v' <- g' v
+    g (Unused v')
+  g' (IfThenElse v1 v2 v3) = do
+    !v1' <- g' v1
+    !v2' <- g' v2
+    !v3' <- g' v3
+    g (IfThenElse v1' v2' v3')
+  g' (Case vs alts) = do
+    !vs' <- traverse g' vs
+    !alts' <- traverse handleCaseAlternative alts
+    g (Case vs' alts')
+  g' (TypedValue check v ty) = do
+    !v' <- g' v
+    g (TypedValue check v' ty)
+  g' (Let w ds v) = do
+    !ds' <- traverse f' ds
+    !v' <- g' v
+    g (Let w ds' v')
+  g' (Do m es) = do
+    !es' <- traverse handleDoNotationElement es
+    g (Do m es')
+  g' (Ado m es v) = do
+    !es' <- traverse handleDoNotationElement es
+    !v' <- g' v
+    g (Ado m es' v')
+  g' (PositionedValue pos com v) = do
+    !v' <- g' v
+    g (PositionedValue pos com v')
   g' other = g other
 
   h' :: Binder -> m Binder
-  h' (LiteralBinder ss l) = (LiteralBinder ss <$> litM h' l) >>= h
-  h' (ConstructorBinder ss ctor bs) = (ConstructorBinder ss ctor <$> traverse h' bs) >>= h
-  h' (BinaryNoParensBinder b1 b2 b3) = (BinaryNoParensBinder <$> h' b1 <*> h' b2 <*> h' b3) >>= h
-  h' (ParensInBinder b) = (ParensInBinder <$> h' b) >>= h
-  h' (NamedBinder ss name b) = (NamedBinder ss name <$> h' b) >>= h
-  h' (PositionedBinder pos com b) = (PositionedBinder pos com <$> h' b) >>= h
-  h' (TypedBinder t b) = (TypedBinder t <$> h' b) >>= h
+  h' (LiteralBinder ss l) = do
+    !l' <- litM h' l
+    h (LiteralBinder ss l')
+  h' (ConstructorBinder ss ctor bs) = do
+    !bs' <- traverse h' bs
+    h (ConstructorBinder ss ctor bs')
+  h' (BinaryNoParensBinder b1 b2 b3) = do
+    !b1' <- h' b1
+    !b2' <- h' b2
+    !b3' <- h' b3
+    h (BinaryNoParensBinder b1' b2' b3')
+  h' (ParensInBinder b) = do
+    !b' <- h' b
+    h (ParensInBinder b')
+  h' (NamedBinder ss name b) = do
+    !b' <- h' b
+    h (NamedBinder ss name b')
+  h' (PositionedBinder pos com b) = do
+    !b' <- h' b
+    h (PositionedBinder pos com b')
+  h' (TypedBinder t b) = do
+    !b' <- h' b
+    h (TypedBinder t b')
   h' other = h other
 
   handleCaseAlternative :: CaseAlternative -> m CaseAlternative

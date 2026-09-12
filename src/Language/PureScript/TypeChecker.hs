@@ -23,7 +23,7 @@ import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Either (partitionEithers)
 import Data.Text (Text)
 import Data.List.NonEmpty qualified as NEL
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
 
@@ -447,16 +447,34 @@ typeCheckAll moduleName = traverse go
     nonOrphanModules :: S.Set ModuleName
     nonOrphanModules = S.insert mn' nonOrphanModules'
 
+    -- This is a total function over every constructor of 'Type': under the
+    -- 'Data.Map' this feeds into being lazy, an incomplete match here would
+    -- only crash for type shapes whose module was actually demanded by a
+    -- covering set, silently returning the right answer otherwise; under
+    -- 'Data.Map.Strict' every argument's module is forced regardless of
+    -- whether any covering set needs it, so a partial match here would crash
+    -- on any instance with an argument shape (row types, foralls, wildcards,
+    -- etc.) that isn't itself a bare type constructor/variable.
     typeModule :: SourceType -> Maybe ModuleName
+    typeModule (TUnknown _ _) = Nothing
     typeModule (TypeVar _ _) = Nothing
     typeModule (TypeLevelString _ _) = Nothing
     typeModule (TypeLevelInt _ _) = Nothing
+    typeModule (TypeWildcard _ _) = Nothing
     typeModule (TypeConstructor _ (Qualified (ByModuleName mn'') _)) = Just mn''
     typeModule (TypeConstructor _ (Qualified (BySourcePos _) _)) = internalError "Unqualified type name in findNonOrphanModules"
+    typeModule (TypeOp _ (Qualified (ByModuleName mn'') _)) = Just mn''
+    typeModule (TypeOp _ (Qualified (BySourcePos _) _)) = internalError "Unqualified type operator in findNonOrphanModules"
     typeModule (TypeApp _ t1 _) = typeModule t1
     typeModule (KindApp _ t1 _) = typeModule t1
+    typeModule (ForAll _ _ _ _ t1 _) = typeModule t1
+    typeModule (ConstrainedType _ _ t1) = typeModule t1
+    typeModule (Skolem _ _ _ _ _) = Nothing
+    typeModule (REmpty _) = Nothing
+    typeModule (RCons _ _ _ _) = Nothing
     typeModule (KindedType _ t1 _) = typeModule t1
-    typeModule _ = internalError "Invalid type in instance in findNonOrphanModules"
+    typeModule (BinaryNoParensType _ _ _ _) = Nothing
+    typeModule (ParensInType _ t1) = typeModule t1
 
     modulesByTypeIndex :: M.Map Int (Maybe ModuleName)
     modulesByTypeIndex = M.fromList (zip [0 ..] (typeModule <$> tys'))

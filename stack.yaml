@@ -1,5 +1,17 @@
 # Please update Haskell image versions under .github/workflows/ci.yml together to use the same GHC version
 # (or the CI build will fail)
+#
+# NOTE: a GHC 9.10.3/lts-24.20 bump was attempted and reverted (2026-09-12).
+# It's blocked on a real GHC 9.10.3 parser regression: a class kind signature
+# immediately followed by its class declaration, e.g.
+#   class Alt :: forall k. (k -> Type) -> Constraint
+#   class Alt f where
+# fails to parse with "Unable to parse module: Unexpected or mismatched
+# indentation". Confirmed via A/B testing (same source, same happy version,
+# only the GHC version differs) that this is GHC-9.10.3-specific, not caused
+# by any dependency/happy-version/build-tool change -- it reproduces
+# identically with happy 1.20.1.1, 2.0.2, and 2.1.7. Root cause not
+# identified; do not re-attempt this bump without resolving that first.
 resolver: lts-23.8
 pvp-bounds: both
 packages:

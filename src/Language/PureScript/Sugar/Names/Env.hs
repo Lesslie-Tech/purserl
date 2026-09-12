@@ -29,7 +29,7 @@ import Data.Foldable (find)
 import Data.List (groupBy, sortOn, delete)
 import Data.Maybe (mapMaybe)
 import Safe (headMay)
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 
 import Language.PureScript.Constants.Prim qualified as C

@@ -9,7 +9,7 @@ import Data.Function (on)
 import Data.Maybe (mapMaybe)
 import Data.Tuple (swap)
 import Data.List.NonEmpty qualified as NEL
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 
 import Language.PureScript.AST.Literals (Literal(..))

@@ -37,7 +37,7 @@ import Data.Functor (($>))
 import Data.Functor.Identity (Identity(..), runIdentity)
 import Data.List (groupBy, sortOn)
 import Data.Maybe (mapMaybe, listToMaybe)
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Ord (Down(..))
 
 import Language.PureScript.Constants.Libs qualified as C

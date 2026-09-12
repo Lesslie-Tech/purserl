@@ -2,8 +2,9 @@ module Language.PureScript.TypeChecker.TypeSearch
   ( typeSearch
   ) where
 
-import Protolude
+import Protolude hiding (StateT, evalStateT)
 
+import Control.Monad.State.Strict (StateT, evalStateT)
 import Control.Monad.Writer (WriterT, runWriterT)
 import Data.Map qualified as Map
 import Language.PureScript.TypeChecker.Entailment qualified as Entailment

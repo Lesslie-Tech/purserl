@@ -69,7 +69,7 @@ import Language.PureScript.Roles (Role)
 import qualified Data.ByteString.UTF8 as BS8
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString as BS
-import qualified Crypto.Hash as Hash
+import Data.Hashable (hashWithSalt)
 import qualified Data.ByteArray.Encoding as BAE
 
 import System.IO.Unsafe (unsafePerformIO)
@@ -1051,11 +1051,14 @@ instance Semigroup DBOpaque where
 instance Monoid DBOpaque where
   mempty = DBOpaque mempty mempty mempty mempty mempty mempty mempty mempty mempty mempty mempty mempty mempty
 
+-- Fast, non-cryptographic hash: this is a change-detection fingerprint, not
+-- a security boundary, so there's no need to pay for a cryptographic hash
+-- like the SHA256 this used to be.
 cacheShapeHashFromByteString :: ByteString -> CacheShapeHash
 cacheShapeHashFromByteString b =
   let
-      digest :: Hash.Digest Hash.SHA256
-      digest = b & Hash.hashlazy
+      digest :: (Int, Int)
+      digest = (hashWithSalt 0 b, hashWithSalt 1 b)
   in
     digest & show & BS8.fromString & CacheShapeHash
 

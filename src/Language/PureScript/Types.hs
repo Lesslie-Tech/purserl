@@ -732,19 +732,6 @@ everywhereOnTypes f = go where
     in f (ParensInType ann t')
   go other = f other
 
-everywhereOnTypes1 :: (Type a -> Type a) -> Type a -> Type a
-everywhereOnTypes1 f = go where
-  go (TypeApp ann t1 t2) = f (TypeApp ann (go t1) (go t2))
-  go (KindApp ann t1 t2) = f (KindApp ann (go t1) (go t2))
-  go (ForAll ann vis arg mbK ty sco) = f (ForAll ann vis arg (go <$> mbK) (go ty) sco)
-  go (ConstrainedType ann c ty) = f (ConstrainedType ann (mapConstraintArgsAll (map go) c) (go ty))
-  go (Skolem ann name mbK i sc) = f (Skolem ann name (go <$> mbK) i sc)
-  go (RCons ann name ty rest) = f (RCons ann name (go ty) (go rest))
-  go (KindedType ann ty k) = f (KindedType ann (go ty) (go k))
-  go (BinaryNoParensType ann t1 t2 t3) = f (BinaryNoParensType ann (go t1) (go t2) (go t3))
-  go (ParensInType ann t) = f (ParensInType ann (go t))
-  go other = f other
-
 everywhereOnTypesM :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
 everywhereOnTypesM f = go where
   go (TypeApp ann t1 t2) = do
@@ -794,30 +781,43 @@ everywhereOnTypesM f = go where
   go other = f other
 
 
-everywhereOnTypesM1 :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
-everywhereOnTypesM1 f = go where
-  go (TypeApp ann t1 t2) = (TypeApp ann <$> go t1 <*> go t2) >>= f
-  go (KindApp ann t1 t2) = (KindApp ann <$> go t1 <*> go t2) >>= f
-  go (ForAll ann vis arg mbK ty sco) = (ForAll ann vis arg <$> traverse go mbK <*> go ty <*> pure sco) >>= f
-  go (ConstrainedType ann c ty) = (ConstrainedType ann <$> overConstraintArgsAll (mapM go) c <*> go ty) >>= f
-  go (Skolem ann name mbK i sc) = (Skolem ann name <$> traverse go mbK <*> pure i <*> pure sc) >>= f
-  go (RCons ann name ty rest) = (RCons ann name <$> go ty <*> go rest) >>= f
-  go (KindedType ann ty k) = (KindedType ann <$> go ty <*> go k) >>= f
-  go (BinaryNoParensType ann t1 t2 t3) = (BinaryNoParensType ann <$> go t1 <*> go t2 <*> go t3) >>= f
-  go (ParensInType ann t) = (ParensInType ann <$> go t) >>= f
-  go other = f other
-
 everywhereOnTypesTopDownM :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
 everywhereOnTypesTopDownM f = go <=< f where
-  go (TypeApp ann t1 t2) = TypeApp ann <$> (f t1 >>= go) <*> (f t2 >>= go)
-  go (KindApp ann t1 t2) = KindApp ann <$> (f t1 >>= go) <*> (f t2 >>= go)
-  go (ForAll ann vis arg mbK ty sco) = ForAll ann vis arg <$> traverse (f >=> go) mbK <*> (f ty >>= go) <*> pure sco
-  go (ConstrainedType ann c ty) = ConstrainedType ann <$> overConstraintArgsAll (mapM (go <=< f)) c <*> (f ty >>= go)
-  go (Skolem ann name mbK i sc) = Skolem ann name <$> traverse (f >=> go) mbK <*> pure i <*> pure sc
-  go (RCons ann name ty rest) = RCons ann name <$> (f ty >>= go) <*> (f rest >>= go)
-  go (KindedType ann ty k) = KindedType ann <$> (f ty >>= go) <*> (f k >>= go)
-  go (BinaryNoParensType ann t1 t2 t3) = BinaryNoParensType ann <$> (f t1 >>= go) <*> (f t2 >>= go) <*> (f t3 >>= go)
-  go (ParensInType ann t) = ParensInType ann <$> (f t >>= go)
+  go (TypeApp ann t1 t2) = do
+    !t1' <- f t1 >>= go
+    !t2' <- f t2 >>= go
+    pure (TypeApp ann t1' t2')
+  go (KindApp ann t1 t2) = do
+    !t1' <- f t1 >>= go
+    !t2' <- f t2 >>= go
+    pure (KindApp ann t1' t2')
+  go (ForAll ann vis arg mbK ty sco) = do
+    !mbK' <- traverse (f >=> go) mbK
+    !ty' <- f ty >>= go
+    pure (ForAll ann vis arg mbK' ty' sco)
+  go (ConstrainedType ann c ty) = do
+    !c' <- overConstraintArgsAll (mapM (go <=< f)) c
+    !ty' <- f ty >>= go
+    pure (ConstrainedType ann c' ty')
+  go (Skolem ann name mbK i sc) = do
+    !mbK' <- traverse (f >=> go) mbK
+    pure (Skolem ann name mbK' i sc)
+  go (RCons ann name ty rest) = do
+    !ty' <- f ty >>= go
+    !rest' <- f rest >>= go
+    pure (RCons ann name ty' rest')
+  go (KindedType ann ty k) = do
+    !ty' <- f ty >>= go
+    !k' <- f k >>= go
+    pure (KindedType ann ty' k')
+  go (BinaryNoParensType ann t1 t2 t3) = do
+    !t1' <- f t1 >>= go
+    !t2' <- f t2 >>= go
+    !t3' <- f t3 >>= go
+    pure (BinaryNoParensType ann t1' t2' t3')
+  go (ParensInType ann t) = do
+    !t' <- f t >>= go
+    pure (ParensInType ann t')
   go other = pure other
 
 everythingOnTypes :: (r -> r -> r) -> (Type a -> r) -> Type a -> r

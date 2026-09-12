@@ -19,7 +19,7 @@ import Control.Applicative ((<|>), empty)
 import Control.Arrow ((&&&))
 import Control.Monad ((<=<), guard, unless, when)
 import Control.Monad.Error.Class (MonadError, catchError, throwError)
-import Control.Monad.State (MonadState, StateT, get, gets, modify, put)
+import Control.Monad.State.Strict (MonadState, StateT, get, gets, modify, put)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
 import Control.Monad.Trans.Except (ExceptT(..), runExceptT)
@@ -32,7 +32,7 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.Monoid (Any(..))
 import Data.Text (Text)
 
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 
 import Language.PureScript.Crash (internalError)

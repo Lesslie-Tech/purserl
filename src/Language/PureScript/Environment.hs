@@ -12,7 +12,7 @@ import Data.Foldable (find, fold)
 import Data.Functor ((<&>))
 import Data.IntMap.Strict qualified as IM
 import Data.IntSet qualified as IS
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Semigroup (First(..))

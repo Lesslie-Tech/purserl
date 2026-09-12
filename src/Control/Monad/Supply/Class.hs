@@ -8,6 +8,7 @@ import Prelude
 
 import Control.Monad.RWS (MonadState(..), MonadTrans(..), RWST)
 import Control.Monad.State (StateT)
+import Control.Monad.State.Strict qualified as Strict
 import Control.Monad.Supply (SupplyT(..))
 import Control.Monad.Writer (WriterT)
 import Data.Text (Text, pack)
@@ -28,6 +29,7 @@ instance Monad m => MonadSupply (SupplyT m) where
   peek = SupplyT get
 
 instance MonadSupply m => MonadSupply (StateT s m)
+instance MonadSupply m => MonadSupply (Strict.StateT s m)
 instance (Monoid w, MonadSupply m) => MonadSupply (WriterT w m)
 instance (Monoid w, MonadSupply m) => MonadSupply (RWST r w s m)
 

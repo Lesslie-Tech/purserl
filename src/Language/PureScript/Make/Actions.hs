@@ -203,8 +203,14 @@ data MakeActions m = MakeActions
 
 -- | Given the output directory, determines the location for the
 -- CacheDb file
+--
+-- This is CBOR, not JSON, so that reading/writing the whole project's cache
+-- database on every build doesn't pay JSON parse/encode costs (it reuses the
+-- same 'Serialise' machinery already used for externs files). Old
+-- `cache-db.json` files from a previous version are simply never read by
+-- this filename and are treated as a cache miss.
 cacheDbFile :: FilePath -> FilePath
-cacheDbFile = (</> "cache-db.json")
+cacheDbFile = (</> "cache-db.cbor")
 
 readCacheDb'
   :: (MonadIO m, MonadError MultipleErrors m)
@@ -212,7 +218,7 @@ readCacheDb'
   -- ^ The path to the output directory
   -> m CacheDb
 readCacheDb' outputDir =
-  fromMaybe mempty <$> readJSONFile (cacheDbFile outputDir)
+  fromMaybe mempty <$> readCborFile (cacheDbFile outputDir)
 
 writeCacheDb'
   :: (MonadIO m, MonadError MultipleErrors m)
@@ -221,7 +227,8 @@ writeCacheDb'
   -> CacheDb
   -- ^ The CacheDb to be written
   -> m ()
-writeCacheDb' = writeJSONFile . cacheDbFile
+writeCacheDb' outputDir cacheDb =
+  makeIO ("write Cbor file: " <> T.pack (cacheDbFile outputDir)) (writeCborFileIO (cacheDbFile outputDir) cacheDb)
 
 writePackageJson'
   :: (MonadIO m, MonadError MultipleErrors m)
@@ -332,6 +339,21 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
     let path = outputDir </> T.unpack (runModuleName mn) </> externsFileName
     (path, ) <$> readExternsFile mExternsMemCache path
 
+  -- purserl: computed once, lazily, on first demand, instead of once per
+  -- codegen/ffiCodegen call. Each `Erl.Build.inferForeignModule'` call does a
+  -- `doesFileExist` for one module; re-deriving this map for the whole
+  -- project inside every module's codegen/ffiCodegen made a full build
+  -- O(modules^2) in this lookup alone. It only depends on the `foreigns`
+  -- argument (fixed for the lifetime of this `MakeActions`), so it's safe to
+  -- share a single evaluation across every module.
+  erlForeigns :: M.Map ModuleName FilePath
+  erlForeigns = unsafePerformIO $ do
+    (merls :: M.Map ModuleName (Maybe FilePath)) <- traverse Erl.Build.inferForeignModule' foreigns
+    case sequence merls of
+      Nothing -> internalError (show ("couldn't find some erl foreign", merls))
+      Just v -> pure v
+  {-# NOINLINE erlForeigns #-}
+
   outputPrimDocs :: Make ()
   outputPrimDocs = do
     codegenTargets <- asks optionsCodegenTargets
@@ -384,12 +406,6 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
     -- ### Purerl
 
     when (S.member Erl codegenTargets) $ do
-      erlForeigns <- do
-        (merls :: M.Map ModuleName (Maybe FilePath)) <- traverse Erl.Build.inferForeignModule' foreigns
-        case sequence merls of
-          Nothing -> internalError (show ("couldn't find some erl foreign", merls))
-          Just v -> pure v
-
       -- generate the corefn
       -- let coreFnFile = targetFilename mn CoreFn
       --     json = CFJ.moduleToJSON Paths.version m
@@ -530,12 +546,6 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
 
     -- purserl, inlined because we need values from closure
     when (S.member Erl codegenTargets) $ do
-          erlForeigns <- do
-            (merls :: M.Map ModuleName (Maybe FilePath)) <- traverse Erl.Build.inferForeignModule' foreigns
-            case sequence merls of
-              Nothing -> internalError (show ("couldn't find some erl foreign", merls))
-              Just v -> pure v
-
           let mn = CF.moduleName m
               foreignFile = moduleDir mn </> T.unpack (erlModuleName mn ForeignModule) ++ ".erl"
           case mn `M.lookup` erlForeigns of

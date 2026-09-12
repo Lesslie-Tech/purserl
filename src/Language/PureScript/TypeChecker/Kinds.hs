@@ -31,7 +31,7 @@ import Control.Arrow ((***))
 import Control.Lens ((^.), _1, _2, _3)
 import Control.Monad (join, unless, void, when, (<=<))
 import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.State (MonadState, gets, modify)
+import Control.Monad.State.Strict (MonadState, gets, modify)
 import Control.Monad.Supply.Class (MonadSupply(..))
 
 import Data.Bifunctor (first, second)
@@ -41,7 +41,7 @@ import Data.Function (on)
 import Data.Functor (($>))
 import Data.IntSet qualified as IS
 import Data.List (nubBy, sortOn, (\\))
-import Data.Map qualified as M
+import Data.Map.Strict qualified as M
 import Data.IntMap.Strict qualified as IM
 import Data.Maybe (fromJust, fromMaybe)
 import Data.Text (Text)

@@ -49,7 +49,6 @@ import qualified Data.Text as T
 import Debug.Trace
 import PrettyPrint
 import Data.Foldable
-import DH qualified
 
 scratchpad = do
   -- did any dep input file hashes change?
@@ -144,7 +143,7 @@ markComplete ma buildPlan moduleName oldExt result = do
         -- putStrLn $ "### CS.BuildJobSkippedFullCacheHit[" <> T.unpack (runModuleName moduleName) <> "]"
         pure ()
   let BuildJob rVar = fromMaybe (internalError "make: markComplete no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
-  DH.hasLocked "1" $ putMVar rVar result
+  putMVar rVar result
 
   markComplete2 ma buildPlan moduleName oldExt result
 
@@ -181,7 +180,7 @@ markComplete2 ma@MakeActions{..} buildPlan moduleName oldExt result = do
 --
 --      pure ()
 --    )
-  DH.hasLocked "2" $ putMVar
+  putMVar
     (fromMaybe (internalError (show ("BuildPlan: bpCacheResult mvar not found for module", moduleName))) $ M.lookup moduleName (bpCacheResult buildPlan))
 
     (case result of
@@ -227,7 +226,7 @@ collectResults
   -> m (M.Map ModuleName BuildJobResult)
 collectResults buildPlan = do
   let prebuiltResults = M.map (BuildJobSucceeded (MultipleErrors []) . pbExternsFile) (bpPrebuilt buildPlan)
-  barrierResults <- traverse (DH.hasLocked "3" . readMVar . bjResult) $ bpBuildJobs buildPlan
+  barrierResults <- traverse (readMVar . bjResult) $ bpBuildJobs buildPlan
   pure (M.union prebuiltResults barrierResults)
 
 -- | Gets the the build result for a given module name independent of whether it
@@ -242,7 +241,7 @@ getResult buildPlan moduleName = do
     Just es ->
       pure (BuildJobSucceeded (MultipleErrors []) (pbExternsFile es))
     Nothing -> do
-      DH.hasLocked ("4.getResult", moduleName) $ readMVar $ bjResult $ fromMaybe (internalError "make: no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
+      readMVar $ bjResult $ fromMaybe (internalError "make: no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
 
 fetchMissingExtern :: Show meta => MonadBaseControl IO m => meta -> MakeActions m -> BuildPlan -> ModuleName -> m BuildJobResult
 fetchMissingExtern meta MakeActions{..} buildPlan moduleName = do
@@ -254,25 +253,25 @@ fetchMissingExtern meta MakeActions{..} buildPlan moduleName = do
     BuildJobSkipped -> pure mExts
     BuildJobSkippedFullCacheHit -> do
       let mvar = fromMaybe (internalError "BuildPlan: fetchMissingExtern") $ M.lookup moduleName (bpExterns buildPlan)
-      e <- DH.hasLocked "5" $ readMVar mvar
+      e <- readMVar mvar
       -- read mvar, it's probably already filled and we don't want to interrupt anyone
       case e of
         -- Maybe wrapped value instead of tryReadMVar so that we don't have two threads decoding the same externs file, wasting work
         Just ext -> pure (BuildJobSucceeded (MultipleErrors []) ext)
         Nothing -> do
           -- oops, better fill in the mvar
-          mv <- DH.hasLocked "6" $ takeMVar mvar
+          mv <- takeMVar mvar
           case mv of
             -- nope, someone did it before us
             Just extern -> do
-              DH.hasLocked "7" $ putMVar mvar mv
+              putMVar mvar mv
               pure (BuildJobSucceeded (MultipleErrors []) extern)
 
             Nothing -> do
               -- fill it in
               mextern <- snd <$> readExterns moduleName
               let extern = fromMaybe (internalError (show ("BuildPlan readExterns", moduleName, meta))) mextern
-              DH.hasLocked "8" $ putMVar mvar (Just extern)
+              putMVar mvar (Just extern)
               pure (BuildJobSucceeded (MultipleErrors []) extern)
 
 fetchMissingExterns :: Show meta => MonadBaseControl IO m => meta -> MakeActions m -> BuildPlan -> [ModuleName] -> m (M.Map ModuleName BuildJobResult)
@@ -494,7 +493,7 @@ anyDepChanged moduleName graph buildPlan = do
             let mvar =
                   fromMaybe (internalError (show ("BuildPlan: module not in deps", a, moduleName, deps)))
                     $ M.lookup a (bpCacheResult buildPlan)
-            cacheResult <- DH.hasLocked ("9.anyDepsChanged", moduleName, "depends on", a) $ readMVar mvar
+            cacheResult <- readMVar mvar
             case cacheResult of
               Nothing -> pure (FailRebuildDepsFailed a)
               Just NoExternsChange -> f ax
