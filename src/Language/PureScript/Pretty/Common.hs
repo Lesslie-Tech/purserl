@@ -10,6 +10,9 @@ import Control.Monad.State (StateT, modify, get)
 import Data.List (elemIndices, intersperse)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
+import Data.Text.Lazy.Builder (Builder)
+import Data.Text.Lazy.Builder qualified as Builder
 
 import Language.PureScript.AST (SourcePos(..), SourceSpan(..), nullSourceSpan)
 import Language.PureScript.CST.Lexer (isUnquotedKey)
@@ -75,13 +78,18 @@ instance Emit StrPos where
       mapping = SMap file startPos zeroPos
       zeroPos = SourcePos 0 0
 
-newtype PlainString = PlainString Text deriving (Semigroup, Monoid)
+-- | A plain (non-source-mapped) pretty-printer output, backed by a 'Builder'
+-- so that the many nested '<>'s a recursive pretty-printer performs are O(1)
+-- amortized each rather than O(current accumulated size) -- the latter turns
+-- printing an AST of depth n into O(n^2) work, since 'Text's own '<>' copies
+-- both operands into a new array on every call.
+newtype PlainString = PlainString Builder deriving (Semigroup, Monoid)
 
 runPlainString :: PlainString -> Text
-runPlainString (PlainString s) = s
+runPlainString (PlainString b) = TL.toStrict (Builder.toLazyText b)
 
 instance Emit PlainString where
-  emit = PlainString
+  emit = PlainString . Builder.fromText
   addMapping _ = mempty
 
 addMapping' :: (Emit gen) => Maybe SourceSpan -> gen

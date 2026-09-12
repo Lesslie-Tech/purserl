@@ -528,6 +528,7 @@ test-suite tests
     TestMake
     TestPrimDocs
     TestPscPublish
+    TestUnify
     TestUtils
     Paths_purescript
 

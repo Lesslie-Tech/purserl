@@ -16,6 +16,7 @@ import TestIde qualified
 import TestPscPublish qualified
 -- import TestBundle qualified
 import TestMake qualified
+import TestUnify qualified
 import TestUtils qualified
 import TestGraph qualified
 
@@ -33,6 +34,7 @@ main = do
     describe "ast" TestAst.spec
     describe "ide" TestIde.spec
     describe "make" TestMake.spec
+    describe "unify" TestUnify.spec
     describe "corefn" TestCoreFn.spec
     describe "docs" TestDocs.spec
     describe "prim-docs" TestPrimDocs.spec
