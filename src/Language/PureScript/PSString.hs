@@ -14,172 +14,102 @@ module Language.PureScript.PSString
 
 import Prelude
 import GHC.Generics (Generic)
-import Codec.Serialise (Serialise, encode, decode)
-import Codec.Serialise qualified as Serialise
-import Codec.Serialise.Encoding (encodeSimple)
-import Codec.Serialise.Decoding (decodeSimple)
+import Codec.Serialise (Serialise)
 import Control.DeepSeq (NFData)
-import Control.Exception (try, evaluate)
-import Control.Applicative ((<|>))
+import Data.Bits (shiftR, (.&.))
 import Data.Char qualified as Char
-import Data.Bits (shiftR)
-import Data.Either (fromRight)
-import Data.List (unfoldr)
-import Data.Scientific (toBoundedInteger)
 import Data.String (IsString(..))
-import Data.ByteString (ByteString)
-import Data.ByteString qualified as BS
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf16BE)
-import Data.Text.Encoding.Error (UnicodeException)
-import Data.Vector qualified as V
-import Data.Word (Word16, Word8)
+import Data.Word (Word16)
 import Numeric (showHex)
-import System.IO.Unsafe (unsafePerformIO)
 import Data.Aeson qualified as A
-import Data.Aeson.Types qualified as A
 
 -- |
--- Strings in PureScript are sequences of UTF-16 code units, which do not
--- necessarily represent UTF-16 encoded text. For example, it is permissible
--- for a string to contain *lone surrogates,* i.e. characters in the range
--- U+D800 to U+DFFF which do not appear as a part of a surrogate pair.
+-- Strings in PureScript are, per the language spec, sequences of UTF-16 code
+-- units (matching JavaScript's string semantics), which in principle
+-- includes unpaired surrogates that don't form valid Unicode text. This
+-- compiler only targets Erlang, whose string/binary literals are UTF-8 (a
+-- lone surrogate can't be encoded in UTF-8 at all, so codegen already
+-- replaces one with U+FFFD if it ever reaches a string literal), so there is
+-- no benefit to carrying that fidelity through the whole compiler pipeline.
+-- `PSString` is backed directly by `Text`; any lone surrogate in a literal
+-- (an obscure, deliberately-malformed edge case) is replaced with U+FFFD at
+-- construction time instead of forcing every ordinary string in the compiler
+-- to pay for a boxed `[Word16]` representation.
 --
--- The Show instance for PSString produces a string literal which would
--- represent the same data were it inserted into a PureScript source file.
---
--- Because JSON parsers vary wildly in terms of how they deal with lone
--- surrogates in JSON strings, the ToJSON instance for PSString produces JSON
--- strings where that would be safe (i.e. when there are no lone surrogates),
--- and arrays of UTF-16 code units (integers) otherwise.
---
-newtype PSString = PSString { toUTF16CodeUnits :: [Word16] }
+newtype PSString = PSString Text
   deriving (Eq, Ord, Semigroup, Monoid, Generic)
 
 instance NFData PSString
 instance Serialise PSString
---instance Serialise PSString where
---  encode ps =
---    case decodeString ps of
---      Just t -> encodeSimple 0 <> encode t
---      Nothing -> encodeSimple 1 <> encode (toUTF16CodeUnits ps)
---
---  decode = do
---    tag <- decodeSimple
---    case tag of
---      0 -> do
---        t <- decode
---        pure $ fromText t
---      1 -> do
---        words <- decode
---        pure $ PSString words
 
 instance Show PSString where
-  show = show . codePoints
+  show (PSString t) = show (T.unpack t)
 
--- Decode a PSString to a String, representing any lone surrogates as the
--- reserved code point with that index. Warning: if there are any lone
--- surrogates, converting the result to Text via Data.Text.pack will result in
--- loss of information as those lone surrogates will be replaced with U+FFFD
--- REPLACEMENT CHARACTER. Because this function requires care to use correctly,
--- we do not export it.
---
-codePoints :: PSString -> String
-codePoints = map (either (Char.chr . fromIntegral) id) . decodeStringEither
+-- | Text cannot represent an unpaired UTF-16 surrogate; replace any such
+-- code point with U+FFFD REPLACEMENT CHARACTER.
+sanitize :: Text -> Text
+sanitize = T.map $ \c -> if c >= '\xD800' && c <= '\xDFFF' then '\xFFFD' else c
 
--- |
--- Decode a PSString as UTF-16 text. Lone surrogates will be replaced with
--- U+FFFD REPLACEMENT CHARACTER
---
-decodeStringWithReplacement :: PSString -> String
-decodeStringWithReplacement = map (fromRight '\xFFFD') . decodeStringEither
+mkString :: Text -> PSString
+mkString = PSString . sanitize
 
--- |
--- Decode a PSString as UTF-16. Lone surrogates in the input are represented in
--- the output with the Left constructor; characters which were successfully
--- decoded are represented with the Right constructor.
---
-decodeStringEither :: PSString -> [Either Word16 Char]
-decodeStringEither = unfoldr decode . toUTF16CodeUnits
-  where
-  decode :: [Word16] -> Maybe (Either Word16 Char, [Word16])
-  decode (h:l:rest) | isLead h && isTrail l = Just (Right (unsurrogate h l), rest)
-  decode (c:rest) | isSurrogate c = Just (Left c, rest)
-  decode (c:rest) = Just (Right (toChar c), rest)
-  decode [] = Nothing
-
-  unsurrogate :: Word16 -> Word16 -> Char
-  unsurrogate h l = toEnum ((toInt h - 0xD800) * 0x400 + (toInt l - 0xDC00) + 0x10000)
-
--- |
--- Attempt to decode a PSString as UTF-16 text. This will fail (returning
--- Nothing) if the argument contains lone surrogates.
---
-decodeString :: PSString -> Maybe Text
-decodeString = hush . decodeEither . BS.pack . concatMap unpair . toUTF16CodeUnits
-  where
-  unpair w = [highByte w, lowByte w]
-
-  lowByte :: Word16 -> Word8
-  lowByte = fromIntegral
-
-  highByte :: Word16 -> Word8
-  highByte = fromIntegral . (`shiftR` 8)
-
-  -- Based on a similar function from Data.Text.Encoding for utf8. This is a
-  -- safe usage of unsafePerformIO because there are no side effects after
-  -- handling any thrown UnicodeExceptions.
-  decodeEither :: ByteString -> Either UnicodeException Text
-  decodeEither = unsafePerformIO . try . evaluate . decodeUtf16BE
-
-  hush = either (const Nothing) Just
+fromText :: Text -> PSString
+fromText = mkString
 
 instance IsString PSString where
-  fromString a = PSString $ concatMap encodeUTF16 a
-    where
-    surrogates :: Char -> (Word16, Word16)
-    surrogates c = (toWord (h + 0xD800), toWord (l + 0xDC00))
-      where (h, l) = divMod (fromEnum c - 0x10000) 0x400
+  fromString = mkString . T.pack
 
-    encodeUTF16 :: Char -> [Word16]
-    encodeUTF16 c | fromEnum c > 0xFFFF = [high, low]
-      where (high, low) = surrogates c
-    encodeUTF16 c = [toWord $ fromEnum c]
+-- |
+-- Encode a Char as one or two UTF-16 code units, using a surrogate pair for
+-- characters outside the Basic Multilingual Plane.
+--
+charToUTF16 :: Char -> [Word16]
+charToUTF16 c
+  | n > 0xFFFF =
+      let n' = n - 0x10000
+      in [ fromIntegral (0xD800 + (n' `shiftR` 10))
+         , fromIntegral (0xDC00 + (n' .&. 0x3FF))
+         ]
+  | otherwise = [fromIntegral n]
+  where n = Char.ord c
+
+toUTF16CodeUnits :: PSString -> [Word16]
+toUTF16CodeUnits (PSString t) = concatMap charToUTF16 (T.unpack t)
+
+-- |
+-- Decode a PSString as text. Always succeeds now that PSString is backed by
+-- Text; kept returning Maybe for source compatibility with existing callers.
+--
+decodeString :: PSString -> Maybe Text
+decodeString (PSString t) = Just t
+
+decodeStringEither :: PSString -> [Either Word16 Char]
+decodeStringEither (PSString t) = map Right (T.unpack t)
+
+decodeStringWithReplacement :: PSString -> String
+decodeStringWithReplacement (PSString t) = T.unpack t
 
 instance A.ToJSON PSString where
-  toJSON str =
-    case decodeString str of
-      Just t -> A.toJSON t
-      Nothing -> A.toJSON (toUTF16CodeUnits str)
+  toJSON (PSString t) = A.toJSON t
 
 instance A.FromJSON PSString where
-  parseJSON a = jsonString <|> arrayOfCodeUnits
-    where
-    jsonString = fromString <$> A.parseJSON a
-
-    arrayOfCodeUnits = PSString <$> parseArrayOfCodeUnits a
-
-    parseArrayOfCodeUnits :: A.Value -> A.Parser [Word16]
-    parseArrayOfCodeUnits = A.withArray "array of UTF-16 code units" (traverse parseCodeUnit . V.toList)
-
-    parseCodeUnit :: A.Value -> A.Parser Word16
-    parseCodeUnit b = A.withScientific "two-byte non-negative integer" (maybe (A.typeMismatch "" b) return . toBoundedInteger) b
+  parseJSON a = mkString <$> A.parseJSON a
 
 -- |
 -- Pretty print a PSString, using PureScript escape sequences.
 --
 prettyPrintString :: PSString -> Text
-prettyPrintString s = "\"" <> foldMap encodeChar (decodeStringEither s) <> "\""
+prettyPrintString (PSString t) = "\"" <> T.concatMap encodeChar t <> "\""
   where
-  encodeChar :: Either Word16 Char -> Text
-  encodeChar (Left c) = "\\x" <> showHex' 6 c
-  encodeChar (Right c)
+  encodeChar :: Char -> Text
+  encodeChar c
     | c == '\t' = "\\t"
     | c == '\r' = "\\r"
     | c == '\n' = "\\n"
     | c == '"'  = "\\\""
-    | c == '\''  = "\\\'"
+    | c == '\'' = "\\\'"
     | c == '\\' = "\\\\"
     | shouldPrint c = T.singleton c
     | otherwise = "\\x" <> showHex' 6 (Char.ord c)
@@ -233,31 +163,10 @@ prettyPrintStringJS s = "\"" <> foldMap encodeChar (toUTF16CodeUnits s) <> "\""
   encodeChar c | toChar c == '\\' = "\\\\"
   encodeChar c = T.singleton $ toChar c
 
+toChar :: Word16 -> Char
+toChar = toEnum . fromIntegral
+
 showHex' :: Enum a => Int -> a -> Text
 showHex' width c =
   let hs = showHex (fromEnum c) "" in
   T.pack (replicate (width - length hs) '0' <> hs)
-
-isLead :: Word16 -> Bool
-isLead h = h >= 0xD800 && h <= 0xDBFF
-
-isTrail :: Word16 -> Bool
-isTrail l = l >= 0xDC00 && l <= 0xDFFF
-
-isSurrogate :: Word16 -> Bool
-isSurrogate c = isLead c || isTrail c
-
-toChar :: Word16 -> Char
-toChar = toEnum . fromIntegral
-
-toWord :: Int -> Word16
-toWord = fromIntegral
-
-toInt :: Word16 -> Int
-toInt = fromIntegral
-
-mkString :: Text -> PSString
-mkString = fromString . T.unpack
-
-fromText :: Text -> PSString
-fromText t = mkString t

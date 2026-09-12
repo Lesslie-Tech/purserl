@@ -30,7 +30,7 @@ import Data.Word (Word16)
 import Language.PureScript.Names
     ( ModuleName(..), Ident (InternalIdent), runIdent, InternalIdentData (RuntimeLazyFactory, Lazy) )
 import Language.PureScript.PSString
-    ( PSString(..), decodeStringEither )
+    ( PSString, decodeStringEither, toUTF16CodeUnits )
 import Numeric ( showHex )
 
 import Language.PureScript.Erl.CodeGen.AST ( Atom(..) )
