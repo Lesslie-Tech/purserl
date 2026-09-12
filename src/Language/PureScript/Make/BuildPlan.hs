@@ -10,6 +10,7 @@ module Language.PureScript.Make.BuildPlan
   , anyDepChanged
   , RebuildInstructions(..)
   , getResult
+  , fetchMissingExtern
   , fetchMissingExterns
   , collectResults
   , markComplete
@@ -23,6 +24,7 @@ import Codec.Serialise (serialise)
 import Control.Monad.IO.Class (liftIO)
 import Control.Concurrent.Async.Lifted as A
 import Control.Concurrent.Lifted as C
+import Control.Exception.Lifted (onException)
 import Control.Monad.Base (liftBase)
 -- import Control.Monad (foldM)
 import Control.Monad
@@ -269,10 +271,17 @@ fetchMissingExtern meta MakeActions{..} buildPlan moduleName = do
 
             Nothing -> do
               -- fill it in
-              mextern <- snd <$> readExterns moduleName
-              let extern = fromMaybe (internalError (show ("BuildPlan readExterns", moduleName, meta))) mextern
-              putMVar mvar (Just extern)
-              pure (BuildJobSucceeded (MultipleErrors []) extern)
+              -- NOTE: we've already taken `mvar` above, emptying it. If anything
+              -- below throws (e.g. the dependency genuinely failed to produce
+              -- externs, so `readExterns`/the internalError below fires), we
+              -- must restore it before rethrowing -- otherwise any other thread
+              -- reading this same mvar would block on it forever.
+              (do
+                mextern <- snd <$> readExterns moduleName
+                let extern = fromMaybe (internalError (show ("BuildPlan readExterns", moduleName, meta))) mextern
+                putMVar mvar (Just extern)
+                pure (BuildJobSucceeded (MultipleErrors []) extern)
+                ) `onException` putMVar mvar Nothing
 
 fetchMissingExterns :: Show meta => MonadBaseControl IO m => meta -> MakeActions m -> BuildPlan -> [ModuleName] -> m (M.Map ModuleName BuildJobResult)
 fetchMissingExterns meta ma buildPlan deps =

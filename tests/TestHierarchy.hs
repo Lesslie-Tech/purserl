@@ -41,14 +41,14 @@ spec = describe "hierarchy" $ do
       it "generates usable graphviz graphs" $ do
         let declarations =
               [ P.TypeClassDeclaration
-                 (P.internalModuleSourceSpan "<A>", [])
+                 (P.SourceAnn (P.internalModuleSourceSpan "<A>") [])
                  (P.ProperName "A")
                  []
                  []
                  []
                  []
               , P.TypeClassDeclaration
-                 (P.internalModuleSourceSpan "<B>", [])
+                 (P.SourceAnn (P.internalModuleSourceSpan "<B>") [])
                  (P.ProperName "B")
                  []
                  [P.srcConstraint (P.Qualified P.ByNullSourcePos $ P.ProperName "A") [] [] Nothing]

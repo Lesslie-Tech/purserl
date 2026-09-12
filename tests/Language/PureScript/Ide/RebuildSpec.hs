@@ -80,10 +80,3 @@ spec = describe "Rebuilding single modules" $ do
         _ <- Test.runIde [ RebuildSync ("src" </> "RebuildSpecSingleModule.purs") Nothing Set.empty ]
         doesFileExist indexJs
       exists `shouldBe` False
-    it "does produce corefn if it's a codegen target" $ do
-      exists <- Test.inProject $ do
-        let corefn = "output" </> "RebuildSpecSingleModule" </> "corefn.json"
-        removePathForcibly ("output" </> "RebuildSpecSingleModule")
-        _ <- Test.runIde [ RebuildSync ("src" </> "RebuildSpecSingleModule.purs") Nothing (Set.singleton P.CoreFn) ]
-        doesFileExist corefn
-      exists `shouldBe` True

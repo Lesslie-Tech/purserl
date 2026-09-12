@@ -1167,12 +1167,16 @@ dbOpaqueDiffDiffIgnoringExportsListChanges (DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 
       , _tyOpFixity_opaque = M.differenceWith (\x y -> if x == y then Nothing else Just x) a10 b10
       , _tyClassDecls_opaque = M.differenceWith (\x y -> if x == y then Nothing else Just x) a11 b11
       , _tyClassInstanceDecls_opaque = M.differenceWith (\x y -> if x == y then Nothing else Just x) a12 b12
-      -- , _exports_opaque = mempty
-      , _exports_opaque =
-        -- let ea13 = mempty {_reExportRef = _reExportRef a13} in
-        -- let eb13 = mempty {_reExportRef = _reExportRef b13} in
-        -- if ea13 == eb13 then mempty else a13 -- TODO[drathier]: only look at reexports?
-        if a13 == b13 then mempty else a13 -- TODO[drathier]: only look at reexports?
+      -- NOTE: this field is unfiltered (see `_exports_opaque = a13` in both
+      -- `dbOpaqueIsctExports` and `efUpstreamCacheShapes`'s construction), so
+      -- comparing it for full equality made *any* addition/removal anywhere in
+      -- an upstream module's export list (even of declarations a downstream
+      -- module never references) look like a change, forcing needless
+      -- downstream rebuilds. Actual removals/renames of declarations a
+      -- downstream module does use are already caught by the per-field diffs
+      -- above (a used key goes missing via `M.differenceWith`), so this field
+      -- can be ignored here, matching this function's name.
+      , _exports_opaque = mempty
       }
 
 
@@ -1581,6 +1585,20 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
 
   -- ("WARNING: old is empty",ModuleName "B")
   -- TODO[drathier]: type aliases aren't tracked across deps yet; same bug as with the old attempt. Solved by re-exporting the relevant info. It seems like no expr has the type alias type anywhere; maybe type aliases are always lost? They're available in the ast at least, so we can get at them, even if we have to assume everyone depends on all type aliases always, and possibly same for type classes
+  --
+  -- Confirmed: this also affects type class superclasses, two or more hops
+  -- downstream. `efUpstreamCacheShapes` below only records shapes for modules
+  -- directly referenced by this module's own declarations, one hop at a time;
+  -- it isn't propagated transitively. So if module A's class TC gains/loses a
+  -- superclass, a module C that calls a TC member directly (`thingy = tc`)
+  -- correctly rebuilds (C imports A directly), but C's own resulting shape
+  -- for `thingy` doesn't change (the type `TC a => a` only embeds TC's name,
+  -- not its current superclass set) -- so a module D that only imports C (not
+  -- A) never finds out and incorrectly skips its rebuild. See the disabled
+  -- second half of "asdf tracks type class super classes across module
+  -- boundaries" in tests/TestMake.hs for a reproduction. Fixing this needs
+  -- cache-shape propagation to be transitive across the whole dependency
+  -- graph, not a local patch here.
 
 
   -- TODO[drathier]: handle imports? we only look at what's actually used, so what's the point?

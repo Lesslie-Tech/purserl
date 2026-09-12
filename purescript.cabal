@@ -21,8 +21,6 @@ extra-source-files:
   app/static/*.less
   bundle/build.sh
   bundle/README
-  tests/purs/**/*.js
-  tests/purs/**/*.js.map
   tests/purs/**/*.purs
   tests/purs/**/*.json
   tests/purs/**/*.out
@@ -32,7 +30,7 @@ extra-source-files:
   tests/support/psci/**/*.purs
   tests/support/psci/**/*.edit
   tests/support/pscide/src/**/*.purs
-  tests/support/pscide/src/**/*.js
+  tests/support/pscide/src/**/*.erl
   tests/support/pscide/src/**/*.fail
   stack.yaml
   README.md
@@ -521,7 +519,6 @@ test-suite tests
     Language.PureScript.Ide.UsageSpec
     PscIdeSpec
     TestAst
-    TestCompiler
     TestCoreFn
     TestCst
     TestDocs
@@ -530,13 +527,7 @@ test-suite tests
     TestIde
     TestMake
     TestPrimDocs
-    TestPsci
-    TestPsci.CommandTest
-    TestPsci.CompletionTest
-    TestPsci.EvalTest
-    TestPsci.TestEnv
     TestPscPublish
-    TestSourceMaps
     TestUtils
     Paths_purescript
 

@@ -2,39 +2,28 @@ module TestUtils where
 
 import Prelude
 
-import Language.PureScript qualified as P
-import Language.PureScript.CST qualified as CST
-import Language.PureScript.AST qualified as AST
-import Language.PureScript.Names qualified as N
 import Language.PureScript.Interactive.IO (findNodeProcess)
 
-import Control.Arrow ((***), (>>>))
-import Control.Monad (forM, guard, unless)
-import Control.Monad.Reader (MonadIO(..), MonadTrans(..))
-import Control.Monad.Trans.Except (ExceptT(..), runExceptT)
+import Control.Monad (guard, unless)
+import Control.Monad.Reader (MonadTrans(..))
 import Control.Monad.Trans.Maybe (MaybeT(..))
-import Control.Monad.Writer.Class (tell)
 import Control.Exception (IOException, catch, throw, throwIO, try, tryJust)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.Char (isSpace)
 import Data.Function (on)
-import Data.List (sort, sortBy, stripPrefix, groupBy, find)
-import Data.Map qualified as M
+import Data.List (sortBy, stripPrefix, groupBy)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as T
 import Data.Time.Clock (UTCTime(), diffUTCTime, getCurrentTime, nominalDay)
-import Data.Tuple (swap)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, getCurrentDirectory, getModificationTime, getTemporaryDirectory, listDirectory, setCurrentDirectory, withCurrentDirectory)
+import System.Directory (getCurrentDirectory, getModificationTime, listDirectory, setCurrentDirectory, withCurrentDirectory)
 import System.Exit (exitFailure)
 import System.Environment (lookupEnv)
-import System.FilePath (dropExtensions, makeRelative, takeDirectory, takeExtensions, takeFileName, (</>))
+import System.FilePath (makeRelative, takeDirectory, takeExtensions, (</>))
 import System.IO.Error (isDoesNotExistError)
-import System.IO.UTF8 (readUTF8FileT)
 import System.Process (callCommand, callProcess)
 import System.FilePath.Glob qualified as Glob
-import System.IO (Handle, IOMode(..), hPutStrLn, openFile, stderr)
+import System.IO (hPutStrLn, stderr)
 import Test.Hspec (Expectation, HasCallStack, expectationFailure, pendingWith)
 
 -- |
@@ -95,31 +84,6 @@ updateSupportCode = withCurrentDirectory "tests/support" $ do
     putStrLn $ replicate 79 '#'
     putStrLn ""
 
-readInput :: [FilePath] -> IO [(FilePath, T.Text)]
-readInput inputFiles = forM inputFiles $ \inputFile -> do
-  text <- readUTF8FileT inputFile
-  return (inputFile, text)
-
--- |
--- The support modules that should be cached between test cases, to avoid
--- excessive rebuilding.
---
-getSupportModuleTuples :: IO [(FilePath, P.Module)]
-getSupportModuleTuples = do
-  cd <- getCurrentDirectory
-  let supportDir = cd </> "tests" </> "support"
-  psciFiles <- Glob.globDir1 (Glob.compile "**/*.purs") (supportDir </> "psci")
-  libraries <- Glob.globDir1 (Glob.compile "purescript-*/src/**/*.purs") (supportDir </> "bower_components")
-  let pursFiles = psciFiles ++ libraries
-  fileContents <- readInput pursFiles
-  modules <- runExceptT $ ExceptT . return $ CST.parseFromFiles id fileContents
-  case modules of
-    Right ms -> return (fmap (fmap snd) ms)
-    Left errs -> fail (P.prettyPrintMultipleErrors P.defaultPPEOptions errs)
-
-getSupportModuleNames :: IO [T.Text]
-getSupportModuleNames = sort . map (P.runModuleName . P.getModuleName . snd) <$> getSupportModuleTuples
-
 pushd :: forall a. FilePath -> IO a -> IO a
 pushd dir act = do
   original <- getCurrentDirectory
@@ -127,31 +91,6 @@ pushd dir act = do
   result <- try act :: IO (Either IOException a)
   setCurrentDirectory original
   either throwIO return result
-
-
-createOutputFile :: FilePath -> IO Handle
-createOutputFile logfileName = do
-  tmp <- getTemporaryDirectory
-  createDirectoryIfMissing False (tmp </> logpath)
-  openFile (tmp </> logpath </> logfileName) WriteMode
-
-data SupportModules = SupportModules
-  { supportModules :: [P.Module]
-  , supportExterns :: [P.ExternsFile]
-  , supportForeigns :: M.Map P.ModuleName FilePath
-  }
-
-setupSupportModules :: IO SupportModules
-setupSupportModules = do
-  ms <- getSupportModuleTuples
-  let modules = map snd ms
-  supportExterns <- runExceptT $ do
-    foreigns <- inferForeignModules ms
-    externs <- ExceptT . fmap fst . runTest $ P.make (makeActions modules foreigns) (CST.pureResult <$> modules)
-    return (externs, foreigns)
-  case supportExterns of
-    Left errs -> fail (P.prettyPrintMultipleErrors P.defaultPPEOptions errs)
-    Right (externs, foreigns) -> return $ SupportModules modules externs foreigns
 
 getTestFiles :: FilePath -> IO [[FilePath]]
 getTestFiles testDir = do
@@ -179,105 +118,6 @@ getTestFiles testDir = do
     in if dir == "."
        then maybe fp reverse $ stripPrefix ext $ reverse fp
        else dir
-
-data ExpectedModuleName
-  = IsMain
-  | IsSourceMap FilePath
-
-compile
-  :: Maybe ExpectedModuleName
-  -> SupportModules
-  -> [FilePath]
-  -> IO ([(FilePath, T.Text)], (Either P.MultipleErrors FilePath, P.MultipleErrors))
-compile = compile' P.defaultOptions
-
-compile'
-  :: P.Options
-  -> Maybe ExpectedModuleName
-  -> SupportModules
-  -> [FilePath]
-  -> IO ([(FilePath, T.Text)], (Either P.MultipleErrors FilePath, P.MultipleErrors))
-compile' options expectedModule SupportModules{..} inputFiles = do
-  -- Sorting the input files makes some messages (e.g., duplicate module) deterministic
-  fs <- readInput (sort inputFiles)
-  fmap (fs, ) . P.runMake options $ do
-    msWithWarnings <- CST.parseFromFiles id fs
-    tell $ foldMap (\(fp, (ws, _)) -> CST.toMultipleWarnings fp ws) msWithWarnings
-    let ms = fmap snd <$> msWithWarnings
-    foreigns <- inferForeignModules ms
-    let
-      actions = makeActions supportModules (foreigns `M.union` supportForeigns)
-      (hasExpectedModuleName, expectedModuleName, compiledModulePath) = case expectedModule of
-        -- Check if there is one (and only one) module called "Main"
-        Just IsMain ->
-          let
-            moduleName = "Main"
-            compiledPath = modulesDir </> moduleName </> "index.js"
-          in ((==) 1 $ length $ filter (== moduleName) $ fmap (T.unpack . getPsModuleName) ms, moduleName, compiledPath)
-        -- Check if main sourcemap module starts with "SourceMaps." and matches its file name
-        Just (IsSourceMap modulePath) ->
-          let
-            moduleName = "SourceMaps." <> (dropExtensions . takeFileName $ modulePath)
-            compiledPath = modulesDir </> moduleName </> "index.js.map"
-          in (maybe False ((==) moduleName . T.unpack . getPsModuleName) (find ((==) modulePath . fst) ms), moduleName, compiledPath)
-        Nothing -> (True, mempty, mempty)
-
-    case ms of
-      [singleModule] -> do
-        unless hasExpectedModuleName $
-          error ("While testing a single PureScript file, the expected module name was '" <> expectedModuleName <>
-            "' but got '" <> T.unpack (getPsModuleName singleModule) <> "'.")
-        compiledModulePath <$ P.rebuildModule actions supportExterns (snd singleModule)
-      _ -> do
-        unless hasExpectedModuleName $
-          error $ "While testing multiple PureScript files, the expected main module was not found: '" <> expectedModuleName <> "'."
-        compiledModulePath <$ P.make actions (CST.pureResult <$> supportModules ++ map snd ms)
-
-getPsModuleName :: (a, AST.Module) -> T.Text
-getPsModuleName psModule = case snd psModule of
-  AST.Module _ _ (N.ModuleName t) _ _ -> t
-
-makeActions :: [P.Module] -> M.Map P.ModuleName FilePath -> P.MakeActions P.Make
-makeActions modules foreigns = (P.buildMakeActions modulesDir (P.internalError "makeActions: input file map was read.") foreigns False)
-                               { P.getInputTimestampsAndHashes = getInputTimestampsAndHashes
-                               , P.getOutputTimestamp = getOutputTimestamp
-                               , P.progress = const (pure ())
-                               }
-  where
-  getInputTimestampsAndHashes :: P.ModuleName -> P.Make (Either P.RebuildPolicy a)
-  getInputTimestampsAndHashes mn
-    | isSupportModule (P.runModuleName mn) = return (Left P.RebuildNever)
-    | otherwise = return (Left P.RebuildAlways)
-    where
-    isSupportModule = flip elem (map (P.runModuleName . P.getModuleName) modules)
-
-  getOutputTimestamp :: P.ModuleName -> P.Make (Maybe UTCTime)
-  getOutputTimestamp mn = do
-    let filePath = modulesDir </> T.unpack (P.runModuleName mn)
-    exists <- liftIO $ doesDirectoryExist filePath
-    return (if exists then Just (P.internalError "getOutputTimestamp: read timestamp") else Nothing)
-
-
-runTest :: P.Make a -> IO (Either P.MultipleErrors a, P.MultipleErrors)
-runTest = P.runMake P.defaultOptions
-
-inferForeignModules
-  :: MonadIO m
-  => [(FilePath, P.Module)]
-  -> m (M.Map P.ModuleName FilePath)
-inferForeignModules = P.inferForeignModules . fromList
-  where
-    fromList :: [(FilePath, P.Module)] -> M.Map P.ModuleName (Either P.RebuildPolicy FilePath)
-    fromList = M.fromList . map ((P.getModuleName *** Right) . swap)
-
-trim :: String -> String
-trim = dropWhile isSpace >>> reverse >>> dropWhile isSpace >>> reverse
-
-modulesDir :: FilePath
-modulesDir = ".test_modules"
-
-logpath :: FilePath
-logpath = "purescript-output"
 
 -- | Assert that the contents of the provided file path match the result of the
 -- provided action. If the "HSPEC_ACCEPT" environment variable is set, or if the

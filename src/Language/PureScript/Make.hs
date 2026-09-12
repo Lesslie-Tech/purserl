@@ -209,7 +209,7 @@ make ma@MakeActions{..} ms = do
   let totalModuleCount = length toBeRebuilt
   newCacheDbMVar <- newMVar cacheDb
 
-  for_ toBeRebuilt $ \m -> fork $ do
+  for_ toBeRebuilt $ \m -> fork $ (do
     -- for each module:
     -- do I need to rebuild myself?
     -- did any of my deps change?
@@ -256,10 +256,9 @@ make ma@MakeActions{..} ms = do
             (fst $ CST.resFull m)
             (fmap importPrim . snd $ CST.resFull m)
             (deps `inOrderOf` map (getModuleName . CST.resPartial) sorted)
-
-            -- Prevent hanging on other modules when there is an internal error
-            -- (the exception is thrown, but other threads waiting on MVars are released)
-          `onException` (BuildPlan.markComplete ma buildPlan moduleName Nothing (BuildJobFailed mempty))
+          -- NOTE: exception safety for this whole per-module job (including
+          -- goBuild/buildModule) is handled by the `onException` wrapped around
+          -- the entire forked action below, not here.
 
     case areMyOwnFilesUpToDate of
       False -> do
@@ -302,6 +301,15 @@ make ma@MakeActions{..} ms = do
                   BuildPlan.PleaseRebuild errs -> do
                     -- progress $ CompileMeta ("-- DR 3.2.3.2 upstreamDiffFound[" <> runModuleName moduleName <> "] " <> T.pack (show errs))
                     goBuild oldExterns results (DependencyChanged causedByModule)
+    )
+      -- Prevent hanging on other modules when there is an internal error
+      -- anywhere in this module's build logic -- not just inside buildModule,
+      -- but also e.g. in BuildPlan.fetchMissingExterns/anyDepChanged, which run
+      -- before buildModule is ever called. An uncaught exception here would
+      -- otherwise kill this forked thread silently, leaving this module's
+      -- bjResult/bpCacheResult/bpExterns MVars empty forever and deadlocking
+      -- every other thread that's waiting on them (e.g. in collectResults).
+      `onException` (BuildPlan.markComplete ma buildPlan (getModuleName . CST.resPartial $ m) Nothing (BuildJobFailed mempty))
 
   -- progress $ CompileMeta (T.pack $ show ("-- DR.5", "all solo modules done, pre collection"))
   externs <- traverse tryReadMVar $ M.elems $ BuildPlan.bpExterns buildPlan
@@ -319,6 +327,18 @@ make ma@MakeActions{..} ms = do
         in
         M.filter isDirectFailure $ collectedResults
 
+  -- BuildJobSkippedFullCacheHit doesn't carry its own externs (the module
+  -- wasn't rebuilt, so buildModule never produced a value for it); resolve it
+  -- to the on-disk externs file here (still valid, since it's a cache hit),
+  -- via the same cached-or-disk-read lookup used to fetch dependencies'
+  -- externs while building.
+  resolvedResults <- M.traverseWithKey
+    (\mn result -> case result of
+        BuildJobSkippedFullCacheHit -> BuildPlan.fetchMissingExtern ("mod", "collectResults", mn) ma buildPlan mn
+        other -> pure other
+    )
+    collectedResults
+
   let (failures, successes) =
         let
           splitResults = \case
@@ -329,9 +349,9 @@ make ma@MakeActions{..} ms = do
             BuildJobSkipped ->
               Left mempty
             BuildJobSkippedFullCacheHit ->
-              Right (error "FullCacheHit externs not here")
+              internalError "make: BuildJobSkippedFullCacheHit should have been resolved by fetchMissingExtern above"
         in
-          M.mapEither splitResults $ collectedResults
+          M.mapEither splitResults resolvedResults
 
   progress $ CompileMeta ("### CS.collectedResults31")
   -- Write the updated build cache database to disk

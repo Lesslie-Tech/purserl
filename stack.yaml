@@ -17,8 +17,9 @@ pvp-bounds: both
 packages:
 - '.'
 ghc-options:
-  # Build with advanced optimizations enabled by default
-  "$locals": -O2 -Wwarn -fspecialize-aggressively
+  # Build with advanced optimizations enabled by default; -j parallelizes
+  # module compilation within this package across all available cores.
+  "$locals": -O2 -Wwarn -fspecialize-aggressively -j
 extra-deps:
 # As of 2021-11-08, the latest release of `language-javascript` is 0.7.1.0,
 # but it has a problem with parsing the `async` keyword.  It doesn't allow

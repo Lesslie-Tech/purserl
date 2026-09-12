@@ -27,7 +27,7 @@ shouldBeUsage usage' (fp, range) =
   in
     do
       projectDir <- Test.getProjectDirectory
-      projectDir </> fp `shouldBe` P.spanName usage'
+      Text.pack (projectDir </> fp) `shouldBe` P.spanName usage'
 
       (P.sourcePosLine (P.spanStart usage'), P.sourcePosColumn (P.spanStart usage'))
         `shouldBe`

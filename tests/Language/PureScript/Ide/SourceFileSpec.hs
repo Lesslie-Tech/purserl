@@ -14,8 +14,8 @@ span1 = P.SourceSpan "" (P.SourcePos 1 1) (P.SourcePos 2 2)
 span2 = P.SourceSpan "" (P.SourcePos 2 2) (P.SourcePos 3 3)
 
 ann1, ann2 :: P.SourceAnn
-ann1 = (span1, [])
-ann2 = (span2, [])
+ann1 = P.SourceAnn span1 []
+ann2 = P.SourceAnn span2 []
 
 typeAnnotation1, value1, synonym1, class1, class2, data1, data2, valueFixity, typeFixity, foreign1, foreign2, member1 :: P.Declaration
 typeAnnotation1 = P.TypeDeclaration (P.TypeDeclarationData ann1 (P.Ident "value1") P.srcREmpty)

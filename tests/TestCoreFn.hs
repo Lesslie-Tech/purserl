@@ -7,6 +7,7 @@ import Prelude
 import Data.Aeson (Result(..), Value)
 import Data.Aeson.Types (parse)
 import Data.Map as M
+import Data.Text qualified as T
 import Data.Version (Version(..))
 
 import Language.PureScript.AST.Literals (Literal(..))
@@ -37,7 +38,7 @@ spec :: Spec
 spec = context "CoreFnFromJson" $ do
   let mn = ModuleName "Example.Main"
       mp = "src/Example/Main.purs"
-      ss = SourceSpan mp (SourcePos 0 0) (SourcePos 0 0)
+      ss = SourceSpan (T.pack mp) (SourcePos 0 0) (SourcePos 0 0)
       ann = ssAnn ss
 
   specify "should parse version" $ do
