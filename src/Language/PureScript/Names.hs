@@ -21,6 +21,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 
 import Language.PureScript.AST.SourcePos (SourcePos, pattern SourcePos)
+import Language.PureScript.Interning (Intern(..))
 
 -- | A sum of the possible name types, useful for error and lint messages.
 data Name
@@ -35,6 +36,7 @@ data Name
 
 instance NFData Name
 instance Serialise Name
+instance Intern Name
 
 getIdentName :: Name -> Maybe Ident
 getIdentName (IdentName name) = Just name
@@ -74,6 +76,7 @@ data InternalIdentData
 
 instance NFData InternalIdentData
 instance Serialise InternalIdentData
+instance Intern InternalIdentData
 
 -- |
 -- Names for value identifiers
@@ -99,6 +102,7 @@ data Ident
 
 instance NFData Ident
 instance Serialise Ident
+instance Intern Ident
 
 unusedIdent :: Text
 unusedIdent = "$__unused"
@@ -131,6 +135,7 @@ newtype OpName (a :: OpNameType) = OpName { runOpName :: Text }
 
 instance NFData (OpName a)
 instance Serialise (OpName a)
+instance Intern (OpName a)
 
 instance ToJSON (OpName a) where
   toJSON = toJSON . runOpName
@@ -160,6 +165,7 @@ newtype ProperName (a :: ProperNameType) = ProperName { runProperName :: Text }
 
 instance NFData (ProperName a)
 instance Serialise (ProperName a)
+instance Intern (ProperName a)
 
 instance ToJSON (ProperName a) where
   toJSON = toJSON . runProperName
@@ -192,6 +198,7 @@ newtype ModuleName = ModuleName Text
   deriving newtype Serialise
 
 instance NFData ModuleName
+instance Intern ModuleName
 
 runModuleName :: ModuleName -> Text
 runModuleName (ModuleName name) = name
@@ -212,6 +219,7 @@ pattern ByNullSourcePos = BySourcePos (SourcePos 0 0)
 
 instance NFData QualifiedBy
 instance Serialise QualifiedBy
+instance Intern QualifiedBy
 
 isBySourcePos :: QualifiedBy -> Bool
 isBySourcePos (BySourcePos _) = True
@@ -233,6 +241,7 @@ data Qualified a = Qualified QualifiedBy a
 
 instance NFData a => NFData (Qualified a)
 instance Serialise a => Serialise (Qualified a)
+instance Intern a => Intern (Qualified a)
 
 showQualified :: (a -> Text) -> Qualified a -> Text
 showQualified f (Qualified (BySourcePos  _) a) = f a

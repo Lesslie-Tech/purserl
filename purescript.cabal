@@ -310,6 +310,7 @@ library
     Language.PureScript.Errors
     Language.PureScript.Errors.JSON
     Language.PureScript.Externs
+    Language.PureScript.Interning
     Language.PureScript.Glob
     Language.PureScript.Graph
     Language.PureScript.Hierarchy

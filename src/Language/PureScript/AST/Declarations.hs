@@ -32,6 +32,7 @@ import Language.PureScript.Roles (Role)
 import Language.PureScript.TypeClassDictionaries (NamedDict)
 import Language.PureScript.Comments (Comment)
 import Language.PureScript.Environment (DataDeclType, Environment, FunctionalDependency, NameKind)
+import Language.PureScript.Interning (Intern(..))
 import Language.PureScript.Constants.Prim qualified as C
 
 -- | A map of locally-bound names in scope.
@@ -167,6 +168,8 @@ importPrim =
 data NameSource = UserNamed | CompilerNamed
   deriving (Show, Generic, NFData, Serialise)
 
+instance Intern NameSource
+
 -- |
 -- An item in a list of explicit imports or exports
 --
@@ -205,6 +208,8 @@ data DeclarationRef
   --
   | ReExportRef !SourceSpan !ExportSource !DeclarationRef
   deriving (Show, Generic, NFData, Serialise)
+
+instance Intern DeclarationRef
 
 instance Eq DeclarationRef where
   (TypeClassRef _ name) == (TypeClassRef _ name') = name == name'
@@ -245,6 +250,8 @@ data ExportSource =
   , exportSourceDefinedIn :: ModuleName
   }
   deriving (Eq, Ord, Show, Generic, NFData, Serialise)
+
+instance Intern ExportSource
 
 declRefSourceSpan :: DeclarationRef -> SourceSpan
 declRefSourceSpan (TypeRef ss _ _) = ss
@@ -307,6 +314,8 @@ data ImportDeclarationType
   --
   | Hiding [DeclarationRef]
   deriving (Eq, Show, Generic, Serialise, NFData)
+
+instance Intern ImportDeclarationType
 
 isExplicit :: ImportDeclarationType -> Bool
 isExplicit (Explicit _) = True

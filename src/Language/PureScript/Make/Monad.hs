@@ -43,6 +43,7 @@ import Data.Text qualified as Text
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors, SimpleErrorMessage(..), singleError)
 import Language.PureScript.Externs (ExternsFile, externsIsCurrentVersion)
+import Language.PureScript.Interning (Intern(intern))
 import Language.PureScript.Make.Cache (ContentHash, hash)
 import Language.PureScript.Options (Options)
 import System.Directory (createDirectoryIfMissing, getModificationTime, setModificationTime)
@@ -194,7 +195,13 @@ readExternsFileImplFromBytes path bytes = do
   return $ do
     externs <- mexterns
     guard $ externsIsCurrentVersion externs
-    return externs
+    -- Canonicalize repeated Text content (module/identifier/label names are
+    -- massively duplicated across a project's externs) against a shared,
+    -- process-lifetime table. See Language.PureScript.Interning. Unlike
+    -- purs ide server's Load command, purs compile's normal typecheck/codegen
+    -- pipeline already forces this value through genuine use, so there's no
+    -- need to force it eagerly here (measured: no difference either way).
+    return (intern externs)
 
 hashFile :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> m ContentHash
 hashFile path = do

@@ -9,6 +9,7 @@ import Data.String (IsString(..))
 import Data.Aeson qualified as A
 
 import Language.PureScript.PSString (PSString)
+import Language.PureScript.Interning (Intern(..))
 
 -- |
 -- Labels are used as record keys and row entry names. Labels newtype PSString
@@ -19,3 +20,4 @@ newtype Label = Label { runLabel :: PSString }
 
 instance NFData Label
 instance Serialise Label
+instance Intern Label

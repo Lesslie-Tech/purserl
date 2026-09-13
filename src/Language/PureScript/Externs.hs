@@ -66,6 +66,7 @@ import Language.PureScript.Names
 import qualified Language.PureScript.Names as N
 import Data.Foldable
 import Language.PureScript.Roles (Role)
+import Language.PureScript.Interning (Intern(..))
 import qualified Data.ByteString.UTF8 as BS8
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString as BS
@@ -115,6 +116,7 @@ data ExternsFile = ExternsFile
   } deriving (Show, Generic, NFData)
 
 instance Serialise ExternsFile
+instance Intern ExternsFile
 --instance Serialise ExternsFile where
 --  encode ef =
 --    encodeString "efVersion" <> encode (efVersion ef) <>
@@ -165,6 +167,7 @@ data ExternsImport = ExternsImport
   } deriving (Show, Generic, NFData)
 
 instance Serialise ExternsImport
+instance Intern ExternsImport
 
 -- | A fixity declaration in an externs file
 data ExternsFixity = ExternsFixity
@@ -180,6 +183,7 @@ data ExternsFixity = ExternsFixity
   } deriving (Show, Generic, NFData)
 
 instance Serialise ExternsFixity
+instance Intern ExternsFixity
 
 -- | A type fixity declaration in an externs file
 data ExternsTypeFixity = ExternsTypeFixity
@@ -195,6 +199,7 @@ data ExternsTypeFixity = ExternsTypeFixity
   } deriving (Show, Generic, NFData)
 
 instance Serialise ExternsTypeFixity
+instance Intern ExternsTypeFixity
 
 -- | A type or value declaration appearing in an externs file
 data ExternsDeclaration =
@@ -248,6 +253,7 @@ data ExternsDeclaration =
   deriving (Show, Generic, NFData)
 
 instance Serialise ExternsDeclaration
+instance Intern ExternsDeclaration
 
 -- | Check whether the version in an externs file matches the currently running
 -- version.
@@ -441,6 +447,7 @@ newtype RunIdent = RunIdent T.Text
   deriving (Show, Eq, Ord, Generic, NFData)
 
 instance Serialise RunIdent
+instance Intern RunIdent
 
 toRunIdent ident =
   -- TODO[drathier]: this makes me sad, what's going on here? Somehow (Ident "a") and (GenIdent (Just "a") 42) result in the same variable name in source. Why isn't the second one "$a42", like when using runIdent?
@@ -1023,6 +1030,8 @@ data DBOpaque
     }
   deriving (Eq, Generic, NFData)
 
+instance Intern DBOpaque
+
 instance Show DBOpaque where
   show db =
     "DBOpaque{" <>
@@ -1068,6 +1077,7 @@ newtype CacheShapeHash = CacheShapeHash BS8.ByteString
 
 
 instance Serialise CacheShapeHash
+instance Intern CacheShapeHash where intern = id
 
 dbIsctExports :: M.Map ModuleName DB -> ExportSummary -> DB -> DB
 dbIsctExports upstreamDBs (ExportSummary values typeName typeOpName typeClass typeClassInstance valueOpName reExportedRefs) (DB a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
@@ -1392,6 +1402,8 @@ data ExportSummary =
     -- [drathier]: re-exports of whole modules are desugared to one-by-one export refs, so we don't have to handle them here
     , _reExportRef :: M.Map ModuleName ExportSummary
     } deriving (Show, Eq, Ord, Generic, NFData, Serialise)
+
+instance Intern ExportSummary
 
 instance Monoid ExportSummary where
   mempty = ExportSummary mempty mempty mempty mempty mempty mempty mempty

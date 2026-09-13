@@ -16,6 +16,7 @@ import Data.Aeson qualified as A
 import Data.Aeson.TH qualified as A
 import Data.Text (Text)
 import GHC.Generics (Generic)
+import Language.PureScript.Interning (Intern(..))
 
 -- |
 -- The role of a type constructor's parameter.
@@ -33,6 +34,7 @@ data Role
 
 instance NFData Role
 instance Serialise Role
+instance Intern Role
 
 $(A.deriveJSON A.defaultOptions ''Role)
 

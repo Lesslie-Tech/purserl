@@ -29,6 +29,7 @@ import Language.PureScript.Constants.Prim qualified as C
 import Language.PureScript.Names (OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified, coerceProperName)
 import Language.PureScript.Label (Label)
 import Language.PureScript.PSString (PSString)
+import Language.PureScript.Interning (Intern(..))
 
 type SourceType = Type SourceAnn
 type SourceConstraint = Constraint SourceAnn
@@ -41,6 +42,7 @@ newtype SkolemScope = SkolemScope { runSkolemScope :: Int }
 
 instance NFData SkolemScope
 instance Serialise SkolemScope
+instance Intern SkolemScope
 
 -- |
 -- Describes how a TypeWildcard should be presented to the user during
@@ -53,6 +55,7 @@ data WildcardData = HoleWildcard Text | UnnamedWildcard | IgnoredWildcard
 
 instance NFData WildcardData
 instance Serialise WildcardData
+instance Intern WildcardData
 
 data TypeVarVisibility
   = TypeVarVisible
@@ -61,6 +64,7 @@ data TypeVarVisibility
 
 instance NFData TypeVarVisibility
 instance Serialise TypeVarVisibility
+instance Intern TypeVarVisibility
 
 typeVarVisibilityPrefix :: TypeVarVisibility -> Text
 typeVarVisibilityPrefix = \case
@@ -115,6 +119,7 @@ data Type a
 
 instance NFData a => NFData (Type a)
 instance Serialise a => Serialise (Type a)
+instance Intern a => Intern (Type a)
 
 srcTUnknown :: Int -> SourceType
 srcTUnknown = TUnknown NullSourceAnn
@@ -178,6 +183,7 @@ data ConstraintData
 
 instance NFData ConstraintData
 instance Serialise ConstraintData
+instance Intern ConstraintData
 
 -- | A typeclass constraint
 data Constraint a = Constraint
@@ -195,6 +201,7 @@ data Constraint a = Constraint
 
 instance NFData a => NFData (Constraint a)
 instance Serialise a => Serialise (Constraint a)
+instance Intern a => Intern (Constraint a)
 
 srcConstraint :: Qualified (ProperName 'ClassName) -> [SourceType] -> [SourceType] -> Maybe ConstraintData -> SourceConstraint
 srcConstraint = Constraint NullSourceAnn

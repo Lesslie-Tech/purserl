@@ -9,6 +9,7 @@ import Control.DeepSeq (NFData)
 import Codec.Serialise (Serialise)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
+import Language.PureScript.Interning (Intern(..))
 
 -- |
 -- For a given instance chain, stores the chain's file name and
@@ -20,6 +21,7 @@ data ChainId = ChainId {-# UNPACK #-} !T.Text {-# UNPACK #-} !Pos.SourcePos
 
 instance NFData ChainId
 instance Serialise ChainId
+instance Intern ChainId
 
 mkChainId :: T.Text -> Pos.SourcePos -> ChainId
 mkChainId fileName startingSourcePos = ChainId fileName startingSourcePos

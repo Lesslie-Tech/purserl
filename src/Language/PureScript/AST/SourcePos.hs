@@ -14,6 +14,7 @@ import Data.Aeson ((.=), (.:))
 import Data.Text (Text)
 import GHC.Generics (Generic)
 import Language.PureScript.Comments (Comment)
+import Language.PureScript.Interning (Intern(..))
 import Data.Aeson qualified as A
 import Data.Text qualified as T
 import System.FilePath (makeRelative)
@@ -21,6 +22,8 @@ import System.FilePath (makeRelative)
 -- | Source annotation - position information and comments.
 data SourceAnn = SourceAnn {-# UNPACK #-} !SourceSpan ![Comment]
   deriving (Show, Eq, Ord, Generic, NFData)
+
+instance Intern SourceAnn
 
 -- instance Serialise SourceAnn
 instance Serialise SourceAnn where
@@ -64,6 +67,8 @@ data SourcePos = SourcePos
     -- ^ Column number
   } deriving (Show, Eq, Ord, Generic, NFData)--, Serialise)
 
+instance Intern SourcePos
+
 instance Serialise SourcePos where
   encode sa = encode ()
   decode = do
@@ -98,6 +103,8 @@ data SourceSpan = SourceSpan
   , spanEnd :: {-# UNPACK #-} !SourcePos
     -- ^ End of the span
   } deriving (Eq, Ord, Generic, NFData)--, Serialise)
+
+instance Intern SourceSpan
 
 instance Serialise SourceSpan where
   encode sa = encode ()

@@ -16,6 +16,7 @@ import Prelude
 import GHC.Generics (Generic)
 import Codec.Serialise (Serialise)
 import Control.DeepSeq (NFData)
+import Language.PureScript.Interning (Intern(..))
 import Data.Bits (shiftR, (.&.))
 import Data.Char qualified as Char
 import Data.String (IsString(..))
@@ -43,6 +44,7 @@ newtype PSString = PSString Text
 
 instance NFData PSString
 instance Serialise PSString
+instance Intern PSString
 
 instance Show PSString where
   show (PSString t) = show (T.unpack t)

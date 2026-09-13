@@ -8,12 +8,14 @@ module Language.PureScript.Ide.Externs
 import Protolude hiding (to, from, (&))
 
 import Codec.CBOR.Term as Term
+import Control.DeepSeq (force)
 import Control.Lens (preview, view, (&), (^.))
 import "monad-logger" Control.Monad.Logger (MonadLogger, logErrorN)
 import Data.Version (showVersion)
 import Data.Text qualified as Text
 import Language.PureScript qualified as P
 import Language.PureScript.Make.Monad qualified as Make
+import Language.PureScript.Interning (intern)
 import Language.PureScript.Ide.Error (IdeError (..))
 import Language.PureScript.Ide.Types (IdeDataConstructor(..), IdeDeclaration(..), IdeDeclarationAnn(..), IdeType(..), IdeTypeClass(..), IdeTypeOperator(..), IdeTypeSynonym(..), IdeValue(..), IdeValueOperator(..), _IdeDeclType, anyOf, emptyAnn, ideTypeKind, ideTypeName)
 import Language.PureScript.Ide.Util (properNameT)
@@ -26,7 +28,15 @@ readExternFile fp = do
   externsFile <- liftIO (Make.readCborFileIO fp)
   case externsFile of
     Just externs | version == P.efVersion externs ->
-      pure externs
+      -- Canonicalize repeated Text content (module/identifier/label names
+      -- are massively duplicated across a project's externs) against the
+      -- shared, process-lifetime intern table. purs ide server retains
+      -- every module's ExternsFile simultaneously, so this is the read path
+      -- where deduping actually matters most. `force` it here: `intern`
+      -- only rewrites lazy thunks, and fsExterns is a lazy Map, so without
+      -- forcing now, the dedup never actually runs before the value is
+      -- stashed away unevaluated.
+      liftIO (evaluate (force (intern externs)))
     _ ->
       liftIO (Make.readCborFileIO fp) >>= \case
         Just (Term.TList (_tag : Term.TString efVersion : _rest)) -> do

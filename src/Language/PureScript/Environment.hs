@@ -25,6 +25,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Names (Ident, ProperName(..), ProperNameType(..), Qualified, QualifiedBy, coerceProperName)
 import Language.PureScript.Roles (Role(..))
 import Language.PureScript.TypeClassDictionaries (NamedDict)
+import Language.PureScript.Interning (Intern(..))
 import Language.PureScript.Types (SourceConstraint, SourceType, Type(..), TypeVarVisibility(..), eqType, srcTypeConstructor, freeTypeVariables)
 import Language.PureScript.Constants.Prim qualified as C
 
@@ -86,6 +87,7 @@ data FunctionalDependency = FunctionalDependency
 
 instance NFData FunctionalDependency
 instance Serialise FunctionalDependency
+instance Intern FunctionalDependency
 
 instance A.FromJSON FunctionalDependency where
   parseJSON = A.withObject "FunctionalDependency" $ \o ->
@@ -269,6 +271,7 @@ data TypeKind
 
 instance NFData TypeKind
 instance Serialise TypeKind
+instance Intern TypeKind
 
 -- | The type ('data' or 'newtype') of a data type declaration
 data DataDeclType
@@ -280,6 +283,7 @@ data DataDeclType
 
 instance NFData DataDeclType
 instance Serialise DataDeclType
+instance Intern DataDeclType
 
 showDataDeclType :: DataDeclType -> Text
 showDataDeclType Data = "data"
