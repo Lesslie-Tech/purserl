@@ -483,8 +483,8 @@ executable purs
     SharedCLI
     Version
     Paths_purescript
-  -- autogen-modules:
-  --   Paths_purescript
+  autogen-modules:
+    Paths_purescript
 
 test-suite tests
   import: defaults
@@ -531,6 +531,8 @@ test-suite tests
     TestPscPublish
     TestUnify
     TestUtils
+    Paths_purescript
+  autogen-modules:
     Paths_purescript
 
 
