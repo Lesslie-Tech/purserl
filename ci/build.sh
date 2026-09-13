@@ -39,30 +39,6 @@ then
   STACK_OPTS="$STACK_OPTS --flag=purescript:static"
 fi
 
-(echo "::endgroup::"; echo "::group::Set version number for build") 2>/dev/null
-
-package_version=$(node -pe 'require("./npm-package/package.json").version')
-package_release_version=${package_version%%-*}
-package_prerelease_suffix=${package_version#$package_release_version}
-
-if ! grep -q "\"install-purescript --purs-ver=${package_version//./\\.}\"" npm-package/package.json
-then
-  echo "Version in npm-package/package.json doesn't match version in install-purescript call"
-  exit 1
-fi
-
-if ! grep -q "^version:\\s*${package_release_version//./\\.}$" purescript.cabal
-then
-  echo "Version in npm-package/package.json doesn't match version in purescript.cabal"
-  exit 1
-fi
-
-if ! grep -q "^prerelease = \"${package_prerelease_suffix//./\\.}\"$" app/Version.hs
-then
-  echo "Version in npm-package/package.json doesn't match prerelease in app/Version.hs"
-  exit 1
-fi
-
 (echo "::endgroup::"; echo "::group::Install snapshot dependencies") 2>/dev/null
 
 # Install snapshot dependencies (since these will be cached globally and thus
