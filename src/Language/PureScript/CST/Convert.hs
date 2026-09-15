@@ -71,7 +71,7 @@ sourceAnn :: T.Text -> SourceToken -> SourceToken -> Pos.SourceAnn
 sourceAnn fileName (SourceToken ann1 _) (SourceToken ann2 _) =
   Pos.SourceAnn
   ( Pos.SourceSpan fileName (sourcePos $ srcStart $ tokRange ann1) (sourcePos $ srcEnd $ tokRange ann2))
-  ([])
+  []
 
 sourceName :: T.Text -> Name a -> Pos.SourceAnn
 sourceName fileName a = sourceAnnCommented fileName (nameTok a) (nameTok a)

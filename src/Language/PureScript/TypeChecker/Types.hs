@@ -96,7 +96,7 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
       ds2 <- forM untyped $ \e -> withoutWarnings $ typeForBindingGroupElement e dict
       return (map (False, ) ds1 ++ map (True, ) ds2, w)
 
-    inferred <- forM tys $ \(shouldGeneralize, ((sai@((SourceAnn ss _), ident), (val, ty)), _)) -> do
+    inferred <- forM tys $ \(shouldGeneralize, ((sai@(SourceAnn ss _, ident), (val, ty)), _)) -> do
       -- Replace type class dictionary placeholders with actual dictionaries
       (val', unsolved) <- replaceTypeClassDictionaries shouldGeneralize val
       -- Generalize and constrain the type
@@ -266,7 +266,7 @@ typeDictionaryForBindingGroup moduleName vals = do
     -- Create the dictionary of all name/type pairs, which will be added to the
     -- environment during type checking
     let dict = M.fromList [ (Qualified (maybe (BySourcePos $ spanStart ss) ByModuleName moduleName) ident, (ty, Private, Undefined))
-                          | (((SourceAnn ss _), ident), ty) <- typedDict <> untypedDict
+                          | ((SourceAnn ss _, ident), ty) <- typedDict <> untypedDict
                           ]
     return (SplitBindingGroup untyped' typed' dict)
   where

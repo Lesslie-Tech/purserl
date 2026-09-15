@@ -119,7 +119,7 @@ traverseCoreFnFull isolated bindF exprF binderF caseAltF litExprF litBinderF ide
     goBind :: Bind a -> f (Bind a)
     goBind b =
       bindF b >>=
-      \b -> case b of
+      \case
         NonRec ann ident expr ->
           NonRec <$> pure ann <*> goIdent ident <*> goExpr expr
         Rec bindings -> do
@@ -131,7 +131,7 @@ traverseCoreFnFull isolated bindF exprF binderF caseAltF litExprF litBinderF ide
     goExpr :: Expr a -> f (Expr a)
     goExpr expr =
       exprF expr >>=
-      \expr -> case expr of
+      \case
         Literal ann lit ->
           Literal <$> pure ann <*> goLitExpr lit
         Constructor ann typeName ctorName fields ->
@@ -154,14 +154,12 @@ traverseCoreFnFull isolated bindF exprF binderF caseAltF litExprF litBinderF ide
     goQIdent :: (ident -> f ident) -> Qualified ident -> f (Qualified ident)
     goQIdent f qi =
       qIdentF qi >>=
-        \qi -> case qi of
-          Qualified qualifiedBy a ->
-            Qualified <$> pure qualifiedBy <*> f a
+        \(Qualified qualifiedBy a) -> Qualified <$> pure qualifiedBy <*> f a
 
     goBinder :: Binder a -> f (Binder a)
     goBinder b =
       binderF b >>=
-      \b -> case b of
+      \case
         NullBinder ann ->
           pure $ NullBinder ann
         LiteralBinder ann lit ->
@@ -177,17 +175,15 @@ traverseCoreFnFull isolated bindF exprF binderF caseAltF litExprF litBinderF ide
     goCaseAlt c =
       isolated $
       caseAltF c >>=
-      \c -> case c of
-        CaseAlternative binders result ->
-          CaseAlternative <$> traverse goBinder binders <*> goResult result
-            where
-              goResult (Left guards) = Left <$> traverse (\(guard, expr) -> (,) <$> goExpr guard <*> goExpr expr) guards
-              goResult (Right expr) = Right <$> goExpr expr
+      \(CaseAlternative binders result) -> CaseAlternative <$> traverse goBinder binders <*> goResult result
+      where
+        goResult (Left guards) = Left <$> traverse (\(guard, expr) -> (,) <$> goExpr guard <*> goExpr expr) guards
+        goResult (Right expr) = Right <$> goExpr expr
 
     goLitExpr :: Literal (Expr a) -> f (Literal (Expr a))
     goLitExpr le =
       litExprF le >>=
-      \le -> case le of
+      \case
         NumericLiteral n ->
           pure $ NumericLiteral n
         StringLiteral s ->
@@ -204,7 +200,7 @@ traverseCoreFnFull isolated bindF exprF binderF caseAltF litExprF litBinderF ide
     goLitBinder :: Literal (Binder a) -> f (Literal (Binder a))
     goLitBinder lb =
       litBinderF lb >>=
-      \lb -> case lb of
+      \case
         NumericLiteral n ->
           pure $ NumericLiteral n
         StringLiteral s ->

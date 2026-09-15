@@ -6,6 +6,12 @@
 # placed as .hlint.yaml in the root of your project
 
 
+# Parser.hs is happy-generated from Parser.y (`{-# OPTIONS_GHC -w #-}`, all GHC
+# warnings already suppressed for it) and checked in as a build artifact --
+# don't hold generated code, or the GenericTemplate.hs runtime support code
+# happy inlines into it via LINE pragmas, to hand-written style expectations.
+- ignore: {within: "Language.PureScript.CST.Parser"}
+
 # Warnings currently triggered by your code
 - ignore: {name: "Redundant do"}
 - ignore: {name: "Use newtype instead of data"}

@@ -31,7 +31,6 @@ import Data.Maybe (fromMaybe)
 import Data.Map qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Debug.Trace (traceMarkerIO)
 import Language.PureScript.AST (ErrorMessageHint(..), Module(..), SourceSpan(..), getModuleName, getModuleSourceSpan, importPrim)
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.CST qualified as CST
@@ -53,7 +52,6 @@ import Language.PureScript.Make.Monad as Monad
 import Language.PureScript.CoreFn qualified as CF
 import Debug.Trace
 import PrettyPrint
-import Data.Text qualified as T
 import Data.Text.IO qualified as T
 
 -- purserl
@@ -225,20 +223,20 @@ make :: forall m. (MonadBaseControl IO m, MonadError MultipleErrors m, MonadWrit
      -> [CST.PartialResult Module]
      -> m [ExternsFile]
 make ma@MakeActions{..} ms = do
-  progress $ CompileMeta ("### CS.goReadCacheDb8")
+  progress $ CompileMeta "### CS.goReadCacheDb8"
 
   checkModuleNames
   cacheDb <- readCacheDb
-  progress $ CompileMeta ("### CS.goSortModules9")
+  progress $ CompileMeta "### CS.goSortModules9"
 
   -- let !_ = unsafePerformIO $ putStrLn (show ("cacheDb", cacheDb))
 
   (sorted, graph) <- sortModules Transitive (moduleSignature . CST.resPartial) ms
-  progress $ CompileMeta ("### CS.goConstructBuildPlan10")
+  progress $ CompileMeta "### CS.goConstructBuildPlan10"
 
   -- (buildPlan2, newCacheDb2) <- BuildPlan.construct2 ma cacheDb (sortedDirect, graphDirect)
   (buildPlan, newCacheDb) <- BuildPlan.construct2 ma cacheDb (sorted, graph)
-  progress $ CompileMeta ("### CS.goFork11")
+  progress $ CompileMeta "### CS.goFork11"
 
   -- Limit concurrent module builds to the number of capabilities as
   -- (by default) inferred from `+RTS -N -RTS` or set explicitly like `-N4`.
@@ -250,7 +248,7 @@ make ma@MakeActions{..} ms = do
   lock <- C.newQSem concurrency
 
   let toBeRebuilt = filter (BuildPlan.needsRebuild buildPlan . getModuleName . CST.resPartial) sorted
-  progress $ CompileMeta ("### CS.toBeRebuilt")
+  progress $ CompileMeta "### CS.toBeRebuilt"
   let totalModuleCount = length toBeRebuilt
   newCacheDbMVar <- newMVar cacheDb
 
@@ -355,7 +353,7 @@ make ma@MakeActions{..} ms = do
       -- bjExterns/bjResult/bpCacheResult/bpExterns MVars empty forever and
       -- deadlocking every other thread that's waiting on them (e.g. in
       -- collectResults).
-      `onException` (BuildPlan.markCompleteImmediate ma buildPlan (getModuleName . CST.resPartial $ m) Nothing (BuildJobFailed mempty))
+      `onException` BuildPlan.markCompleteImmediate ma buildPlan (getModuleName . CST.resPartial $ m) Nothing (BuildJobFailed mempty)
 
   -- progress $ CompileMeta (T.pack $ show ("-- DR.5", "all solo modules done, pre collection"))
   externs <- traverse tryReadMVar $ M.elems $ BuildPlan.bpExterns buildPlan
@@ -371,7 +369,7 @@ make ma@MakeActions{..} ms = do
             BuildJobSkipped -> False
             BuildJobSkippedFullCacheHit -> False
         in
-        M.filter isDirectFailure $ collectedResults
+        M.filter isDirectFailure collectedResults
 
   -- BuildJobSkippedFullCacheHit doesn't carry its own externs (the module
   -- wasn't rebuilt, so buildModule never produced a value for it); resolve it
@@ -399,13 +397,13 @@ make ma@MakeActions{..} ms = do
         in
           M.mapEither splitResults resolvedResults
 
-  progress $ CompileMeta ("### CS.collectedResults31")
+  progress $ CompileMeta "### CS.collectedResults31"
   -- Write the updated build cache database to disk
   -- NOTE[drathier]: Leaving the old cache-file as-is on failed compiles is a workaround. Previously, a build error in a module caused the cache entries for all subsequent modules to be dropped, which lead to a recompile. This way, we pretend we never did that failing compile, and we'll recompile modules over and over again until we get a full successful compile. This might play badly with ide and possibly other things too, but it superficially works. It's worth a try.
 
   newCacheDb <- takeMVar newCacheDbMVar
-  writeCacheDb $ Cache.removeModules (M.keysSet directFailures) $ newCacheDb
-  progress $ CompileMeta ("### CS.wroteCacheDB32")
+  writeCacheDb $ Cache.removeModules (M.keysSet directFailures) newCacheDb
+  progress $ CompileMeta "### CS.wroteCacheDB32"
   -- case () of
   --   _ | M.null failures == False ->
   --     -- NOTE[drathier]: Leaving the old cache-file as-is on failed compiles is a workaround. Previously, a build error in a module caused the cache entries for all subsequent modules to be dropped, which lead to a recompile. This way, we pretend we never did that failing compile, and we'll recompile modules over and over again until we get a full successful compile. This might play badly with ide and possibly other things too, but it superficially works. It's worth a try.

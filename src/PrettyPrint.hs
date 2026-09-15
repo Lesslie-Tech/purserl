@@ -23,8 +23,8 @@ pformat ident s =
         ']':_ -> 1
         '}':_ -> 1
         _ -> 0
-    ind = repeat ' ' & take ((ident-nextIsDedent)*2)
-    indl = repeat ' ' & take (((ident-nextIsDedent)-1)*2)
+    ind = replicate ((ident-nextIsDedent)*2) ' '
+    indl = replicate (((ident-nextIsDedent)-1)*2) ' '
   in
   case s of
     '\n':rest -> "\n" ++ ind ++ pformat ident rest

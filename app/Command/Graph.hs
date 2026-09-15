@@ -18,8 +18,8 @@ import System.Exit (exitFailure)
 import System.Directory (getCurrentDirectory)
 import System.IO (hPutStr, hPutStrLn, stderr)
 
-import Data.Maybe qualified as Data.Maybe
-import System.Environment qualified as System.Environment
+import Data.Maybe qualified
+import System.Environment qualified
 
 data GraphOptions = GraphOptions
   { graphInput      :: [FilePath]

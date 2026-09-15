@@ -29,7 +29,7 @@ contraMapLoggerErrors f l =
   Logger (\ioref -> do
     w <- readIORef ioref
     w' <- newIORef (f w)
-    (runLogger l) w'
+    runLogger l w'
     )
 
 instance Functor (Logger w) where

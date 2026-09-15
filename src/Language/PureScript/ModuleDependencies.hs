@@ -94,7 +94,7 @@ toModule verts (CyclicSCC ms) =
 
             let firstNode = fromJust (toVertex (sigModuleName (snd n))) in
             let dfs :: S.Set Vertex -> [Vertex] -> [Vertex]
-                dfs seen (a:ax) | S.member a sccNodes == False = dfs seen ax
+                dfs seen (a:ax) | not (S.member a sccNodes) = dfs seen ax
                 dfs seen (a:ax) | S.member a seen = [a]
                 dfs seen (a:_) = a : dfs (S.insert a seen) (graph ! a)
             in
@@ -102,18 +102,18 @@ toModule verts (CyclicSCC ms) =
             let bfs :: Int -> Seq.Seq (S.Set Vertex, [Vertex], Vertex) -> [Vertex]
                 bfs i _ | 1000000 < i =
                   let cycleWithTail@(cycleWithTailFirst:cycleWithTailRest) = reverse $ dfs S.empty [firstNode]
-                  in cycleWithTailFirst : (reverse $ (cycleWithTailFirst : reverse (takeWhile (/= cycleWithTailFirst) cycleWithTailRest)))
+                  in cycleWithTailFirst : reverse (cycleWithTailFirst : reverse (takeWhile (/= cycleWithTailFirst) cycleWithTailRest))
                 bfs i (rest Seq.:|> (aset,apath,a)) | S.member a aset = (a:apath)
                 bfs i (rest Seq.:|> (aset,apath,a)) =
-                  let outs = Seq.fromList $ (\x -> (S.insert a aset, a:apath, x)) <$> filter (\x -> S.member x sccNodes) (graph ! a) in
+                  let outs = Seq.fromList $ (S.insert a aset, a:apath,) <$> filter (\x -> S.member x sccNodes) (graph ! a) in
                   bfs (i + Seq.length outs) (outs <> rest)
 
                 cycleWithTail = bfs 0 startState
             in
-            NE.fromList $ map (\(x,_,_) -> x) $ map fromVertex $ reverse $
+            NE.fromList $ map ((\(x,_,_) -> x) . fromVertex) (reverse $
               case cycleWithTail of
                 [a,b] | a == b -> [a]
-                a -> a
+                a -> a)
 
           ms'' =
             case msRest of

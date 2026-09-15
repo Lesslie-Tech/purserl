@@ -37,7 +37,7 @@ import Language.PureScript.Erl.CodeGen.Optimizer.Memoize (addMemoizeAnnotations)
 import Control.Monad ((<=<))
 import qualified Data.Text as T
 import Data.Text (Text)
-import Control.Monad.State (MonadState(..), State(..), gets, modify, runState)
+import Control.Monad.State (MonadState(..), State(..), evalState, gets, modify, runState)
 import Debug.Trace (traceM, trace)
 import Data.List qualified as List
 import Data.Graph qualified as G
@@ -94,8 +94,7 @@ inline unsortedErls =
 
         let mentionsSelf =
               everything (||)
-                (\erl ->
-                  case erl of
+                (\case
                     -- [drathier]: just matching the atom also finds record keys, which is too strict. Matching just direct function calls perhaps isn't strict enough, `A = a, A()`
                     -- EAtomLiteral atom ->
                     EApp _ (EAtomLiteral atom) _ ->
@@ -116,13 +115,12 @@ inline unsortedErls =
 
   in
   -- trace (show ("erls", [(name, length fargvars) | EFunctionDef _ _ name fargvars _ <- erls])) $
-  fst $ runState (run erls) initialDB
+  evalState (run erls) initialDB
 
 mentionedTopLevelValues :: Erl -> [(T.Text, Int)]
 mentionedTopLevelValues expr =
   everything (<>)
-    (\erl ->
-      case erl of
+    (\case
         -- EApp RegularApp (EApp RegularApp (EApp RegularApp almostRunFn3 []) [EApp RegularApp almostRuntimeLazy args1]) args2 ->
         --   trace (show ("NEEDLE_runtime_lazy2", almostRunFn3, almostRuntimeLazy, args1, args2)) $ []
         -- EApp RegularApp (EApp RegularApp (EApp RegularApp almostRunFn3 []) [EApp RegularApp almostRuntimeLazy args1]) args2 ->

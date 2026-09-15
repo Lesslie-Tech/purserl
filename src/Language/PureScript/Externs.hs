@@ -27,17 +27,14 @@ import Codec.Serialise (Serialise, serialise, encode, decode)
 import Codec.Serialise.Encoding (encodeString)
 import Codec.Serialise.Decoding (decodeString)
 import Control.DeepSeq (NFData)
-import Control.Monad (join)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.List (foldl', find, intercalate)
-import Data.Foldable (fold)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Version (showVersion)
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as M
 import Data.Map.Merge.Strict qualified as M
-import Data.List.NonEmpty qualified as NEL
 import Language.PureScript.Make.Cache qualified as Cache
 import GHC.Generics (Generic)
 
@@ -47,7 +44,6 @@ import Language.PureScript.AST.Declarations.ChainId (ChainId)
 import Language.PureScript.Crash (internalError)
 -- import Language.PureScript.Environment (DataDeclType, Environment(..), FunctionalDependency, NameKind(..), NameVisibility(..), TypeClassData(..), TypeKind(..), dictTypeName, makeTypeClassData)
 import Language.PureScript.Environment
-import Language.PureScript.Names (Ident, ModuleName, OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), coerceProperName, isPlainIdent)
 import Language.PureScript.TypeClassDictionaries (NamedDict, TypeClassDictionaryInScope(..))
 -- import Language.PureScript.Types (SourceConstraint, SourceType, srcInstanceType)
 import Language.PureScript.Types
@@ -58,8 +54,9 @@ import Debug.Trace
 import PrettyPrint
 import Control.Monad.Trans.State.Strict
 import Control.Monad
+import Data.Bifunctor (second)
 import Data.Function ((&))
-import Data.Functor ((<&>))
+import Data.Functor ((<&>), ($>))
 import Data.Monoid
 import Data.Semigroup
 import Language.PureScript.Names
@@ -478,7 +475,7 @@ instance ToCS DataConstructorDeclaration CSDataConstructorDeclaration where
           & traverse
             (\(ident, typeWithSrcAnn) ->
               do
-                let t2 = const () <$> typeWithSrcAnn
+                let t2 = void typeWithSrcAnn
                 toCS typeWithSrcAnn
                 pure (ident, t2)
             )
@@ -606,13 +603,11 @@ instance ToCS CaseAlternative () where
     traverse_ toCS guardedExprs
 
 instance ToCS [Declaration] () where
-  toCS ds = do
+  toCS ds = traverse_ (toCS . snd) (do
     let env = internalError "TODO[drathier]: missing env in ToCS"
     let mn = ModuleName "TODO[drathier]: missing mn in ToCS"
     -- TODO[drathier]: lifting CSDB values out of DB like this feels weird. Should CSDB and DB be the same type? Should we use ToCS for e.g. findDeps too?
-    findDeps mn env ds
-    <&> snd
-    & traverse_ toCS
+    findDeps mn env ds)
 
 instance ToCS DB () where
   toCS (DB dataOrNewtypeDeclsTypeOnly dataOrNewtypeDeclsWithCtors ctorTypes typeSynonymDecls valueDecls externDecls externDataDecls opFixity ctorFixity tyOpFixity tyClassDecls tyClassInstanceDecls _exports) = do
@@ -941,7 +936,6 @@ storeTypeRefs t =
 
     Skolem _ _ mt1 _ _ -> do
       traverse_ storeTypeRefs mt1
-      pure ()
 
     REmpty a -> pure ()
 
@@ -1035,7 +1029,7 @@ instance Intern DBOpaque
 instance Show DBOpaque where
   show db =
     "DBOpaque{" <>
-    (intercalate ", " $ filter ((/=)"")
+    intercalate ", " (filter ((/=) "")
       [ if _dataOrNewtypeDeclsTypeOnly_opaque db == mempty then "" else "_dataOrNewtypeDeclsTypeOnly_opaque=" <> show (_dataOrNewtypeDeclsTypeOnly_opaque db)
       , if _dataOrNewtypeDeclsFull_opaque db == mempty then "" else "_dataOrNewtypeDeclsFull_opaque=" <> show (_dataOrNewtypeDeclsFull_opaque db)
       , if _ctorTypes_opaque db == mempty then "" else "_ctorTypes_opaque=" <> show (_ctorTypes_opaque db)
@@ -1117,7 +1111,7 @@ dbOpaqueIsctExports meta upstreamDBs (ExportSummary valueName typeName typeOpNam
   let
     upstreamReExports =
       M.intersectionWith
-        (\innerExportSummary innerDB -> dbOpaqueIsctExports ("inner") upstreamDBs innerExportSummary innerDB)
+        (\innerExportSummary innerDB -> dbOpaqueIsctExports "inner" upstreamDBs innerExportSummary innerDB)
         reExportedRefs
         upstreamDBs
     ourDB =
@@ -1204,7 +1198,7 @@ findDeps mn env decls =
         in
           case d of
             KindDeclaration _ kindSignatureFor referencedName stype ->
-              addKind (kindSignatureFor, referencedName) (CSKindDeclaration (const () <$> stype))
+              addKind (kindSignatureFor, referencedName) (CSKindDeclaration (void stype))
             RoleDeclaration (RoleDeclarationData _ tname roles) ->
               addRole tname (CSRoleDeclaration roles)
             d -> addOther d
@@ -1259,8 +1253,8 @@ findDepsImpl getKind getRole mn env d =
     -- TypeSynonymDeclaration SourceAnn (ProperName 'TypeName) [(Text, Maybe SourceType)] SourceType
     TypeSynonymDeclaration _ tname targs stype -> do
       -- TODO[drathier]: KindedType.purs has a "Just SourceType" targ. I don't know how to handle it here. Right now I'm just storing it as-is.
-      let nstype = stype <&> const ()
-      let ntargs = targs <&> fmap (fmap (fmap (const ())))
+      let nstype = stype $> ()
+      let ntargs = targs <&> fmap (fmap void)
       let nstypeDB = stype & replaceTypeSynonyms (types env) (typeSynonyms env <&> snd) & flip execState mempty
       dbPutTypeSynonymDeclaration tname (CSTypeSynonymDeclaration tname ntargs nstype nstypeDB (getKind TypeSynonymSig tname))
 
@@ -1281,7 +1275,7 @@ findDepsImpl getKind getRole mn env d =
       let !(_, nexprDB) = mempty & runState (traverse_ toCS exprs)
       let tipe = case M.lookup (Qualified (ByModuleName mn) ident) (names env) of
                     Nothing -> internalError "drathier1"
-                    Just (ty, _, _) -> const () <$> ty
+                    Just (ty, _, _) -> void ty
       dbPutValueDeclaration ident (CSValueDeclaration namekind (length binders) tipe nexprDB)
 
     -- BoundValueDeclaration SourceAnn Binder Expr
@@ -1290,11 +1284,9 @@ findDepsImpl getKind getRole mn env d =
     -- BindingGroupDeclaration (NEL.NonEmpty ((SourceAnn, Ident), NameKind, Expr))
     BindingGroupDeclaration decls ->
       -- rarely used here, but used by e.g. instance HeytingAlgebra Boolean, since its type class function implementations call eachother (implies calls not)
-      decls
-        <&> (\((sourceAnn, ident), nameKind, expr) ->
+      traverse_ (findDepsImpl getKind getRole mn env . (\((sourceAnn, ident), nameKind, expr) ->
           ValueDeclaration (ValueDeclarationData sourceAnn ident nameKind [] [GuardedExpr [] expr])
-        )
-        & traverse_ (findDepsImpl getKind getRole mn env)
+        )) decls
 
     -- ExternDeclaration SourceAnn Ident SourceType
     ExternDeclaration _ ident sourceType -> do
@@ -1325,19 +1317,18 @@ findDepsImpl getKind getRole mn env d =
       pure ()
     -- TypeClassDeclaration SourceAnn (ProperName 'ClassName) [(Text, Maybe SourceType)] [SourceConstraint] [FunctionalDependency] [Declaration]
     TypeClassDeclaration _ className targs constraints fnDeps decls -> do
-      ndecls <- decls & traverse (\decl ->
-        case decl of
+      ndecls <- decls & traverse (\case
           TypeDeclaration (TypeDeclarationData _ ident tipe) -> do
             let (ntipe, ntipeDB) = mempty & runState (toCS tipe)
-            pure $ CSTypeDeclaration ident (const () <$> tipe) ntipeDB
+            pure $ CSTypeDeclaration ident (void tipe) ntipeDB
           v -> error ("ASSUMPTION[drathier]: The inner declarations in the type class declaration are just TypeDeclarations." ++ show v)
         )
 
       -- TODO[drathier]: test the constraintKindArgs and constraintData fields of Constraint. I couldn't figure out a source input that would put anything in those fields.
 
       let (_, nconstraintsdb) = mempty & runState (traverse toCS constraints)
-      let nconstraints = fmap (const ()) <$> constraints
-      let ntargs = targs <&> (\(a, sourceType) -> (a, fmap (const ()) <$> sourceType))
+      let nconstraints = void <$> constraints
+      let ntargs = targs <&> second ((<$>) void)
       let !_ = nconstraints <&>
             (\case
               Constraint _ _ [] _ _ -> ()
@@ -1560,9 +1551,9 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
   in
   let exportedThings = findExportedThings exports in
   -- let safeImports = findQualifiedImportedModules mn efImports upstreamDBs in
-  let findDepsRes = if shouldCache == False then [] else findDeps mn env decls in
+  let findDepsRes = if not shouldCache then [] else findDeps mn env decls in
   let dbDeps = foldl (<>) (mempty { _exports = exportedThings }) (snd <$> findDepsRes) in
-  let csdbDeps = flip execState mempty $ toCS $ dbDeps in
+  let csdbDeps = flip execState mempty $ toCS dbDeps in
   let efOurCacheShapes = dbDeps & dbToOpaque & dbOpaqueIsctExports ("self", mn) upstreamDBs exportedThings in
   -- let efUpstreamReExports = buildEfUpstreamReExports upstream exports mempty mempty in
   -- let !_ = trace (sShow ("###moduleToExternsFile findExportedThings", mn, exportedThings)) () in
@@ -1619,7 +1610,7 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
 
   let efUpstreamCacheShapes :: M.Map ModuleName DBOpaque
       efUpstreamCacheShapes =
-        if shouldCache == False then M.empty else
+        if not shouldCache then M.empty else
           let currentDeps :: M.Map ModuleName ToCSDBInner
               currentDeps =
                 runToCSDB csdbDeps
@@ -1632,14 +1623,14 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
 
                 -- don't look for ourselves or built-in modules in the upstream cache
                 & M.delete mn
-                & M.filterWithKey (\m _ -> moduIsPrim m == False)
+                & M.filterWithKey (\m _ -> not (moduIsPrim m))
           in
           M.merge
             M.dropMissing
             (M.mapMissing (\k a -> error ("[drathier]: cache key only in currentDeps2, missing in build history: " <> show
               ( "key", k
               , "modu", mn
-              , "commonKeys", M.keys (M.intersection (const () <$> currentDeps) (const () <$> upstreamDBs))
+              , "commonKeys", M.keys (M.intersection (void currentDeps) (void upstreamDBs))
               , "currentDepsKeys", M.keys currentDeps
               , "v", a
               ))))
@@ -1664,7 +1655,7 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
                     typesRefByCtors :: M.Map (ProperName 'TypeName) ()
                     typesRefByCtors =
                       ctors
-                        & M.intersectionWith (\a _ -> a) (_ctorTypes_opaque up)
+                        & M.intersectionWith const (_ctorTypes_opaque up)
                         & M.elems
                         <&> (,())
                         & M.fromList

@@ -531,7 +531,7 @@ insoluble k a b =
   -- "Consider adding a type annotation" hint, because annotating kinds to
   -- instantiate unknowns in Coercible constraints should never resolve
   -- NoInstanceFound errors.
-  errorMessage $ NoInstanceFound (srcConstraint Prim.Coercible [k] [a, b] Nothing) [] 
+  errorMessage $ NoInstanceFound (srcConstraint Prim.Coercible [k] [a, b] Nothing) []
     $ if any containsUnknowns [a, b] then Unknowns else NoUnknowns
 
 -- | Constraints of the form @Coercible a b@ can be solved if the two arguments
@@ -564,7 +564,7 @@ canonUnsaturatedHigherKindedType env a b
       ak' <- lift $ do
         let (kvs, ak') = fromMaybe (internalError "canonUnsaturatedHigherKindedType: unkinded forall binder") $ completeBinderList ak
             instantiatedKinds = zipWith (\(_, (kv, _)) k -> (kv, k)) kvs akapps
-        unknownKinds <- traverse (\((SourceAnn ss _), (kv, k)) -> (kv,) <$> freshKindWithKind ss k) $ drop (length akapps) kvs
+        unknownKinds <- traverse (\(SourceAnn ss _, (kv, k)) -> (kv,) <$> freshKindWithKind ss k) $ drop (length akapps) kvs
         pure $ replaceAllTypeVars (instantiatedKinds <> unknownKinds) ak'
       let (aks', _) = unapplyKinds ak'
       tys <- traverse freshTypeWithKind $ drop (length axs) aks'

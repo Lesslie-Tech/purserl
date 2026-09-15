@@ -365,7 +365,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
     let attributes = findAttributes decls
 
     -- safeDecls <- concat <$> traverse (typecheckWrapper mn) erlDecls
-    safeDecls <- pure mempty
+    let safeDecls = mempty
 
 
     let fnl (EFunctionDef _ _ fnName args _) = Just (fnName, length args)
@@ -407,7 +407,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
     types = M.map (\(t, _, _) -> t) $ E.names env
 
     findAttributes :: [Bind Ann] -> [Erl]
-    findAttributes expr = map (uncurry EAttribute) $ mapMaybe getAttribute $ concatMap onBind expr
+    findAttributes expr = map (uncurry EAttribute) $ concatMap (mapMaybe getAttribute . onBind) expr
       where
         getAttribute (TypeApp _ (TypeApp _ (TypeConstructor _ (Qualified (P.ByModuleName _) (ProperName "Attribute"))) (TypeLevelString _ a)) (TypeLevelString _ b)) =
           Just (a, b)
@@ -674,8 +674,8 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
               -- And deduplicating would also be incorrect for overridden idents
               ctxRef = [ EVarBind lazyVarName $ qualFunCall "erlang" "make_ref" [] | needLazyRef ]
 
-          let s1 = \v -> foldr EAndThen v funs
-          let s2 = \v -> foldr ELet v rebinds
+          let s1 v = foldr EAndThen v funs
+          let s2 v = foldr ELet v rebinds
           let s3 innermost = case ctxRef of
                 [] -> innermost
                 [c] -> ELet c innermost
@@ -826,8 +826,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
           (DB M.empty [] [] (map fst renamedValues))
       pure
         ( letbindVars ELet renamedValues $
-          letbind (\(k,v) rest -> ELet (EBind (EVar k) (EFun0 (Just k) v)) rest) (reverse (contImpls resDB)) $
-          res
+          letbind (\(k,v) rest -> ELet (EBind (EVar k) (EFun0 (Just k) v)) rest) (reverse (contImpls resDB)) res
         )
         where
           -- NOTE[drathier]: hash continuations and bind them as local funs, so we don't duplicate code on deeply nested branches
@@ -968,7 +967,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                 True -> happy
                 False ->
                   ECaseOf guard $
-                    [ ( EBinder (ETrue)
+                    [ ( EBinder ETrue
                       , happy
                       )
                     ]
@@ -976,7 +975,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                     case (restGuards, monGuardFailureCont) of
                       ([], Nothing) -> []
                       _ ->
-                        [ ( EBinder (EFalse)
+                        [ ( EBinder EFalse
                           , restGuards2
                           )
                         ]
@@ -999,8 +998,8 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                   NumericLiteral (Right double) -> pure $ ENumericLiteral (Right double)
                   StringLiteral psString -> pure $ EStringLiteral psString
                   CharLiteral char -> pure $ ECharLiteral char
-                  BooleanLiteral True -> pure $ ETrue
-                  BooleanLiteral False -> pure $ EFalse
+                  BooleanLiteral True -> pure ETrue
+                  BooleanLiteral False -> pure EFalse
                   ObjectLiteral kvPairs ->
                     EMapPattern <$> mapM (\(k,v) -> (AtomPS Nothing k,) <$> binderToErl v) kvPairs
                   ArrayLiteral items -> do
@@ -1024,7 +1023,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
     constructorLiteral name args = ETupleLiteral (EAtomLiteral (Atom Nothing (toAtomName name)) : args)
 
     literalToValueErl :: Literal (Expr Ann) -> m Erl
-    literalToValueErl = fmap fst . literalToValueErl' EMapLiteral (\x -> (,[]) <$> valueToErl x)
+    literalToValueErl = fmap fst . literalToValueErl' EMapLiteral (fmap (, []) . valueToErl)
 
     literalToValueErl' :: Show a => ([(Atom, Erl)] -> Erl) -> (a -> m (Erl, [b])) -> Literal a -> m (Erl, [b])
     literalToValueErl' _ _ (NumericLiteral n) = pure (ENumericLiteral n, [])

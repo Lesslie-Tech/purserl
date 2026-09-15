@@ -10,6 +10,7 @@ module Language.PureScript.Erl.CodeGen.InlineLocal (inlineVarBinds) where
 import Prelude.Compat
 
 import Control.Monad.Supply.Class (MonadSupply)
+import Data.Foldable (traverse_)
 
 import Language.PureScript.Erl.CodeGen.Common (runAtom)
 import Language.PureScript.Erl.CodeGen.AST
@@ -90,7 +91,7 @@ compressStack stack =
 
 actionStack stack = ST.runST $ do
   pointersRef <- ST.newSTRef (Map.empty :: Map T.Text (UF.Point s (T.Text, Int, Maybe Erl)))
-  traverse (actionStackOne pointersRef) stack
+  traverse_ (actionStackOne pointersRef) stack
   pointers <- ST.readSTRef pointersRef
   rawActions <- traverse UF.descriptor pointers
   pure $ Map.map handleAction rawActions
@@ -246,7 +247,7 @@ replaceOnErl e = do
       replaceOnPat e = do
         case e of
           EVar v -> pure $ EVar (goDef v)
-          other -> pure $ other
+          other -> pure other
 
       replaceBinder :: EFunBinder -> State Replacements EFunBinder
       replaceBinder binder =
@@ -270,7 +271,7 @@ replaceOnErl e = do
     EFunFull mFunName binders -> EFunFull (fmap goDef mFunName) <$> mapM (\(b,rhs) -> (,) <$> replaceBinder b <*> pure rhs) binders
 
     EVar v -> pure $ goVarExpr v
-    ELet (EBind (EVar v) (EVar v2)) body -> replaceOnErl $ body
+    ELet (EBind (EVar v) (EVar v2)) body -> replaceOnErl body
     ELet (EBind (EVar v) rhs) body ->
       replaceOnErl $ case Map.lookup v db of
         Nothing -> EVar "missing_horse" -- ELet (EVar "let0Nothing-") (EVar v) -- $ error (show ("InlineLocal.replace", ("v", v), ("e", e), ("db", db)))
@@ -279,4 +280,4 @@ replaceOnErl e = do
         Just GoSkip -> body
         Just (GoInline _) -> body
 
-    other -> pure $ other
+    other -> pure other

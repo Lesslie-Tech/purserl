@@ -43,7 +43,8 @@ import Language.PureScript.Names
       runModuleName,
       showIdent,
       showQualified,
-      ProperName(runProperName) )
+      ProperName(runProperName),
+      showOp )
 import Language.PureScript.Pretty
     ( prettyPrintLabel,
       typeAsBox,
@@ -73,7 +74,6 @@ import           Witherable (wither)
 
 -- import           Language.PureScript.Errors (prettyPrintRef)
 import Language.PureScript.AST.Declarations (NameSource(..))
-import Language.PureScript.Names (showOp)
 
 prettyPrintRef :: DeclarationRef -> Maybe Text
 prettyPrintRef (TypeRef _ pn Nothing) =
@@ -326,7 +326,7 @@ prettyPrintSingleError (PPEOptions codeColor full _level _showDocs relPath fileC
     renderSimpleErrorMessage (MissingFFIImplementations mn idents) =
       paras [ line $ "The following values are not defined in the foreign module for module " <> markCode (runModuleName mn) <> ": "
             , indent . paras $ map (line . runIdent) idents
-            , line $ "Hint: Are you sure the file has valid Erlang syntax? Did you use -compile(export_all), which isn't supported yet? Did you write -exports instead of -export?"
+            , line "Hint: Are you sure the file has valid Erlang syntax? Did you use -compile(export_all), which isn't supported yet? Did you write -exports instead of -export?"
             ]
     renderSimpleErrorMessage (UnusedFFIImplementations mn idents) =
       paras [ line $ "The following definitions in the foreign module for module " <> markCode (runModuleName mn) <> " are unused: "

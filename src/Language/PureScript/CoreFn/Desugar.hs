@@ -82,7 +82,7 @@ moduleToCoreFn env (A.Module modSS coms mn decls (Just exps)) =
   declToCoreFn (A.ValueDecl (A.SourceAnn ss com) name _ _ [A.MkUnguarded e]) =
     [NonRec (ssA ss) name (exprToCoreFn ss com Nothing e)]
   declToCoreFn (A.BindingGroupDeclaration ds) =
-    [Rec . NEL.toList $ fmap (\(((A.SourceAnn ss com), name), _, e) -> ((ssA ss, name), exprToCoreFn ss com Nothing e)) ds]
+    [Rec . NEL.toList $ fmap (\((A.SourceAnn ss com, name), _, e) -> ((ssA ss, name), exprToCoreFn ss com Nothing e)) ds]
   declToCoreFn _ = []
 
   -- Desugars expressions from AST to CoreFn representation.
@@ -153,7 +153,7 @@ moduleToCoreFn env (A.Module modSS coms mn decls (Just exps)) =
     go [A.MkUnguarded e]
       = Right (exprToCoreFn ss [] Nothing e)
     go gs
-      = Left [ (exprToCoreFn ss [] Nothing cond, exprToCoreFn ss [] Nothing e)
+      = Left [ (exprToCoreFn ss [] Nothing cond, exprToCoreFn ss [] Nothing e)
              | A.GuardedExpr g e <- gs
              , let cond = guardToExpr g
              ]

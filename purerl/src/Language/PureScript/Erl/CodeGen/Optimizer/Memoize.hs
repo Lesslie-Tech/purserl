@@ -58,15 +58,15 @@ memoizeAnnotation emem =
           extVarsAsAtoms = Prelude.map litAtom externalVariables
           extVarsAsErl = Prelude.map EVar externalVariables
           -- key = T.replace "\n" "" $ T.replace " " "" $ prettyPrintErl id [emem]
-          ememAstHash = (abs (hash (prettyPrintErl id [emem])))
+          ememAstHash = abs (hash (prettyPrintErl id [emem]))
           key = T.pack (show ememAstHash)
-          keyAtom = litAtom (key)
+          keyAtom = litAtom key
           -- uniqueVar = uniqueVarPrefix <> key
           -- NOTE[drathier]: ?MODULE is needed in key because common names like `append` can be duplicated in many modules, sometimes with different meaning, even if the local ast is identical. It causes some keys to be duplicated, but that's the trade-off for now.
           -- keyTuple = ETupleLiteral ([litAtom "PsMemoKey", keyAtom, EVar "?MODULE"] <> extVarsAsErl)
-          keyTuple = ETupleLiteral ([litAtom "PsMemoKey", EVar "?LINE", EVar "?MODULE"])
+          keyTuple = ETupleLiteral [litAtom "PsMemoKey", EVar "?LINE", EVar "?MODULE"]
       in
-        (qualFunCall "Elixir.Zen.TermCache" "cache" [keyTuple, EFun0 Nothing emem])
+        qualFunCall "Elixir.Zen.TermCache" "cache" [keyTuple, EFun0 Nothing emem]
 --        ETryAnyAny
 --          -- (qualFunCall "persistent_term" "get" [keyTuple])
 --          (qualFunCall "Elixir.Zen.TermCache" "get" [keyTuple])

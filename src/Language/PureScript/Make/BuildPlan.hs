@@ -232,7 +232,7 @@ serialiseDbEq (ExternsFile efVersion1 efModuleName1 efExports1 efImports1 efFixi
     Nothing -> []
     Just (ExternsFile efVersion2 efModuleName2 efExports2 efImports2 efFixities2 efTypeFixities2 efDeclarations2 efSourceSpan2 efUpstreamCacheShapes2 efOurCacheShapes2) ->
       filter
-      (\(x, y) -> y == False)
+      (\(x, y) -> not y)
       [ ("efVersion", serialise efVersion1 == serialise efVersion2)
       , ("efModuleName", serialise efModuleName1 == serialise efModuleName2)
       , ("efExports", serialise efExports1 == serialise efExports2)
@@ -335,7 +335,7 @@ data CacheShapeDiffResult
 needsRebuildEvenAfterDiffingCacheShapes Nothing upstream = PleaseRebuild []
 needsRebuildEvenAfterDiffingCacheShapes (Just oldExts) upstream =
   let ourCachedUpstreamCacheShapes = efUpstreamCacheShapes oldExts in
-  let relevantUpstreamModules = M.intersectionWith (\_ s -> efOurCacheShapes s) ourCachedUpstreamCacheShapes $ upstream in
+  let relevantUpstreamModules = M.intersectionWith (\_ s -> efOurCacheShapes s) ourCachedUpstreamCacheShapes upstream in
   let moduleName = efModuleName oldExts in
 
   -- TODO[drathier]: only diff exports list if it's an unsafe import
@@ -345,8 +345,7 @@ needsRebuildEvenAfterDiffingCacheShapes (Just oldExts) upstream =
           (M.mapMissing (\k b -> [(k,b)]))
           (M.zipWithMatched (\k a b ->
             let x = dbOpaqueDiffDiffIgnoringExportsListChanges a b in
-            if x == mempty
-            then [] else [(k,x)]
+            ([(k,x) | x /= mempty])
           ))
           ourCachedUpstreamCacheShapes
           relevantUpstreamModules
@@ -382,13 +381,12 @@ getCacheFilesAvailable
   -> ModuleName
   -> CacheFilesAvailable
 getCacheFilesAvailable buildPlan moduleName =
-  case M.lookup moduleName (bpDirtyExterns buildPlan) of
-    Just v -> v
-    Nothing -> SourceChanged
+  fromMaybe
+  SourceChanged (M.lookup moduleName (bpDirtyExterns buildPlan))
 
 getExternFromLastSuccessfulPreviousBuild :: Monad m => MakeActions m -> BuildPlan -> ModuleName -> m (Maybe ExternsFile)
 getExternFromLastSuccessfulPreviousBuild MakeActions{..} _buildPlan moduleName = do
-  fmap snd $ readExterns moduleName
+  snd <$> readExterns moduleName
 
 -- | Cheaply checks (timestamp/hash only, no externs reads) whether a
 -- module's own source files are up to date according to the cache db.

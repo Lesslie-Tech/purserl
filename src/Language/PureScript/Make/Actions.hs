@@ -23,7 +23,7 @@ import Control.Monad.Writer.Class (MonadWriter(..))
 import Data.Foldable (for_)
 import Data.List.NonEmpty qualified as NEL
 import Data.Map qualified as M
-import Data.Maybe (fromMaybe, maybeToList)
+import Data.Maybe ( fromMaybe, maybeToList, catMaybes )
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -44,7 +44,8 @@ import System.Directory (getCurrentDirectory)
 import System.FilePath ((</>))
 import System.IO (stderr)
 -- purerl
-import Language.PureScript.Erl.CodeGen (buildCodegenEnvironment)
+import Language.PureScript.Erl.CodeGen
+    ( buildCodegenEnvironment, moduleToErl, CodegenEnvironment )
 import Language.PureScript.AST as P
 import Language.PureScript.Comments as P
 import Language.PureScript.Crash as P
@@ -63,14 +64,11 @@ import Language.PureScript.TypeChecker as P
 import Language.PureScript.Types as P
 import Language.PureScript.Erl as Purserl
 
-import Data.Maybe (catMaybes)
-
 import qualified Build as Erl.Build
 
 import Data.Either (fromRight)
 import           Language.PureScript.Erl.Parser (parseFile)
 import           Data.List ((\\))
-import           Language.PureScript.Erl.CodeGen (moduleToErl, CodegenEnvironment)
 import           Language.PureScript.Erl.CodeGen.Optimizer (optimize)
 import           Language.PureScript.Erl.Pretty (prettyPrintErl)
 import           Language.PureScript.Erl.CodeGen.Common (erlModuleName, erlModuleNameBase, atomModuleName, atom, ModuleType(..), runAtom)
@@ -485,7 +483,7 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
                   tell $ errorMessage $ UnnecessaryFFIModule mn path
               | otherwise -> pure ()
             Nothing -> do
-              when (requiresForeign m) $ liftIO $ putStrLn (show ("PossiblyMissingFFIModule", "required", requiresForeign m, "mn", mn, "foreignFile", foreignFile, "modules", M.keys erlForeigns))
+              when (requiresForeign m) $ liftIO $ print ("PossiblyMissingFFIModule", "required", requiresForeign m, "mn", mn, "foreignFile", foreignFile, "modules", M.keys erlForeigns)
               when (requiresForeign m) $ throwError . errorMessage $ MissingFFIModule mn
           for_ (mn `M.lookup` erlForeigns) $ \path ->
             copyFile path foreignFile

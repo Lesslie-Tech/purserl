@@ -20,7 +20,7 @@ import Language.PureScript.Make (buildMakeActions, inferForeignModules, runMake)
 import Options.Applicative qualified as Opts
 import SharedCLI qualified
 import System.Console.ANSI qualified as ANSI
-import System.Exit (exitSuccess, exitFailure)
+import System.Exit ( exitSuccess, exitFailure, ExitCode(..) )
 import System.Directory (getCurrentDirectory)
 import System.FilePath.Glob (glob)
 import System.IO (hPutStr, hPutStrLn, stderr, stdout)
@@ -29,13 +29,12 @@ import System.IO.UTF8 (readUTF8FilesT)
 import Data.IORef
 import Control.Concurrent (threadDelay)
 import Control.Exception (catch)
-import System.Exit (ExitCode(..))
 import           System.Environment (lookupEnv)
 import qualified Data.HashMap.Strict as MS
 
-import qualified System.Environment as System.Environment
+import qualified System.Environment
 
-import qualified Data.Maybe as Data.Maybe
+import qualified Data.Maybe
 import System.IO.Unsafe (unsafePerformIO)
 
 data PSCMakeOptions = PSCMakeOptions
@@ -94,12 +93,10 @@ compile opts@PSCMakeOptions{..} = do
       _ -> True
   let
       run = do
-        if shouldRunAgain then do
+        when shouldRunAgain $ do
           putStrLn "### read externs"
           _ <- getLine
           putStrLn "### launching compiler"
-          else
-            pure ()
         res <-
           compileImpl opts externsMemCache
             `catch`

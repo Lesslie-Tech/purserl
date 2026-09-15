@@ -27,7 +27,7 @@ import Prelude
 import Codec.Serialise (Serialise)
 import Codec.Serialise qualified as Serialise
 import Control.Exception (fromException, tryJust, Exception (displayException))
-import Control.Monad (join, guard)
+import Control.Monad (join, guard, when)
 import Control.Monad.Base (MonadBase(..))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.IO.Class (MonadIO(..))
@@ -99,7 +99,7 @@ getTimestampMaybe path =
 -- the file does not exist.
 touchTimestampMaybe :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> m (Maybe ())
 touchTimestampMaybe path =
-  makeIO ("get a timestamp for file: " <> Text.pack path) $ catchDoesNotExist $ (getCurrentTime >>= setModificationTime path)
+  makeIO ("get a timestamp for file: " <> Text.pack path) $ catchDoesNotExist (getCurrentTime >>= setModificationTime path)
 
 -- | Read a text file strictly in the 'Make' monad, capturing any errors using
 -- the 'MonadError' instance.
@@ -252,13 +252,11 @@ writeTextFile path text = makeIO ("write file: " <> Text.pack path) $ do
   -- always write the file, so timestamps are updated for next rebuild
   B.writeFile path text
   -- fully write the file before printing to stdout
-  if shouldRunAgain then
-    case currentText of
-      Just currentText | currentText == text ->
-        liftIO (putStrLn ("### erl-same:" <> path))
-      _ ->
-        liftIO (putStrLn ("### erl-diff:" <> path))
-    else pure ()
+  when shouldRunAgain $ case currentText of
+    Just currentText | currentText == text ->
+      liftIO (putStrLn ("### erl-same:" <> path))
+    _ ->
+      liftIO (putStrLn ("### erl-diff:" <> path))
 
 -- | Write a JSON file in the 'Make' monad, capturing any errors using the
 -- 'MonadError' instance.

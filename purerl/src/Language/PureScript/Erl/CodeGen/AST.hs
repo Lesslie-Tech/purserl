@@ -98,7 +98,7 @@ data Erl
   | EMapUpdate Erl [(Atom,Erl)]
 
   | EListLiteral [Erl]
-  
+
   | EListCons [Erl] Erl
 
   | ECaseOf Erl [(EBinder, Erl)]
@@ -117,7 +117,7 @@ data Erl
   deriving (Show, Eq)
 
 -- | [drathier]: I think this is annotating if a particular App is applying something compiler-generated like a type class dict (SyntheticApp), or is just a normal function call (RegularApp).
-data AppAnnotation 
+data AppAnnotation
   = RegularApp
   | SyntheticApp
   deriving (Show, Eq)
@@ -329,7 +329,7 @@ data BinaryOperator
   -- Bitwise right shift
   --
   | ShiftRight
-  
+
   -- |
   -- List concatenation (++)
   --
@@ -352,7 +352,7 @@ data BinaryOperator
 -- Simplified Erlang types
 data EType
   = TAny
-  
+
   | TNone
   | TPid
   | TPort
@@ -367,7 +367,7 @@ data EType
   | TInteger -- no ranges
   | TList EType -- no improper lists
   -- maps
-  | TMap (Maybe [(EType, EType)]) 
+  | TMap (Maybe [(EType, EType)])
   | TTuple [EType]
   | TUnion [EType]
   | TRemote Text Text [EType]
@@ -645,7 +645,7 @@ everywhereOnErlTopDownLeftToRightWithoutEBindPatM f expr =
             e' <- go e
             pure (EFunctionDef t ssann a ss e')
           EBind x e -> do
-            x' <- pure x
+            let x' = x
             e' <- go e
             pure (EBind x' e')
           EFunFull fname args -> do
@@ -768,7 +768,7 @@ everywhereOnErlTopDownMThen f = f'
   go (ELet a b) = ELet <$> f' a <*> f' b
   go (ERawErlangSource fmt binds) = ERawErlangSource fmt <$> fargs binds
   go other = fst <$> f other
-  
+
 everything :: forall r. (r -> r -> r) -> (Erl -> r) -> Erl -> r
 everything (<>.) f = go
   where

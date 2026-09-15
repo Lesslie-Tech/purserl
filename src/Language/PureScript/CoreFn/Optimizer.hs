@@ -6,19 +6,21 @@ import Prelude (error)
 import Control.Monad.Supply (Supply)
 import Language.PureScript.CoreFn.Ann (Ann)
 import Language.PureScript.CoreFn.CSE (optimizeCommonSubexpressions)
-import Language.PureScript.CoreFn.Expr (Bind(..), Expr(..), CaseAlternative(..), bindIdents)
+import Language.PureScript.CoreFn.Expr
+    ( Bind(..),
+      Expr(..),
+      CaseAlternative(..),
+      bindIdents )
 import Language.PureScript.CoreFn.Module (Module(..))
 import Language.PureScript.CoreFn.Traversals (everywhereOnValues, traverseCoreFn, traverseCoreFnFull)
 import Language.PureScript.Constants.Libs qualified as C
-import Debug.Trace qualified as Debug
 import System.IO.Unsafe
-import Language.PureScript.Names (Ident(..), runIdent, ModuleName(..), QualifiedBy(..), runModuleName)
+import Language.PureScript.Names (Ident(..), runIdent, ModuleName(..), QualifiedBy(..), runModuleName, ProperName, ProperNameType(..), Qualified(..))
 import Control.DeepSeq (force)
 import Control.Monad.Trans.RWS.Strict (evalRWST, asks, local, RWST)
 import Control.Monad.State.Strict
 import Data.Text (Text, append, pack)
 import Debug.Trace (traceM)
-import Data.Text (Text)
 import qualified Data.Map.Strict as Map
 import Data.Map (Map)
 import Language.PureScript.CoreFn.Binders (Binder(..))
@@ -26,9 +28,6 @@ import Data.Text qualified as T
 import Debug.Trace qualified as Debug
 
 import Language.PureScript.AST.Literals (Literal(..))
-import Language.PureScript.CoreFn.Binders (Binder(..))
-import Language.PureScript.CoreFn.Expr (Bind(..), CaseAlternative(..), Expr(..))
-import Language.PureScript.Names (Ident, ProperName, ProperNameType(..), Qualified(..))
 
 import Language.PureScript.AST.SourcePos qualified as P
 import Language.PureScript.PSString qualified as PS
@@ -103,13 +102,12 @@ optimizeModuleDecls modu foreignIdents binds =
        renameIdentsAndVars modu
         ( -- Debug.trace (show ("renameIdentsAndVars-pre", modu)) $
           Map.fromList $
-            map (\v -> (v,())) $
+            map (,())
             (concatMap bindIdents binds <>
             foreignIdents
             )
         )
-      ) $
-      binds
+      ) binds
 
   where
   -- (handleBind, handleExprDefault, handleBinder, _) = traverseCoreFn handleBind handleExpr handleBinder handleCaseAlternative
@@ -214,14 +212,10 @@ type RenameState = (Int, Map Ident Ident, Map Ident (), Text, Bool)
 lookupIdent :: Ident -> State RenameState Ident
 lookupIdent ident = do
   (_, env, _, prefix, isCtor) <- get
-  pure $ case (if isCtor then Just (Ident (prefix <> runIdent ident)) else Nothing) <|> Map.lookup ident env of
-    Just v ->
-      -- Debug.trace (show ("CoreFn.Optimizer.lookupIdent Map.lookup Just", ident, v, env)) $
-      v
-    Nothing ->
-      -- TODO[drathier]: we'll likely have to either stop returning idents here and only rely on recursion schemes to translate idents after registering them here, or add identity mappings for already translated idents
-      -- Debug.trace (show ("CoreFn.Optimizer.lookupIdent Map.lookup Nothing", prefix, ident, env)) $
-      ident
+  -- Debug.trace (show ("CoreFn.Optimizer.lookupIdent Map.lookup Just", ident, env)) $
+  -- TODO[drathier]: we'll likely have to either stop returning idents here and only rely on recursion schemes to translate idents after registering them here, or add identity mappings for already translated idents
+  -- Debug.trace (show ("CoreFn.Optimizer.lookupIdent Map.lookup Nothing", prefix, ident, env)) $
+  pure $ fromMaybe ident ((if isCtor then Just (Ident (prefix <> runIdent ident)) else Nothing) <|> Map.lookup ident env)
   -- pure ident
 
 -- Extend the environment with a new mapping for a bound variable. Returns the input Ident for convenience in <$> <*> chains. The name will be replaced when the inner ident is processed.
@@ -297,7 +291,7 @@ renameIdentsAndVars modu topLevelFunctions bind =
             extendEnv ident
             pure b
           Rec bindings -> do
-            traverse (extendEnv . snd . fst) bindings
+            traverse_ (extendEnv . snd . fst) bindings
             pure b
 
     onBinder :: Binder a -> State RenameState (Binder a)
@@ -324,7 +318,7 @@ renameIdentsAndVars modu topLevelFunctions bind =
     goBind :: Bind a -> State RenameState (Bind a)
     goBind b =
       onBind b >>=
-      \b -> case b of
+      \case
         NonRec ann ident expr -> do
           NonRec <$> pure ann <*> goIdent ident <*> extendPrefix ident (goExpr expr)
         Rec bindings -> do
@@ -336,11 +330,11 @@ renameIdentsAndVars modu topLevelFunctions bind =
     goExpr :: Expr a -> State RenameState (Expr a)
     goExpr expr =
       onExpr expr >>=
-      \expr -> case expr of
+      \case
         Literal ann lit ->
           Literal <$> pure ann <*> goLitExpr lit
         Constructor ann typeName ctorName fields -> do
-          (s@(a,b,c,d,isCtor)) <- get
+          s@(a,b,c,d,isCtor) <- get
           put (a,b,c,d,True)
           res <- Constructor <$> pure ann <*> pure typeName <*> pure ctorName <*> traverse goIdent fields
           put (a,b,c,d,isCtor)
@@ -373,7 +367,7 @@ renameIdentsAndVars modu topLevelFunctions bind =
     goBinder :: Binder a -> State RenameState (Binder a)
     goBinder b =
       onBinder b >>=
-      \b -> case b of
+      \case
         NullBinder ann ->
           pure $ NullBinder ann
         LiteralBinder ann lit ->
@@ -389,17 +383,15 @@ renameIdentsAndVars modu topLevelFunctions bind =
     goCaseAlt c =
       isolated $
       onCaseAlt c >>=
-      \c -> case c of
-        CaseAlternative binders result ->
-          CaseAlternative <$> traverse goBinder binders <*> goResult result
-            where
-              goResult (Left guards) = Left <$> traverse (\(guard, expr) -> (,) <$> goExpr guard <*> goExpr expr) guards
-              goResult (Right expr) = Right <$> goExpr expr
+      \(CaseAlternative binders result) -> CaseAlternative <$> traverse goBinder binders <*> goResult result
+      where
+        goResult (Left guards) = Left <$> traverse (\(guard, expr) -> (,) <$> goExpr guard <*> goExpr expr) guards
+        goResult (Right expr) = Right <$> goExpr expr
 
     goLitExpr :: Literal (Expr a) -> State RenameState (Literal (Expr a))
     goLitExpr le =
       onLitExpr le >>=
-      \le -> case le of
+      \case
         NumericLiteral n ->
           pure $ NumericLiteral n
         StringLiteral s ->
@@ -416,7 +408,7 @@ renameIdentsAndVars modu topLevelFunctions bind =
     goLitBinder :: Literal (Binder a) -> State RenameState (Literal (Binder a))
     goLitBinder lb =
       onLitBinder lb >>=
-      \lb -> case lb of
+      \case
         NumericLiteral n ->
           pure $ NumericLiteral n
         StringLiteral s ->
@@ -439,7 +431,7 @@ renameIdentsAndVars modu topLevelFunctions bind =
   force $ evalState (goBind bind)--(Debug.trace (show ("renameIdentsAndVars-startbind", modu, bind)) $ bind))
     ( 0
     , Map.empty
-    , topLevelFunctions <> Map.fromList (map (\v -> (v,())) (bindIdents bind)) <> unusedVar
+    , topLevelFunctions <> Map.fromList (map (,()) (bindIdents bind)) <> unusedVar
     , runModuleName modu <> "_"
     , False
     )

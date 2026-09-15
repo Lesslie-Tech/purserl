@@ -342,10 +342,10 @@ typeCheckAll moduleName = traverse go
   go BoundValueDeclaration{} = internalError "BoundValueDeclaration should be desugared"
   go (BindingGroupDeclaration vals) = do
     env <- getEnv
-    let sss = fmap (\(((SourceAnn ss _), _), _, _) -> ss) vals
+    let sss = fmap (\((SourceAnn ss _, _), _, _) -> ss) vals
     warnAndRethrow (addHint (ErrorInBindingGroup (fmap (\((_, ident), _, _) -> ident) vals)) . addHint (PositionedError sss)) $ do
       for_ vals $ \((_, ident), _, _) -> valueIsNotDefined moduleName ident
-      vals' <- NEL.toList <$> traverse (\(sai@((SourceAnn ss _), _), nk, expr) -> (sai, nk,) <$> checkExhaustiveExpr ss env moduleName expr) vals
+      vals' <- NEL.toList <$> traverse (\(sai@(SourceAnn ss _, _), nk, expr) -> (sai, nk,) <$> checkExhaustiveExpr ss env moduleName expr) vals
       tys <- typesOf RecursiveBindingGroup moduleName $ fmap (\(sai, _, ty) -> (sai, ty)) vals'
       vals'' <- forM [ (sai, val, nameKind, ty)
                      | (sai@(_, name), nameKind, _) <- vals'

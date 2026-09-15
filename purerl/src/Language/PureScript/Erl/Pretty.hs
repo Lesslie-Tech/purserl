@@ -1,5 +1,5 @@
 module Language.PureScript.Erl.Pretty (
-  prettyPrintErl  
+  prettyPrintErl
 ) where
 
 import Prelude ()
@@ -21,6 +21,7 @@ import Data.Text (Text)
 import Data.Word (Word16)
 import qualified Data.Text as T
 import Data.Maybe (fromMaybe)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 
 import Language.PureScript.Pretty.Common (Emit, emit, intercalate, parensPos, runPlainString)
 
@@ -44,7 +45,7 @@ currentIndent :: (Emit gen) => StateT PrinterState Maybe gen
 currentIndent = do
   current <- get
   return $ emit $ T.replicate (indent current) " "
-  
+
 currentIndent' :: (Emit gen) => Int -> StateT PrinterState Maybe gen
 currentIndent' d = do
   current <- get
@@ -66,7 +67,7 @@ literals = mkPattern' match
 
   match (EBind x e) = mconcat <$> sequence
     [ prettyPrintErl' x
-    , return $ emit $ " = "
+    , return $ emit " = "
     , prettyPrintErl' e
     ]
 
@@ -74,7 +75,7 @@ literals = mkPattern' match
     (case ss of
       (Just SourceSpan { spanName = spanName, spanStart = spanStart }) ->
         [ do
-            tf <- transformFilename <$> get
+            tf <- gets transformFilename
             return $ emit $ "%-file(\"" <> T.pack (tf (T.unpack spanName)) <> "\", " <> T.pack (show $ sourcePosLine spanStart) <> ").\n"
         ]
       _ -> [])
@@ -174,9 +175,9 @@ literals = mkPattern' match
       & mapM (\p ->
         let
           needle = T.takeWhile (\c ->
-            ('a' <= c && c <= 'z')
-            || ('A' <= c && c <= 'Z')
-            || ('0' <= c && c <= '9')
+            isAsciiLower c
+            || isAsciiUpper c
+            || isDigit c
             || (c == '_')
             ) p
         in case lookup (AtomPS Nothing (PS.fromText needle)) binds of
@@ -296,13 +297,13 @@ literals = mkPattern' match
   match EApp{} = mzero
 
   printFunTy _ name (Just (TFun ts ty)) =
-    emit $ "%-spec " <> runAtom name <> "(" <> (T.intercalate "," $ printTy <$> ts) <> ") -> " <> printTy ty
+    emit $ "%-spec " <> runAtom name <> "(" <> T.intercalate "," (printTy <$> ts) <> ") -> " <> printTy ty
   printFunTy (Just numArgs) name Nothing =
-    emit $ "%-spec " <> runAtom name <> "(" <> (T.intercalate "," $ replicate numArgs "any()") <> ") -> any()"
+    emit $ "%-spec " <> runAtom name <> "(" <> T.intercalate "," (replicate numArgs "any()") <> ") -> any()"
   printFunTy _ _ _ = internalError "Can't print spec for function with unknown arg length"
 
   printTypeDef name args (Just ty) =
-    emit $ "%-type " <> runAtom name <> "(" <> (T.intercalate "," args)  <>  ") :: " <> printTy ty
+    emit $ "%-type " <> runAtom name <> "(" <> T.intercalate "," args  <>  ") :: " <> printTy ty
   printTypeDef _ _ _ = internalError "Empty typedef"
 
 
@@ -314,19 +315,19 @@ literals = mkPattern' match
   printTy TNil = "[]"
   printTy TInteger = "integer()"
   printTy (TVar var) = var
-  
-  printTy (TFun ts tf) = "fun((" <> (T.intercalate "," $ printTy <$> ts) <> ") -> " <> printTy tf <> ")"
+
+  printTy (TFun ts tf) = "fun((" <> T.intercalate "," (printTy <$> ts) <> ") -> " <> printTy tf <> ")"
   -- printTy TFunAny
   printTy TFloat = "float()"
-  printTy (TAlias alias ts) = runAtom alias <> "(" <>  (T.intercalate "," $ printTy <$> ts) <> ")"
+  printTy (TAlias alias ts) = runAtom alias <> "(" <>  T.intercalate "," (printTy <$> ts) <> ")"
   printTy (TAtom Nothing) = "atom()"
   printTy (TAtom (Just a)) = runAtom a
   printTy (TList ts) = "list(" <> printTy ts <> ")"
   printTy (TMap Nothing) = "map()"
-  printTy (TMap (Just ts)) = "#{"<> (T.intercalate "," $ (\(t1, t2) -> printTy t1 <> " => " <> printTy t2) <$> ts ) <> "}"
+  printTy (TMap (Just ts)) = "#{"<> T.intercalate "," ((\(t1, t2) -> printTy t1 <> " => " <> printTy t2) <$> ts) <> "}"
   printTy (TTuple ts) = "{" <>  T.intercalate "," (printTy <$> ts) <> "}"
   printTy (TUnion ts) = T.intercalate " | " $ printTy <$> ts
-  
+
   printTy (TRemote tymod tyname  tys) = tymod <> ":" <> tyname <> "(" <> T.intercalate "," (printTy <$> tys) <> ")"
 
 escapeQuotedVar x =

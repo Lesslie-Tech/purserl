@@ -648,9 +648,7 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
   prettyPrintErrorMessage :: TypeMap -> ErrorMessage -> Box.Box
   prettyPrintErrorMessage typeMap (ErrorMessage hints simple) =
     paras $
-      [ foldr renderHint (indent (renderSimpleErrorMessage simple)) hints
-      ] ++
-      maybe [] (return . Box.moveDown 1) typeInformation
+      foldr renderHint (indent (renderSimpleErrorMessage simple)) hints : maybe [] (return . Box.moveDown 1) typeInformation
     where
     typeInformation :: Maybe Box.Box
     typeInformation | not (null types) = Just $ Box.hsep 1 Box.left [ line "where", paras types ]
@@ -1413,7 +1411,7 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
 
     renderSimpleErrorMessage (PurerlError err) =
       paras
-        [  line $ "Purerl error:"
+        [  line "Purerl error:"
         , line $ T.pack $ show err
         ]
 

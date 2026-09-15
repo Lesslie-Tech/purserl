@@ -74,8 +74,8 @@ import qualified Language.PureScript.Environment as P
 import qualified Language.PureScript.Errors as P
 import qualified Language.PureScript.Options as P
 --
-import qualified System.Environment as System.Environment
-import qualified Data.Maybe as Data.Maybe
+import qualified System.Environment
+import qualified Data.Maybe
 --
 
 data BuildOptions = BuildOptions
@@ -232,7 +232,7 @@ compile' BuildOptions {..} = do
           hPutStrLn stderr "Exiting due to corefn error"
           exitFailure
 
-        pure $ catMaybes $ hush <$> res
+        pure $ mapMaybe hush res
 
     let newCache :: CacheDb = M.fromList $ map (\(ModResult {moduleName, modulePath}, (ci, _)) -> (moduleName, CacheInfo (Cache.normaliseForCache cwd modulePath) ci)) buildInfo
     MM.writeJSONFile cacheDbFile newCache

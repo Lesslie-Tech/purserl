@@ -150,10 +150,10 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
 
         -- drathier added, functions rather than dicts
         EApp _ fn [a]
-          | isFnName (EC.effect, snd $ C.P_effectPureE) fn -> EFun0 Nothing a
+          | isFnName (EC.effect, snd C.P_effectPureE) fn -> EFun0 Nothing a
 
         EApp _ fn [a, f]
-          | isFnName (EC.effect, snd $ C.P_effectBindE) fn ->
+          | isFnName (EC.effect, snd C.P_effectBindE) fn ->
             EFun0 Nothing
               (EApp RegularApp
                 (EApp RegularApp f
@@ -243,10 +243,10 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         (_, _, _) -> noop
 
 
-    fnZero = (EC.dataSemiring, snd $ C.P_zero)
-    fnOne = (EC.dataSemiring, snd $ C.P_one)
-    fnBottom = (EC.dataBounded, snd $ C.P_bottom)
-    fnTop = (EC.dataBounded, snd $ C.P_top)
+    fnZero = (EC.dataSemiring, snd C.P_zero)
+    fnOne = (EC.dataSemiring, snd C.P_one)
+    fnBottom = (EC.dataBounded, snd C.P_bottom)
+    fnTop = (EC.dataBounded, snd C.P_top)
 
 inlineCommonValuesTopDown :: (Erl -> Erl) -> Erl -> Erl
 inlineCommonValuesTopDown expander = everywhereOnErlTopDown convert
@@ -424,10 +424,10 @@ specialize = everywhereOnErl onErl
 
         other -> other
 
-    fnZero = (EC.dataSemiring, snd $ C.P_zero)
-    fnOne = (EC.dataSemiring, snd $ C.P_one)
-    fnBottom = (EC.dataBounded, snd $ C.P_bottom)
-    fnTop = (EC.dataBounded, snd $ C.P_top)
+    fnZero = (EC.dataSemiring, snd C.P_zero)
+    fnOne = (EC.dataSemiring, snd C.P_one)
+    fnBottom = (EC.dataBounded, snd C.P_bottom)
+    fnTop = (EC.dataBounded, snd C.P_top)
 
 isInst inst prefix = T.isPrefixOf prefix inst
 
@@ -474,8 +474,7 @@ allFieldsAreMapGetSame mrhs fields =
 
 varsInExpr e =
   everything (<>)
-    (\erl ->
-      case erl of
+    (\case
         EVar var -> [var]
         _ -> []
     ) e
@@ -485,7 +484,7 @@ isAnyMentioned :: [Text] -> [Text] -> Bool
 isAnyMentioned needles hay =
   case needles of
     (n:ns) ->
-      case elem n hay of
+      case n `elem` hay of
         True -> True
         False -> isAnyMentioned ns hay
     [] -> False
@@ -639,7 +638,7 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
       where
         go eApp@EApp {} = case eApp of
           (collect 2 . expander -> EApp meta fn [dict1, dict2])
-            | isDict (EC.controlBind, EC.discardUnit) dict1 && isFn (EC.controlBind, snd $ C.P_discard) fn ->
+            | isDict (EC.controlBind, EC.discardUnit) dict1 && isFn (EC.controlBind, snd C.P_discard) fn ->
               EApp meta controlBindBind [dict2]
           _ -> eApp
         go other = other
@@ -791,61 +790,61 @@ unaryOperators =
           ]
 
 semiringNumber :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-semiringNumber = (EC.dataSemiring, snd $ C.P_semiringNumber)
+semiringNumber = (EC.dataSemiring, snd C.P_semiringNumber)
 
 semiringInt :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-semiringInt = (EC.dataSemiring, snd $ C.P_semiringInt)
+semiringInt = (EC.dataSemiring, snd C.P_semiringInt)
 
 ringNumber :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-ringNumber = (EC.dataRing, snd $ C.P_ringNumber)
+ringNumber = (EC.dataRing, snd C.P_ringNumber)
 
 ringInt :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-ringInt = (EC.dataRing, snd $ C.P_ringInt)
+ringInt = (EC.dataRing, snd C.P_ringInt)
 
 euclideanRingNumber :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-euclideanRingNumber = (EC.dataEuclideanRing, snd $ C.P_euclideanRingNumber)
+euclideanRingNumber = (EC.dataEuclideanRing, snd C.P_euclideanRingNumber)
 
 euclideanRingInt :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 euclideanRingInt = (EC.dataEuclideanRing, EC.euclideanRingInt)
 
 eqNumber :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-eqNumber = (EC.dataEq, snd $ C.P_eqNumber)
+eqNumber = (EC.dataEq, snd C.P_eqNumber)
 
 eqInt :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-eqInt = (EC.dataEq, snd $ C.P_eqInt)
+eqInt = (EC.dataEq, snd C.P_eqInt)
 
 eqString :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-eqString = (EC.dataEq, snd $ C.P_eqString)
+eqString = (EC.dataEq, snd C.P_eqString)
 
 eqChar :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-eqChar = (EC.dataEq, snd $ C.P_eqChar)
+eqChar = (EC.dataEq, snd C.P_eqChar)
 
 eqBoolean :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-eqBoolean = (EC.dataEq, snd $ C.P_eqBoolean)
+eqBoolean = (EC.dataEq, snd C.P_eqBoolean)
 
 ordBoolean :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-ordBoolean = (EC.dataOrd, snd $ C.P_ordBoolean)
+ordBoolean = (EC.dataOrd, snd C.P_ordBoolean)
 
 ordNumber :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-ordNumber = (EC.dataOrd, snd $ C.P_ordNumber)
+ordNumber = (EC.dataOrd, snd C.P_ordNumber)
 
 ordInt :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-ordInt = (EC.dataOrd, snd $ C.P_ordInt)
+ordInt = (EC.dataOrd, snd C.P_ordInt)
 
 ordString :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-ordString = (EC.dataOrd, snd $ C.P_ordString)
+ordString = (EC.dataOrd, snd C.P_ordString)
 
 ordChar :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-ordChar = (EC.dataOrd, snd $ C.P_ordChar)
+ordChar = (EC.dataOrd, snd C.P_ordChar)
 
 -- semigroupString :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 -- semigroupString = (EC.dataSemigroup, snd $ C.P_semigroupString)
 
 boundedBoolean :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-boundedBoolean = (EC.dataBounded, snd $ C.P_boundedBoolean)
+boundedBoolean = (EC.dataBounded, snd C.P_boundedBoolean)
 
 heytingAlgebraBoolean :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-heytingAlgebraBoolean = (EC.dataHeytingAlgebra, snd $ C.P_heytingAlgebraBoolean)
+heytingAlgebraBoolean = (EC.dataHeytingAlgebra, snd C.P_heytingAlgebraBoolean)
 
 semigroupList :: forall a b. (IsString a, IsString b) => (a, b)
 semigroupList = (EC.erlDataListTypes, EC.semigroupList)
@@ -854,28 +853,28 @@ semigroupList = (EC.erlDataListTypes, EC.semigroupList)
 -- semigroupoidFn = (EC.controlSemigroupoid, snd $ C.P_semigroupoidFn)
 
 opAdd :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opAdd = (EC.dataSemiring, snd $ C.P_add)
+opAdd = (EC.dataSemiring, snd C.P_add)
 
 opMul :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opMul = (EC.dataSemiring, snd $ C.P_mul)
+opMul = (EC.dataSemiring, snd C.P_mul)
 
 opEq :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opEq = (EC.dataEq, snd $ C.P_eq)
+opEq = (EC.dataEq, snd C.P_eq)
 
 opNotEq :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opNotEq = (EC.dataEq, snd $ C.P_notEq)
+opNotEq = (EC.dataEq, snd C.P_notEq)
 
 opLessThan :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opLessThan = (EC.dataOrd, snd $ C.P_lessThan)
+opLessThan = (EC.dataOrd, snd C.P_lessThan)
 
 opLessThanOrEq :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opLessThanOrEq = (EC.dataOrd, snd $ C.P_lessThanOrEq)
+opLessThanOrEq = (EC.dataOrd, snd C.P_lessThanOrEq)
 
 opGreaterThan :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opGreaterThan = (EC.dataOrd, snd $ C.P_greaterThan)
+opGreaterThan = (EC.dataOrd, snd C.P_greaterThan)
 
 opGreaterThanOrEq :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opGreaterThanOrEq = (EC.dataOrd, snd $ C.P_greaterThanOrEq)
+opGreaterThanOrEq = (EC.dataOrd, snd C.P_greaterThanOrEq)
 
 opMin :: forall a b. (IsString a, IsString b) => (a, b)
 opMin = (EC.dataOrd, EC.min)
@@ -884,25 +883,25 @@ opMax :: forall a b. (IsString a, IsString b) => (a, b)
 opMax = (EC.dataOrd, EC.max)
 
 opAppend :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opAppend = (EC.dataSemigroup, snd $ C.P_append)
+opAppend = (EC.dataSemigroup, snd C.P_append)
 
 opSub :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opSub = (EC.dataRing, snd $ C.P_sub)
+opSub = (EC.dataRing, snd C.P_sub)
 
 opNegate :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opNegate = (EC.dataRing, snd $ C.P_negate)
+opNegate = (EC.dataRing, snd C.P_negate)
 
 opDiv :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opDiv = (EC.dataEuclideanRing, snd $ C.P_div)
+opDiv = (EC.dataEuclideanRing, snd C.P_div)
 
 opConj :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opConj = (EC.dataHeytingAlgebra, snd $ C.P_conj)
+opConj = (EC.dataHeytingAlgebra, snd C.P_conj)
 
 opDisj :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opDisj = (EC.dataHeytingAlgebra, snd $ C.P_disj)
+opDisj = (EC.dataHeytingAlgebra, snd C.P_disj)
 
 opNot :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opNot = (EC.dataHeytingAlgebra, snd $ C.P_not)
+opNot = (EC.dataHeytingAlgebra, snd C.P_not)
 
 functorVoid :: forall a b. (IsString a, IsString b) => (a, b)
 functorVoid = (EC.dataFunctor, EC.void)
