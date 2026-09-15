@@ -2,14 +2,10 @@ module Main where
 
 import Prelude
 
-import Command.Bundle qualified as Bundle
 import Command.Compile qualified as Compile
-import Command.Docs qualified as Docs
 import Command.Graph qualified as Graph
 import Command.Hierarchy qualified as Hierarchy
 import Command.Ide qualified as Ide
-import Command.Publish qualified as Publish
-import Command.REPL qualified as REPL
 import Control.Monad (join)
 import Data.Foldable (fold)
 import qualified Data.Text as Text
@@ -64,15 +60,9 @@ main = do
     commands :: Opts.Parser (IO ())
     commands =
       (Opts.subparser . fold)
-        [ Opts.command "bundle"
-            (Opts.info Bundle.command
-              (Opts.progDesc "This command was removed in v0.15.0. Run this command for migration information."))
-        , Opts.command "compile"
+        [ Opts.command "compile"
             (Opts.info Compile.command
               (Opts.progDesc "Compile PureScript source files"))
-        , Opts.command "docs"
-            (Opts.info Docs.command
-              (Opts.progDesc "Generate documentation from PureScript source files in a variety of formats, including Markdown and HTML" <> Docs.infoModList))
         , Opts.command "graph"
             (Opts.info Graph.command
               (Opts.progDesc "Module dependency graph"))
@@ -82,10 +72,4 @@ main = do
         , Opts.command "ide"
             (Opts.info Ide.command
               (Opts.progDesc "Start or query an IDE server process"))
-        , Opts.command "publish"
-            (Opts.info Publish.command
-              (Opts.progDesc "Generates documentation packages for upload to Pursuit"))
-        , Opts.command "repl"
-            (Opts.info REPL.command
-              (Opts.progDesc "Enter the interactive mode (PSCi)"))
         ]

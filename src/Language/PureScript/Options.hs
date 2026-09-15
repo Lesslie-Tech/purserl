@@ -13,21 +13,17 @@ data Options = Options
   , optionsNoComments :: Bool
   -- ^ Remove the comments from the generated js
   , optionsCodegenTargets :: S.Set CodegenTarget
-  -- ^ Codegen targets (JS, CoreFn, etc.)
+  -- ^ Codegen targets (Erl, etc.)
   } deriving Show
 
 -- Default make options
 defaultOptions :: Options
 defaultOptions = Options False False (S.singleton Erl)
 
-data CodegenTarget = JS | JSSourceMap | CoreFn | Docs | Erl
+data CodegenTarget = Erl
   deriving (Eq, Ord, Show)
 
 codegenTargets :: Map String CodegenTarget
 codegenTargets = Map.fromList
-  [ ("js", JS)
-  , ("sourcemaps", JSSourceMap)
-  , ("corefn", CoreFn)
-  , ("docs", Docs)
-  , ("erl", Erl)
+  [ ("erl", Erl)
   ]

@@ -15,7 +15,7 @@ import System.Directory (doesFileExist, removePathForcibly)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
 defaultTarget :: Set P.CodegenTarget
-defaultTarget = Set.singleton P.JS
+defaultTarget = Set.singleton P.Erl
 
 load :: [Text] -> Command
 load = LoadSync . map Test.mn
@@ -73,10 +73,10 @@ spec = describe "Rebuilding single modules" $ do
           [ RebuildSync ("src" </> "RebuildSpecWithHiddenIdent.purs") (Just "actualFile") defaultTarget
           , Complete [] (flexMatcher "hid") (Just (Test.mn "RebuildSpecWithHiddenIdent")) defaultCompletionOptions]
       map spanName (complLocation result) `shouldBe` Just "actualFile"
-    it "doesn't produce JS when an empty target list is supplied" $ do
+    it "doesn't produce Erlang output when an empty target list is supplied" $ do
       exists <- Test.inProject $ do
-        let indexJs = "output" </> "RebuildSpecSingleModule" </> "index.js"
+        let erlFile = "output" </> "RebuildSpecSingleModule" </> "rebuildSpecSingleModule@ps.erl"
         removePathForcibly ("output" </> "RebuildSpecSingleModule")
         _ <- Test.runIde [ RebuildSync ("src" </> "RebuildSpecSingleModule.purs") Nothing Set.empty ]
-        doesFileExist indexJs
+        doesFileExist erlFile
       exists `shouldBe` False

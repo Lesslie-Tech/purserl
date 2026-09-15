@@ -175,7 +175,7 @@ instance FromJSON Command where
         Rebuild
           <$> params .: "file"
           <*> params .:? "actualFile"
-          <*> (parseCodegenTargets =<< params .:? "codegen" .!= [ "js" ])
+          <*> (parseCodegenTargets =<< params .:? "codegen" .!= [ "erl" ])
       c -> fail ("Unknown command: " <> show c)
     where
       parseCodegenTargets ts =

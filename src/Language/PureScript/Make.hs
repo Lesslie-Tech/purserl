@@ -35,7 +35,6 @@ import Debug.Trace (traceMarkerIO)
 import Language.PureScript.AST (ErrorMessageHint(..), Module(..), SourceSpan(..), getModuleName, getModuleSourceSpan, importPrim)
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.CST qualified as CST
-import Language.PureScript.Docs.Convert qualified as Docs
 import Language.PureScript.Environment (Environment, initEnvironment)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, defaultPPEOptions, errorMessage', errorMessage'', prettyPrintMultipleErrors)
 -- import Language.PureScript.Externs (ExternsFile, applyExternsFileToEnvironment, moduleToExternsFile)
@@ -52,15 +51,12 @@ import Language.PureScript.Make.Cache qualified as Cache
 import Language.PureScript.Make.Actions as Actions
 import Language.PureScript.Make.Monad as Monad
 import Language.PureScript.CoreFn qualified as CF
-import System.Directory (doesFileExist)
-import System.FilePath (replaceExtension)
 import Debug.Trace
 import PrettyPrint
 import Data.Text qualified as T
 import Data.Text.IO qualified as T
 
 -- purserl
-import Control.Applicative ((<|>))
 import qualified Build as Erl.Build
 import           System.Directory (getCurrentDirectory)
 -- import System.IO.Unsafe (unsafePerformIO)
@@ -184,17 +180,11 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
     , mcrNextVar = nextVar''
     }
 
--- | Phase B of rebuilding a single module: docs conversion and the
--- backend-specific `codegen` call (Erlang/JS AST generation, optimization,
--- pretty-printing, file I/O). Takes the `ExternsFile` as an input and does
--- not further modify it -- see the NOTE at its call site about grabbing a
--- copy of the old externs file before running this if you want to diff them.
---
--- Docs conversion is deliberately done here rather than in phase A: it's
--- only ever consumed by `codegen` below, doesn't affect `exts`, and (for a
--- module with a large/complex signature) can itself be expensive -- keeping
--- it out of phase A means it can't delay publishing this module's externs to
--- dependents.
+-- | Phase B of rebuilding a single module: the backend-specific `codegen`
+-- call (Erlang AST generation, optimization, pretty-printing, file I/O).
+-- Takes the `ExternsFile` as an input and does not further modify it -- see
+-- the NOTE at its call site about grabbing a copy of the old externs file
+-- before running this if you want to diff them.
 rebuildModuleCodegen
   :: forall m
    . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
@@ -204,19 +194,7 @@ rebuildModuleCodegen
   -> m ()
 rebuildModuleCodegen MakeActions{..} moduleName ModuleCheckResult{..} = do
   progress $ CompileMeta ("### CS.goCodegen7[" <> runModuleName moduleName <> "]")
-  -- It may seem more obvious to write `docs <- Docs.convertModule m env' here,
-  -- but I have not done so for two reasons:
-  -- 1. This should never fail; any genuine errors in the code should have been
-  -- caught earlier in this function. Therefore if we do fail here it indicates
-  -- a bug in the compiler, which should be reported as such.
-  -- 2. We do not want to perform any extra work generating docs unless the
-  -- user has asked for docs to be generated.
-  let docs = case Docs.convertModule mcrExternsInput mcrExEnv mcrCheckedEnv mcrOriginalModule of
-               Left errs -> internalError $
-                 "Failed to produce docs for " ++ T.unpack (runModuleName moduleName)
-                 ++ "; details:\n" ++ prettyPrintMultipleErrors defaultPPEOptions errs
-               Right d -> d
-  evalSupplyT mcrNextVar $ codegen mcrUpstreamEnv mcrRenamed docs mcrExterns
+  evalSupplyT mcrNextVar $ codegen mcrUpstreamEnv mcrRenamed mcrExterns
 
 -- | Rebuild a single module, running both phase A (typecheck) and phase B
 -- (codegen) in sequence. Used by callers that don't need (or can't use) the
@@ -438,11 +416,6 @@ make ma@MakeActions{..} ms = do
 -- caching verkar okej iom removeModules på new successful builds, men vi skriver alldeles för många filer till disk nu. Undvik att toucha och skriva över filer om innehållet ej ändrats, istället för att toucha filer för att få gamla prebuilt-logiken att funka. Ingenting räknas som prebuilt med den här logiken nu. 2023-12-24
 
 
-  writePackageJson
-
-  -- If generating docs, also generate them for the Prim modules
-  outputPrimDocs
-
   -- All threads have completed, rethrow any caught errors.
   let errors = M.elems failures
   unless (null errors) $ throwError (mconcat errors)
@@ -567,8 +540,8 @@ make ma@MakeActions{..} ms = do
 
         BuildPlan.markComplete ma buildPlan moduleName finalResult
 
--- | Infer the module name for a module by looking for the same filename with
--- a .js extension.
+-- | Infer the foreign module file for a module by looking for a matching
+-- Erlang foreign file next to the source file.
 inferForeignModules
   :: forall m
    . MonadIO m
@@ -579,15 +552,7 @@ inferForeignModules =
   where
     inferForeignModule :: Either RebuildPolicy FilePath -> m (Maybe FilePath)
     inferForeignModule (Left _) = return Nothing
-    inferForeignModule (Right path) = do
-       jsForeign <- do
-            let jsFile = replaceExtension path "js"
-            exists <- liftIO $ doesFileExist jsFile
-            if exists
-              then return (Just jsFile)
-              else return Nothing
-       erlForeign <- Erl.Build.inferForeignModule' path
-       pure (erlForeign <|> jsForeign)
+    inferForeignModule (Right path) = Erl.Build.inferForeignModule' path
 
 
 assertAllExternsExists :: M.Map ModuleName BuildJobResult -> Either BuildJobResult (M.Map ModuleName (MultipleErrors, ExternsFile))

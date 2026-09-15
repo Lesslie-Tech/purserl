@@ -189,15 +189,11 @@ codegenTargets :: Opts.Parser [P.CodegenTarget]
 codegenTargets = Opts.option targetParser $
      Opts.short 'g'
   <> Opts.long "codegen"
-  <> Opts.value
-      [ case unsafePerformIO (System.Environment.lookupEnv "PURS_CODEGEN_JS") of
-         Nothing -> P.Erl
-         Just _ -> P.JS
-      ]
+  <> Opts.value [P.Erl]
   <> Opts.help
       ( "Specifies comma-separated codegen targets to include. "
       <> targetsMessage
-      <> " The default target is 'js', but if this option is used only the targets specified will be used."
+      <> " The default target is 'erl', but if this option is used only the targets specified will be used."
       )
 
 targetsMessage :: String
@@ -217,11 +213,7 @@ options =
   P.Options
     <$> verboseErrors
     <*> (not <$> comments)
-    <*> (handleTargets <$> codegenTargets)
-  where
-    -- Ensure that the JS target is included if sourcemaps are
-    handleTargets :: [P.CodegenTarget] -> S.Set P.CodegenTarget
-    handleTargets ts = S.fromList (if P.JSSourceMap `elem` ts then P.JS : ts else ts)
+    <*> (S.fromList <$> codegenTargets)
 
 pscMakeOptions :: Opts.Parser PSCMakeOptions
 pscMakeOptions = PSCMakeOptions <$> many SharedCLI.inputFile

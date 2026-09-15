@@ -116,19 +116,15 @@ updateCacheDb
   -> P.ModuleName
   -- ^ The module name to update in the cache
   -> m ()
-updateCacheDb codegenTargets outputDirectory file actualFile moduleName = do
+updateCacheDb _codegenTargets outputDirectory file actualFile moduleName = do
   cwd <- liftIO getCurrentDirectory
   contentHash <- P.hashFile file
   let moduleCacheInfo = (normaliseForCache cwd (fromMaybe file actualFile), (dayZero, contentHash))
 
-  foreignCacheInfo <-
-    if S.member P.JS codegenTargets then do
-      foreigns' <- P.inferForeignModules (M.singleton moduleName (Right (fromMaybe file actualFile)))
-      for (M.lookup moduleName foreigns') \foreignPath -> do
-        foreignHash <- P.hashFile foreignPath
-        pure (normaliseForCache cwd foreignPath, (dayZero, foreignHash))
-    else
-      pure Nothing
+  -- purserl: FFI-file hash tracking here was JS-codegen-only (gated on
+  -- `S.member P.JS codegenTargets`); it never ran for Erl codegen, so this
+  -- unconditional Nothing changes nothing for purerl.
+  let foreignCacheInfo = Nothing
 
   let cacheInfo = M.fromList (moduleCacheInfo : maybeToList foreignCacheInfo)
   cacheDb <- P.readCacheDb' outputDirectory
@@ -183,7 +179,7 @@ shushProgress ma =
 -- | Stops any kind of codegen
 shushCodegen :: Monad m => P.MakeActions m -> P.MakeActions m
 shushCodegen ma =
-  ma { P.codegen = \_ _ _ _ -> pure ()
+  ma { P.codegen = \_ _ _ -> pure ()
      , P.ffiCodegen = \_ -> pure ()
      }
 
@@ -193,8 +189,8 @@ enableForeignCheck
   -> S.Set P.CodegenTarget
   -> P.MakeActions P.Make
   -> P.MakeActions P.Make
-enableForeignCheck foreigns codegenTargets ma =
-  ma { P.ffiCodegen = ffiCodegen' foreigns codegenTargets Nothing
+enableForeignCheck foreigns _codegenTargets ma =
+  ma { P.ffiCodegen = ffiCodegen' foreigns Nothing
      }
 
 -- | Returns a topologically sorted list of dependent ExternsFiles for the given

@@ -47,7 +47,6 @@ import Data.Map.Lazy qualified as Map
 import Data.Time.Clock (UTCTime)
 import Data.Zip (unzip)
 import Language.PureScript qualified as P
-import Language.PureScript.Docs.Convert.Single (convertComments)
 import Language.PureScript.Externs (ExternsDeclaration(..), ExternsFile(..))
 import Language.PureScript.Make.Actions (cacheDbFile)
 import Language.PureScript.Ide.Externs (convertExterns)
@@ -342,7 +341,7 @@ resolveDocumentationForModule (P.Module _ moduleComments moduleName sdecls _) =
       d
     where
       docs :: P.Name -> Text
-      docs ident = fromMaybe "" $ convertComments =<< Map.lookup ident comments
+      docs ident = fromMaybe "" $ P.convertComments =<< Map.lookup ident comments
 
       annotateValue ident = IdeDeclarationAnn (ann { _annDocumentation = Just $ docs ident })
 

@@ -17,18 +17,11 @@ license:        BSD-3-Clause
 license-file:   LICENSE
 build-type:     Simple
 extra-source-files:
-  app/static/*.css
-  app/static/*.less
   bundle/build.sh
   bundle/README
   tests/purs/**/*.purs
   tests/purs/**/*.json
   tests/purs/**/*.out
-  tests/json-compat/**/*.json
-  tests/support/*.json
-  tests/support/checkSourceMapValidity.js
-  tests/support/psci/**/*.purs
-  tests/support/psci/**/*.edit
   tests/support/pscide/src/**/*.purs
   tests/support/pscide/src/**/*.erl
   tests/support/pscide/src/**/*.fail
@@ -134,8 +127,7 @@ common defaults
     -- then generating PVP-compliant bounds based on that snapshot. You can
     -- update to a newer snapshot as follows:
     --
-    -- 1. Remove all version constraints from this cabal file (apart from
-    --    language-javascript).
+    -- 1. Remove all version constraints from this cabal file.
     -- 2. Update stack.yaml as required to select a new snapshot, and check
     --    everything builds correctly with stack.
     -- 3. Run `stack sdist`; this will produce a source distribution including
@@ -148,27 +140,15 @@ common defaults
     -- easily perform updates, while also ensuring that the compiler will be
     -- built with (almost) the same install plan for both cabal and stack
     -- users.
-    --
-    -- We need to be especially careful with
-    -- language-javascript, because it forms a part of the compiler's
-    -- public API. In the case of language-javascript specifically, all FFI
-    -- modules must be parseable by this library otherwise the compiler
-    -- will reject them. It should therefore always be pinned to a single
-    -- specific version.
     aeson >=2.2.3.0,
-    aeson-better-errors >=0.9.1.1 && <0.10,
     ansi-terminal >=1.1.2,
     array >=0.5.4.0 && <0.6,
     base >=4.19.2.0,
-    blaze-html >=0.9.1.2 && <0.10,
-    bower-json >=1.1.0.0 && <1.2,
     boxes >=0.1.5 && <0.2,
     bytestring >=0.12.1.0,
     Cabal >=3.10.2.0,
     cborg >=0.2.7.0 && <0.3,
     serialise >=0.2.5.0 && <0.3,
-    store >=0.7.16,
-    cheapskate >=0.1.1.2 && <0.2,
     clock >=0.8.3 && <0.9,
     containers >=0.6.5.1 && <0.7,
     data-ordlist >=0.4.7.0 && <0.5,
@@ -176,11 +156,8 @@ common defaults
     directory >=1.3.6.2 && <1.4,
     dlist ==1.0.*,
     edit-distance >=0.2.2.1 && <0.3,
-    file-embed >=0.0.15.0 && <0.1,
     filepath >=1.4.2.2 && <1.5,
     Glob >=0.10.2 && <0.11,
-    haskeline >=0.8.2 && <0.9,
-    language-javascript ==0.7.0.0,
     lens >=5.3.3,
     lifted-async >=0.10.2.2 && <0.11,
     lifted-base >=0.2.3.12 && <0.3,
@@ -199,7 +176,6 @@ common defaults
     scientific >=0.3.7.0 && <0.4,
     semigroups ==0.20.*,
     semialign >=1.3.1,
-    sourcemap >=0.1.7 && <0.2,
     stm >=2.5.0.2 && <2.6,
     stringsearch >=0.3.6.6 && <0.4,
     template-haskell >=2.21.0.0,
@@ -244,11 +220,6 @@ library
     Language.PureScript.AST.SourcePos
     Language.PureScript.AST.Traversals
     Language.PureScript.AST.Utils
-    Language.PureScript.Bundle
-    Language.PureScript.CodeGen
-    Language.PureScript.CodeGen.JS
-    Language.PureScript.CodeGen.JS.Common
-    Language.PureScript.CodeGen.JS.Printer
     Language.PureScript.Constants.Libs
     Language.PureScript.CoreFn
     Language.PureScript.CoreFn.Ann
@@ -263,16 +234,6 @@ library
     Language.PureScript.CoreFn.Optimizer
     Language.PureScript.CoreFn.ToJSON
     Language.PureScript.CoreFn.Traversals
-    Language.PureScript.CoreImp
-    Language.PureScript.CoreImp.AST
-    Language.PureScript.CoreImp.Module
-    Language.PureScript.CoreImp.Optimizer
-    Language.PureScript.CoreImp.Optimizer.Blocks
-    Language.PureScript.CoreImp.Optimizer.Common
-    Language.PureScript.CoreImp.Optimizer.Inliner
-    Language.PureScript.CoreImp.Optimizer.MagicDo
-    Language.PureScript.CoreImp.Optimizer.TCO
-    Language.PureScript.CoreImp.Optimizer.Unused
     Language.PureScript.CST
     Language.PureScript.CST.Convert
     Language.PureScript.CST.Errors
@@ -290,22 +251,6 @@ library
     Language.PureScript.Comments
     Language.PureScript.Constants.Prim
     Language.PureScript.Crash
-    Language.PureScript.Docs
-    Language.PureScript.Docs.AsHtml
-    Language.PureScript.Docs.AsMarkdown
-    Language.PureScript.Docs.Collect
-    Language.PureScript.Docs.Convert
-    Language.PureScript.Docs.Convert.ReExports
-    Language.PureScript.Docs.Convert.Single
-    Language.PureScript.Docs.Css
-    Language.PureScript.Docs.Prim
-    Language.PureScript.Docs.Render
-    Language.PureScript.Docs.RenderedCode
-    Language.PureScript.Docs.RenderedCode.RenderType
-    Language.PureScript.Docs.RenderedCode.Types
-    Language.PureScript.Docs.Tags
-    Language.PureScript.Docs.Types
-    Language.PureScript.Docs.Utils.MonoidExtras
     Language.PureScript.Environment
     Language.PureScript.Errors
     Language.PureScript.Errors.JSON
@@ -335,15 +280,6 @@ library
     Language.PureScript.Ide.Types
     Language.PureScript.Ide.Usage
     Language.PureScript.Ide.Util
-    Language.PureScript.Interactive
-    Language.PureScript.Interactive.Completion
-    Language.PureScript.Interactive.Directive
-    Language.PureScript.Interactive.IO
-    Language.PureScript.Interactive.Message
-    Language.PureScript.Interactive.Module
-    Language.PureScript.Interactive.Parser
-    Language.PureScript.Interactive.Printer
-    Language.PureScript.Interactive.Types
     Language.PureScript.Label
     Language.PureScript.Linter
     Language.PureScript.Linter.Exhaustive
@@ -362,11 +298,6 @@ library
     Language.PureScript.Pretty.Types
     Language.PureScript.Pretty.Values
     Language.PureScript.PSString
-    Language.PureScript.Publish
-    Language.PureScript.Publish.BoxesHelpers
-    Language.PureScript.Publish.ErrorsWarnings
-    Language.PureScript.Publish.Registry.Compat
-    Language.PureScript.Publish.Utils
     Language.PureScript.Renamer
     Language.PureScript.Roles
     Language.PureScript.Sugar
@@ -431,12 +362,10 @@ library
     Language.PureScript.Erl.Errors
     Language.PureScript.Erl.Errors.JSON
     Language.PureScript.Erl.Errors.Types
-    Language.PureScript.Erl.Interactive
     Language.PureScript.Erl.Make
     Language.PureScript.Erl.Make.Monad
     Language.PureScript.Erl.Parser
     Language.PureScript.Erl.Pretty
-    Language.PureScript.Erl.Run
     Language.PureScript.Erl.Synonyms
     Language.PureScript.Erl
 
@@ -460,7 +389,6 @@ executable purs
   ghc-options: -fno-warn-unused-do-bind -threaded -rtsopts -with-rtsopts=-N -Wno-unused-packages
   build-depends:
     ansi-wl-pprint >=1.0.2,
-    exceptions >=0.10.4 && <0.11,
     network >=3.2.7.0,
     optparse-applicative >=0.18.1.0,
     purescript
@@ -470,16 +398,10 @@ executable purs
     build-depends:
       gitrev >=1.2.0 && <1.4
   other-modules:
-    Command.Bundle
     Command.Compile
-    Command.Docs
-    Command.Docs.Html
-    Command.Docs.Markdown
     Command.Graph
     Command.Hierarchy
     Command.Ide
-    Command.Publish
-    Command.REPL
     SharedCLI
     Version
     Paths_purescript
@@ -522,13 +444,10 @@ test-suite tests
     TestAst
     TestCoreFn
     TestCst
-    TestDocs
     TestGraph
     TestHierarchy
     TestIde
     TestMake
-    TestPrimDocs
-    TestPscPublish
     TestUnify
     TestUtils
     Paths_purescript

@@ -37,7 +37,6 @@ import Data.Traversable (for)
 import GHC.Generics (Generic)
 import GHC.Stack qualified
 import Language.PureScript.AST
-import Language.PureScript.Bundle qualified as Bundle
 import Language.PureScript.Constants.Libs qualified as C
 import Language.PureScript.Constants.Prim qualified as C
 import Language.PureScript.Crash (internalError)
@@ -51,7 +50,6 @@ import Language.PureScript.PSString (decodeStringWithReplacement)
 import Language.PureScript.Roles (Role, displayRole)
 import Language.PureScript.Traversals (sndM)
 import Language.PureScript.Types (Constraint(..), ConstraintData(..), RowListItem(..), SourceConstraint, SourceType, Type(..), eraseForAllKindAnnotations, eraseKindApps, everywhereOnTypesTopDownM, getAnnForType, isMonoType, overConstraintArgs, rowFromList, rowToList, srcTUnknown)
-import Language.PureScript.Publish.BoxesHelpers qualified as BoxHelpers
 import System.Console.ANSI qualified as ANSI
 import System.FilePath (makeRelative)
 import Text.PrettyPrint.Boxes qualified as Box
@@ -66,18 +64,10 @@ import qualified Language.PureScript.Erl.Errors.Types
 data SimpleErrorMessage
   = InternalCompilerError Text Text
   | ModuleNotFound ModuleName
-  | ErrorParsingFFIModule FilePath (Maybe Bundle.ErrorMessage)
   | ErrorParsingCSTModule CST.ParserError
   | WarningParsingCSTModule CST.ParserWarning
   | MissingFFIModule ModuleName
   | UnnecessaryFFIModule ModuleName FilePath
-  | MissingFFIImplementations ModuleName [Ident]
-  | UnusedFFIImplementations ModuleName [Ident]
-  | InvalidFFIIdentifier ModuleName Text
-  | DeprecatedFFIPrime ModuleName Text
-  | DeprecatedFFICommonJSModule ModuleName FilePath
-  | UnsupportedFFICommonJSExports ModuleName [Text]
-  | UnsupportedFFICommonJSImports ModuleName [Text]
   | FileIOError Text Text -- ^ A description of what we were trying to do, and the error which occurred
   | InfiniteType SourceType
   | InfiniteKind SourceType
@@ -248,18 +238,10 @@ errorCode :: ErrorMessage -> Text
 errorCode em = case unwrapErrorMessage em of
   InternalCompilerError{} -> "InternalCompilerError"
   ModuleNotFound{} -> "ModuleNotFound"
-  ErrorParsingFFIModule{} -> "ErrorParsingFFIModule"
   ErrorParsingCSTModule{} -> "ErrorParsingModule"
   WarningParsingCSTModule{} -> "WarningParsingModule"
   MissingFFIModule{} -> "MissingFFIModule"
   UnnecessaryFFIModule{} -> "UnnecessaryFFIModule"
-  MissingFFIImplementations{} -> "MissingFFIImplementations"
-  UnusedFFIImplementations{} -> "UnusedFFIImplementations"
-  InvalidFFIIdentifier{} -> "InvalidFFIIdentifier"
-  DeprecatedFFIPrime{} -> "DeprecatedFFIPrime"
-  DeprecatedFFICommonJSModule {} -> "DeprecatedFFICommonJSModule"
-  UnsupportedFFICommonJSExports {} -> "UnsupportedFFICommonJSExports"
-  UnsupportedFFICommonJSImports {} -> "UnsupportedFFICommonJSImports"
   FileIOError{} -> "FileIOError"
   InfiniteType{} -> "InfiniteType"
   InfiniteKind{} -> "InfiniteKind"
@@ -703,11 +685,6 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
       paras [ line $ "I/O error while trying to " <> doWhat
             , indent . line $ err
             ]
-    renderSimpleErrorMessage (ErrorParsingFFIModule path extra) =
-      paras $ [ line "Unable to parse foreign module:"
-              , indent . lineS $ path
-              ] ++
-              map (indent . lineS) (concatMap Bundle.printErrorMessage (maybeToList extra))
     renderSimpleErrorMessage (ErrorParsingCSTModule err) =
       paras [ line "Unable to parse module: "
             , line $ T.pack $ CST.prettyPrintErrorMessage err
@@ -721,41 +698,6 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
       paras [ line $ "An unnecessary foreign module implementation was provided for module " <> markCode (runModuleName mn) <> ": "
             , indent . lineS $ path
             , line $ "Module " <> markCode (runModuleName mn) <> " does not contain any foreign import declarations, so a foreign module is not necessary."
-            ]
-    renderSimpleErrorMessage (MissingFFIImplementations mn idents) =
-      paras [ line $ "The following values are not defined in the foreign module for module " <> markCode (runModuleName mn) <> ": "
-            , indent . paras $ map (line . runIdent) idents
-            ]
-    renderSimpleErrorMessage (UnusedFFIImplementations mn idents) =
-      paras [ line $ "The following definitions in the foreign module for module " <> markCode (runModuleName mn) <> " are unused: "
-            , indent . paras $ map (line . runIdent) idents
-            ]
-    renderSimpleErrorMessage (InvalidFFIIdentifier mn ident) =
-      paras [ line $ "In the FFI module for " <> markCode (runModuleName mn) <> ":"
-            , indent . paras $
-                [ line $ "The identifier " <> markCode ident <> " is not valid in PureScript."
-                , line "Note that exported identifiers in FFI modules must be valid PureScript identifiers."
-                ]
-            ]
-    renderSimpleErrorMessage (DeprecatedFFIPrime mn ident) =
-      paras [ line $ "In the FFI module for " <> markCode (runModuleName mn) <> ":"
-            , indent . paras $
-                [ line $ "The identifier " <> markCode ident <> " contains a prime (" <> markCode "'" <> ")."
-                , line "Primes are not allowed in identifiers exported from FFI modules."
-                ]
-            ]
-    renderSimpleErrorMessage (DeprecatedFFICommonJSModule mn path) =
-      paras [ line $ "A CommonJS foreign module implementation was provided for module " <> markCode (runModuleName mn) <> ": "
-            , indent . lineS $ path
-            , line "CommonJS foreign modules are no longer supported. Use native JavaScript/ECMAScript module syntax instead."
-            ]
-    renderSimpleErrorMessage (UnsupportedFFICommonJSExports mn idents) =
-      paras [ line $ "The following CommonJS exports are not supported in the ES foreign module for module " <> markCode (runModuleName mn) <> ": "
-            , indent . paras $ map line idents
-            ]
-    renderSimpleErrorMessage (UnsupportedFFICommonJSImports mn mids) =
-      paras [ line $ "The following CommonJS imports are not supported in the ES foreign module for module " <> markCode (runModuleName mn) <> ": "
-            , indent . paras $ map line mids
             ]
     renderSimpleErrorMessage InvalidDoBind =
       line "The last statement in a 'do' block must be an expression, but this block ends with a binder."
@@ -1184,7 +1126,8 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
               formatTS (names, types) =
                 let
                   idBoxes = Box.text . T.unpack . showQualified id <$> names
-                  tyBoxes = (\t -> BoxHelpers.indented
+                  indented b = Box.hcat Box.left [Box.emptyBox 1 2, b]
+                  tyBoxes = (\t -> indented
                               (Box.text ":: " Box.<> prettyType t)) <$> types
                   longestId = maximum (map Box.cols idBoxes)
                 in
