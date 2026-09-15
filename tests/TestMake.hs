@@ -512,6 +512,26 @@ spec = do
       compileAllowingFailures [modulePath] `shouldReturn` moduleNames ["Module"]
       compileAllowingFailures [modulePath] `shouldReturn` moduleNames ["Module"]
 
+    it "asdf returns externs for every module even when nothing needs rebuilding" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          modulePaths = [moduleAPath, moduleBPath]
+          moduleAContent = "module A where\nfoo = 0\n"
+          moduleBContent = "module B where\nimport A (foo)\nbar = foo\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      _ <- compile modulePaths
+
+      -- The up-to-date short-circuit must still return one ExternsFile per
+      -- module (not an empty list), since e.g. `purs repl`'s reload path
+      -- strictly folds over every element of this result.
+      (result, recompiled) <- compileWithResult modulePaths
+      recompiled `shouldBe` moduleNames []
+      case result of
+        Left errs -> fail (P.prettyPrintMultipleErrors P.defaultPPEOptions errs)
+        Right externs -> length externs `shouldBe` length modulePaths
+
 -- Note [Sleeping to avoid flaky tests]
 --
 -- One of the things we want to test here is that all requested output files

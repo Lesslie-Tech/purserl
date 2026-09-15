@@ -43,7 +43,6 @@ import Data.Text qualified as Text
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors, SimpleErrorMessage(..), singleError)
 import Language.PureScript.Externs (ExternsFile, externsIsCurrentVersion)
-import Language.PureScript.Interning (Intern(intern))
 import Language.PureScript.Make.Cache (ContentHash, hash)
 import Language.PureScript.Options (Options)
 import System.Directory (createDirectoryIfMissing, getModificationTime, setModificationTime)
@@ -195,13 +194,15 @@ readExternsFileImplFromBytes path bytes = do
   return $ do
     externs <- mexterns
     guard $ externsIsCurrentVersion externs
-    -- Canonicalize repeated Text content (module/identifier/label names are
-    -- massively duplicated across a project's externs) against a shared,
-    -- process-lifetime table. See Language.PureScript.Interning. Unlike
-    -- purs ide server's Load command, purs compile's normal typecheck/codegen
-    -- pipeline already forces this value through genuine use, so there's no
-    -- need to force it eagerly here (measured: no difference either way).
-    return (intern externs)
+    -- Deliberately NOT interning here (see Language.PureScript.Interning):
+    -- this path is only reached by one-shot-or-effectively-one-shot
+    -- processes (purs compile, the REPL, docs generation, tests), all of
+    -- which exit or drop these externs long before process-lifetime string
+    -- interning could pay for its own traversal/hashmap-lookup cost. The
+    -- ide server's actual long-lived-process memory win from interning is
+    -- achieved independently in Ide/Externs.hs's readExternFile, which is
+    -- the only path IdeState's long-lived Load-time externs go through.
+    return externs
 
 hashFile :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> m ContentHash
 hashFile path = do

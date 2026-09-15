@@ -3,7 +3,6 @@ module Language.PureScript.Make.BuildPlan
   , BuildJobResult(..)
   , ResultTiming(..)
   , bpExterns
-  , construct
   , construct2
   , getExternFromLastSuccessfulPreviousBuild
   , needsRebuildEvenAfterDiffingCacheShapes
@@ -32,11 +31,9 @@ import Control.Monad.Base (liftBase)
 -- import Control.Monad (foldM)
 import Control.Monad
 import Control.Monad.Trans.Control (MonadBaseControl(..))
-import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
-import Data.Foldable (foldl')
 import Data.Map qualified as M
 import Data.Map.Merge.Strict qualified as M
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Time.Clock (UTCTime)
 import Language.PureScript.AST (Module, getModuleName)
 import Language.PureScript.Crash (internalError)
@@ -119,22 +116,6 @@ data BuildJobResult
 
   | BuildJobSkippedFullCacheHit
   -- ^ The build job was not run, because no upstream files changed
-
--- | Information obtained about a particular module while constructing a build
--- plan; used to decide whether a module needs rebuilding.
-data RebuildStatus = RebuildStatus
-  { statusModuleName :: ModuleName
-  , statusRebuildNever :: Bool
-  , statusNewCacheInfo :: Maybe CacheInfo
-    -- ^ New cache info for this module which should be stored for subsequent
-    -- incremental builds. A value of Nothing indicates that cache info for
-    -- this module should not be stored in the build cache, because it is being
-    -- rebuilt according to a RebuildPolicy instead.
-  , statusPrebuilt :: Maybe Prebuilt
-    -- ^ Prebuilt externs and timestamp for this module, if any.
-  , statusDirtyExterns :: Maybe ExternsFile
-    -- ^ Externs, even if the source file is changed or the timestamp check fails.
-  }
 
 -- | Called when we finished compiling a module (both typecheck *and*
 -- codegen) and want to report back the final compilation result, as well as
@@ -409,148 +390,23 @@ getExternFromLastSuccessfulPreviousBuild :: Monad m => MakeActions m -> BuildPla
 getExternFromLastSuccessfulPreviousBuild MakeActions{..} _buildPlan moduleName = do
   fmap snd $ readExterns moduleName
 
--- | Constructs a BuildPlan for the given module graph.
---
--- The given MakeActions are used to collect various timestamps in order to
--- determine whether a module needs rebuilding.
-construct
-  :: forall m. MonadBaseControl IO m
-  => MakeActions m
-  -> CacheDb
-  -> ([CST.PartialResult Module], [(ModuleName, [ModuleName])])
-  -> m (BuildPlan, CacheDb)
-construct MakeActions{..} cacheDb (sorted, graph) = do
-  let sortedModuleNames = map (getModuleName . CST.resPartial) sorted
-  cacheChanged <- A.forConcurrently sortedModuleNames getRebuildStatusIsUpToDate
-  let prebuilt = M.empty
-  case foldl (&&) True cacheChanged of
-    True -> do
-      let buildJobs = M.empty
-      let dirty = M.empty
-      env <- C.newMVar primEnv
-      idx <- C.newMVar 1
-      pure
-        ( BuildPlan prebuilt M.empty M.empty env idx M.empty M.empty
-        , cacheDb
-        )
-    False -> do
-      rebuildStatuses <- A.forConcurrently sortedModuleNames getRebuildStatus
-            -- foldl' collectPrebuiltModules M.empty $
-            --   mapMaybe (\s -> (statusModuleName s, statusRebuildNever s,) <$> statusPrebuilt s) rebuildStatuses
-      let dirty =
-            foldl' collectDirtyModules M.empty $
-              mapMaybe (\s -> (statusModuleName s, statusRebuildNever s,) <$> statusPrebuilt s) rebuildStatuses
-      let toBeRebuilt = filter (not . flip M.member prebuilt) sortedModuleNames
-      buildJobs <- foldM makeBuildJob M.empty toBeRebuilt
-      cacheResults <- foldM (\m mn -> (\mvar -> M.insert mn mvar m) <$> newEmptyMVar) M.empty toBeRebuilt
-      externsResults <- foldM (\m mn -> (\mvar -> M.insert mn mvar m) <$> newMVar Nothing) M.empty toBeRebuilt
-      env <- C.newMVar primEnv
-      idx <- C.newMVar 1
-      pure
-        ( BuildPlan prebuilt dirty buildJobs env idx cacheResults externsResults
-        , let
-            update = flip $ \s ->
-              M.alter (const (statusNewCacheInfo s)) (statusModuleName s)
-          in
-            foldl' update cacheDb rebuildStatuses
-        )
-  where
-    makeBuildJob prev moduleName = do
-      buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
-      pure (M.insert moduleName buildJob prev)
-
-    getRebuildStatus :: ModuleName -> m RebuildStatus
-    getRebuildStatus moduleName = do
-      inputInfo <- getInputTimestampsAndHashes moduleName
-      -- caching trace ("getRebuildStatus: " <> T.unpack (runModuleName moduleName) <> " " <> show (fmap (fmap (fmap (const ()))) inputInfo)) $
-      case inputInfo of
-        Left RebuildNever -> do
-          dirtyExterns <- snd <$> readExterns moduleName
-          prebuilt <- findExistingExtern dirtyExterns moduleName
-          pure (RebuildStatus
-            { statusModuleName = moduleName
-            , statusRebuildNever = True
-            , statusPrebuilt = prebuilt
-            , statusDirtyExterns = dirtyExterns
-            , statusNewCacheInfo = Nothing
-            })
-        Left RebuildAlways -> do
-          pure (RebuildStatus
-            { statusModuleName = moduleName
-            , statusRebuildNever = False
-            , statusPrebuilt = Nothing
-            , statusDirtyExterns = Nothing
-            , statusNewCacheInfo = Nothing
-            })
-        Right cacheInfo -> do
-          cwd <- liftBase getCurrentDirectory
-          (newCacheInfo, isUpToDate) <- checkChanged cacheDb moduleName cwd cacheInfo
-          dirtyExterns <- snd <$> readExterns moduleName
-          prebuilt <-
-            if isUpToDate
-              then findExistingExtern dirtyExterns moduleName
-              else pure Nothing
-          pure (RebuildStatus
-            { statusModuleName = moduleName
-            , statusRebuildNever = False
-            , statusPrebuilt = prebuilt
-            , statusDirtyExterns = dirtyExterns
-            , statusNewCacheInfo = Just newCacheInfo
-            })
-
-    getRebuildStatusIsUpToDate :: ModuleName -> m Bool
-    getRebuildStatusIsUpToDate moduleName = do
-      inputInfo <- getInputTimestampsAndHashes moduleName
-      case inputInfo of
-        Left RebuildNever ->
-          pure True
-        Left RebuildAlways ->
-          pure False
-        Right cacheInfo -> do
-          cwd <- liftBase getCurrentDirectory
-          (newCacheInfo, isUpToDate) <- checkChanged cacheDb moduleName cwd cacheInfo
-          pure isUpToDate
-
-    findExistingExtern :: Maybe ExternsFile -> ModuleName -> m (Maybe Prebuilt)
-    findExistingExtern mexterns moduleName = runMaybeT $ do
-      timestamp <- MaybeT $ getOutputTimestamp moduleName
-      externs <- MaybeT $ pure mexterns
-      pure (Prebuilt timestamp externs)
-
-    collectPrebuiltModules :: M.Map ModuleName Prebuilt -> (ModuleName, Bool, Prebuilt) -> M.Map ModuleName Prebuilt
-    collectPrebuiltModules prev (moduleName, rebuildNever, pb)
-      | rebuildNever = M.insert moduleName pb prev
-      | otherwise = do
-          let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup moduleName graph)
-          case traverse (fmap pbModificationTime . flip M.lookup prev) deps of
-            Nothing ->
-              -- If we end up here, one of the dependencies didn't exist in the
-              -- prebuilt map and so we know a dependency needs to be rebuilt, which
-              -- means we need to be rebuilt in turn.
-              prev
-            Just modTimes ->
-              case maximumMaybe modTimes of
-                Just depModTime | pbModificationTime pb < depModTime ->
-                  prev
-                _ -> M.insert moduleName pb prev
-
-    collectDirtyModules :: M.Map ModuleName CacheFilesAvailable -> (ModuleName, Bool, Prebuilt) -> M.Map ModuleName CacheFilesAvailable
-    collectDirtyModules prev (moduleName, rebuildNever, pb)
-      | rebuildNever = M.insert moduleName (UpToDate pb) prev
-      | otherwise = do
-          let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup moduleName graph)
-          case traverse (fmap pbModificationTime . cfaPrebuilt <=< flip M.lookup prev) deps of
-            Nothing ->
-              -- If we end up here, one of the dependencies didn't exist in the
-              -- prebuilt map and so we know a dependency needs to be rebuilt, which
-              -- means we need to be rebuilt in turn.
-              M.insert moduleName (DepChanged pb) prev
-            Just modTimes ->
-              case maximumMaybe modTimes of
-                Just depModTime | pbModificationTime pb < depModTime ->
-                  M.insert moduleName (DepChanged pb) prev -- NOTE[drathier]: hard-coded source changed to depchanged, so we can skip the transitive timestamp check here and only rely on the later timestamp+hash+externs caching
-                _ -> M.insert moduleName (UpToDate pb) prev
-
+-- | Cheaply checks (timestamp/hash only, no externs reads) whether a
+-- module's own source files are up to date according to the cache db.
+-- Doesn't check dependencies -- used to decide, up front, whether every
+-- module in the project is up to date so 'construct2' can take its fast
+-- path.
+getRebuildStatusIsUpToDate :: forall m. MonadBaseControl IO m => MakeActions m -> CacheDb -> ModuleName -> m Bool
+getRebuildStatusIsUpToDate MakeActions{..} cacheDb moduleName = do
+  inputInfo <- getInputTimestampsAndHashes moduleName
+  case inputInfo of
+    Left RebuildNever ->
+      pure True
+    Left RebuildAlways ->
+      pure False
+    Right cacheInfo -> do
+      cwd <- liftBase getCurrentDirectory
+      (_newCacheInfo, isUpToDate) <- checkChanged cacheDb moduleName cwd cacheInfo
+      pure isUpToDate
 
 anyDepChanged :: forall m. (MonadBaseControl IO m) => ModuleName -> [(ModuleName, [ModuleName])] -> BuildPlan -> m RebuildInstructions
 anyDepChanged moduleName graph buildPlan = do
@@ -573,32 +429,54 @@ anyDepChanged moduleName graph buildPlan = do
 --
 -- The given MakeActions are used to collect various timestamps in order to
 -- determine whether a module needs rebuilding.
+--
+-- As a fast path, if every module in the project is already up to date, this
+-- returns a BuildPlan with zero build jobs and 'bpPrebuilt' populated
+-- directly from each module's on-disk externs -- so 'Make.make' doesn't fork
+-- a thread per module, and doesn't have to re-read/re-decode every module's
+-- externs file a second time at the end of the build, when nothing needed
+-- rebuilding in the first place.
 construct2
   :: forall m. MonadBaseControl IO m
   => MakeActions m
   -> CacheDb
   -> ([CST.PartialResult Module], [(ModuleName, [ModuleName])])
   -> m (BuildPlan, CacheDb)
-construct2 MakeActions{..} cacheDb (sorted, graph) = do
+construct2 ma@MakeActions{..} cacheDb (sorted, graph) = do
   let sortedModuleNames = map (getModuleName . CST.resPartial) sorted
-  let buildJobs = M.empty
-  let dirty = M.empty
-  let prebuilt = M.empty
   env <- C.newMVar primEnv
   idx <- C.newMVar 1
-  let makeBuildJob prev moduleName = do
-        buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
-        pure (M.insert moduleName buildJob prev)
-  buildJobs <- foldM makeBuildJob M.empty sortedModuleNames
-  mapOfEmptyCacheResults <- foldM (\m mn -> (\v -> M.insert mn v m) <$> newEmptyMVar) M.empty sortedModuleNames
-  mapOfEmptyExternResults <- foldM (\m mn -> (\v -> M.insert mn v m) <$> newMVar Nothing) M.empty sortedModuleNames
-  pure
-    ( BuildPlan prebuilt M.empty buildJobs env idx mapOfEmptyCacheResults mapOfEmptyExternResults
-    , cacheDb
-    )
-
-
-
-maximumMaybe :: Ord a => [a] -> Maybe a
-maximumMaybe [] = Nothing
-maximumMaybe xs = Just $ maximum xs
+  cacheChanged <- A.forConcurrently sortedModuleNames (getRebuildStatusIsUpToDate ma cacheDb)
+  case and cacheChanged of
+    True -> do
+      prebuiltOrMissing <- A.forConcurrently sortedModuleNames $ \mn -> do
+        mts <- getOutputTimestamp mn
+        (_, mexts) <- readExterns mn
+        pure (mn, Prebuilt <$> mts <*> mexts)
+      case traverse snd prebuiltOrMissing of
+        Just pbs ->
+          -- Genuinely nothing to do: every module is up to date and its
+          -- externs/output are actually present on disk.
+          pure
+            ( BuildPlan (M.fromList (zip sortedModuleNames pbs)) M.empty M.empty env idx M.empty M.empty
+            , cacheDb
+            )
+        Nothing ->
+          -- The cache db says everything's up to date, but some module's
+          -- externs/output is actually missing or stale on disk (e.g. output/
+          -- was partially deleted). Fall back to rebuilding everything rather
+          -- than trying to patch just the affected module(s).
+          buildEverything sortedModuleNames env idx
+    False -> buildEverything sortedModuleNames env idx
+  where
+    buildEverything sortedModuleNames env idx = do
+      let makeBuildJob prev moduleName = do
+            buildJob <- BuildJob <$> C.newEmptyMVar <*> C.newEmptyMVar
+            pure (M.insert moduleName buildJob prev)
+      buildJobs <- foldM makeBuildJob M.empty sortedModuleNames
+      mapOfEmptyCacheResults <- foldM (\m mn -> (\v -> M.insert mn v m) <$> newEmptyMVar) M.empty sortedModuleNames
+      mapOfEmptyExternResults <- foldM (\m mn -> (\v -> M.insert mn v m) <$> newMVar Nothing) M.empty sortedModuleNames
+      pure
+        ( BuildPlan M.empty M.empty buildJobs env idx mapOfEmptyCacheResults mapOfEmptyExternResults
+        , cacheDb
+        )
