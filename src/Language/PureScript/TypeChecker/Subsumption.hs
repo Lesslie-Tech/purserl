@@ -20,7 +20,7 @@ import Language.PureScript.AST (ErrorMessageHint(..), Expr(..), pattern NullSour
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment (tyFunction, tyRecord)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), errorMessage, internalCompilerError)
-import Language.PureScript.TypeChecker.Monad (CheckState, getHints, getTypeClassDictionaries, withErrorMessageHint)
+import Language.PureScript.TypeChecker.Monad (Check, CheckState, getHints, getTypeClassDictionaries, withErrorMessageHint)
 import Language.PureScript.TypeChecker.Skolems (newSkolemConstant, skolemize)
 import Language.PureScript.TypeChecker.Unify (alignRowsWith, freshTypeWithKind, unifyTypes)
 import Language.PureScript.Types (RowListItem(..), SourceType, Type(..), eqType, isREmpty, replaceTypeVars, rowFromList)
@@ -58,6 +58,7 @@ defaultCoercion SElaborate   = id
 defaultCoercion SNoElaborate = ()
 
 -- | Check that one type subsumes another, rethrowing errors to provide a better error message
+{-# SPECIALIZE subsumes :: SourceType -> SourceType -> Check (Expr -> Expr) #-}
 subsumes
   :: (MonadError MultipleErrors m, MonadState CheckState m)
   => SourceType

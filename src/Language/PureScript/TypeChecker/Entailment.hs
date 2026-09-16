@@ -44,7 +44,7 @@ import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName
 import Language.PureScript.TypeChecker.Entailment.Coercible (GivenSolverState(..), WantedSolverState(..), initialGivenSolverState, initialWantedSolverState, insoluble, solveGivens, solveWanteds)
 import Language.PureScript.TypeChecker.Entailment.IntCompare (mkFacts, mkRelation, solveRelation)
 import Language.PureScript.TypeChecker.Kinds (elaborateKind, unifyKinds')
-import Language.PureScript.TypeChecker.Monad (CheckState(..), withErrorMessageHint)
+import Language.PureScript.TypeChecker.Monad (Check, CheckState(..), withErrorMessageHint)
 import Language.PureScript.TypeChecker.Synonyms (replaceAllTypeSynonyms)
 import Language.PureScript.TypeChecker.Unify (freshTypeWithKind, substituteType, unifyTypes)
 import Language.PureScript.TypeClassDictionaries (NamedDict, TypeClassDictionaryInScope(..), superclassName)
@@ -111,6 +111,7 @@ combineContexts :: InstanceContext -> InstanceContext -> InstanceContext
 combineContexts = M.unionWith (M.unionWith (M.unionWith (<>)))
 
 -- | Replace type class dictionary placeholders with inferred type class dictionaries
+{-# SPECIALIZE replaceTypeClassDictionaries :: Bool -> Expr -> Check (Expr, [(Ident, InstanceContext, SourceConstraint)]) #-}
 replaceTypeClassDictionaries
   :: forall m
    . (MonadState CheckState m, MonadError MultipleErrors m, MonadWriter MultipleErrors m, MonadSupply m)
@@ -179,6 +180,7 @@ instance Monoid t => Monoid (Matched t) where
 
 -- | Check that the current set of type class dictionaries entail the specified type class goal, and, if so,
 -- return a type class dictionary reference.
+{-# SPECIALIZE entails :: SolverOptions -> SourceConstraint -> InstanceContext -> [ErrorMessageHint] -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext Check) Expr #-}
 entails
   :: forall m
    . (MonadState CheckState m, MonadError MultipleErrors m, MonadWriter MultipleErrors m, MonadSupply m)

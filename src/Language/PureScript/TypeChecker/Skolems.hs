@@ -20,7 +20,7 @@ import Language.PureScript.AST (Binder(..), ErrorMessageHint(..), Expr(..), Sour
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors, SimpleErrorMessage(..), positionedError, singleError)
 import Language.PureScript.Traversals (defS)
-import Language.PureScript.TypeChecker.Monad (CheckState(..))
+import Language.PureScript.TypeChecker.Monad (Check, CheckState(..))
 import Language.PureScript.Types (SkolemScope(..), SourceType, Type(..), everythingOnTypes, everywhereOnTypesM, replaceTypeVars)
 
 -- | Generate a new skolem constant
@@ -31,6 +31,7 @@ newSkolemConstant = do
   return s
 
 -- | Introduce skolem scope at every occurrence of a ForAll
+{-# SPECIALIZE introduceSkolemScope :: Type a -> Check (Type a) #-}
 introduceSkolemScope :: MonadState CheckState m => Type a -> m (Type a)
 introduceSkolemScope = everywhereOnTypesM go
   where

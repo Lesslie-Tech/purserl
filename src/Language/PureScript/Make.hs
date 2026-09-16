@@ -65,24 +65,20 @@ import           System.Directory (getCurrentDirectory)
 --
 -- This function is used for fast-rebuild workflows (PSCi and psc-ide are examples).
 rebuildModule
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => MakeActions m
+  :: MakeActions Make
   -> [ExternsFile]
   -> Module
-  -> m ExternsFile
+  -> Make ExternsFile
 rebuildModule actions externs m = do
   env <- fmap fst . runWriterT $ foldM externsEnv primEnv externs
   rebuildModule' actions env externs m
 
 rebuildModule'
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => MakeActions m
+  :: MakeActions Make
   -> Env
   -> [ExternsFile]
   -> Module
-  -> m ExternsFile
+  -> Make ExternsFile
 rebuildModule' act env ext mdl = rebuildModuleWithIndex act env ext mdl Nothing UnknownRecompileReason
 
 -- | Everything phase B (codegen) needs, produced by phase A (typecheck).
@@ -111,15 +107,13 @@ data ModuleCheckResult = ModuleCheckResult
 -- (phase B, see `rebuildModuleCodegen`), since that doesn't affect `exts` and
 -- can safely be deferred so dependent modules aren't blocked on it.
 rebuildModuleTypecheck
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => MakeActions m
+  :: MakeActions Make
   -> Env
   -> [ExternsFile]
   -> Module
   -> Maybe (Int, Int)
   -> RecompileReason
-  -> m ModuleCheckResult
+  -> Make ModuleCheckResult
 rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ _) moduleIndex causedByModule = do
   progress $ CompilingModule moduleName moduleIndex causedByModule
   progress $ CompileMeta ("### CS.goBuildEnv13[" <> runModuleName moduleName <> "]")
@@ -200,15 +194,13 @@ rebuildModuleCodegen MakeActions{..} moduleName ModuleCheckResult{..} = do
 -- e.g. the REPL and psc-ide's fast-rebuild workflows, which rebuild one
 -- module at a time outside of any `BuildPlan`.
 rebuildModuleWithIndex
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => MakeActions m
+  :: MakeActions Make
   -> Env
   -> [ExternsFile]
   -> Module
   -> Maybe (Int, Int)
   -> RecompileReason
-  -> m ExternsFile
+  -> Make ExternsFile
 rebuildModuleWithIndex ma exEnv externs m@(Module _ _ moduleName _ _) moduleIndex causedByModule = do
   checkResult <- rebuildModuleTypecheck ma exEnv externs m moduleIndex causedByModule
   rebuildModuleCodegen ma moduleName checkResult
@@ -218,10 +210,9 @@ rebuildModuleWithIndex ma exEnv externs m@(Module _ _ moduleName _ _) moduleInde
 --
 -- If timestamps or hashes have not changed, existing externs files can be used to provide upstream modules' types without
 -- having to typecheck those modules again.
-make :: forall m. (MonadBaseControl IO m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-     => MakeActions m
+make :: MakeActions Make
      -> [CST.PartialResult Module]
-     -> m [ExternsFile]
+     -> Make [ExternsFile]
 make ma@MakeActions{..} ms = do
   progress $ CompileMeta "### CS.goReadCacheDb8"
 
@@ -427,10 +418,10 @@ make ma@MakeActions{..} ms = do
   return (map (lookupResult . getModuleName . CST.resPartial) sorted)
 
   where
-  checkModuleNames :: m ()
+  checkModuleNames :: Make ()
   checkModuleNames = checkNoPrim *> checkModuleNamesAreUnique
 
-  checkNoPrim :: m ()
+  checkNoPrim :: Make ()
   checkNoPrim =
     for_ ms $ \m ->
       let mn = getModuleName $ CST.resPartial m
@@ -439,7 +430,7 @@ make ma@MakeActions{..} ms = do
              . errorMessage' (getModuleSourceSpan $ CST.resPartial m)
              $ CannotDefinePrimModules mn
 
-  checkModuleNamesAreUnique :: m ()
+  checkModuleNamesAreUnique :: Make ()
   checkModuleNamesAreUnique =
     for_ (findDuplicates (getModuleName . CST.resPartial) ms) $ \mss ->
       throwError . flip foldMap mss $ \ms' ->
@@ -457,7 +448,7 @@ make ma@MakeActions{..} ms = do
   inOrderOf :: (Ord a) => [a] -> [a] -> [a]
   inOrderOf xs ys = let s = S.fromList xs in filter (`S.member` s) ys
 
-  buildModule :: QSem -> BuildPlan -> ModuleName -> Int -> Maybe ExternsFile -> M.Map ModuleName (MultipleErrors, ExternsFile) -> RecompileReason -> FilePath -> [CST.ParserWarning] -> Either (NEL.NonEmpty CST.ParserError) Module -> [ModuleName] -> m ()
+  buildModule :: QSem -> BuildPlan -> ModuleName -> Int -> Maybe ExternsFile -> M.Map ModuleName (MultipleErrors, ExternsFile) -> RecompileReason -> FilePath -> [CST.ParserWarning] -> Either (NEL.NonEmpty CST.ParserError) Module -> [ModuleName] -> Make ()
   buildModule lock buildPlan moduleName cnt oldExts results recompileReason fp pwarnings mres deps = do
     progress $ CompileMeta ("### CS.goParse12[" <> runModuleName moduleName <> "]")
 
@@ -479,7 +470,7 @@ make ma@MakeActions{..} ms = do
       -- We need to ensure that all dependencies have been included in Env
       C.modifyMVar_ (bpEnv buildPlan) $ \env -> do
         let
-          go :: Env -> ModuleName -> m Env
+          go :: Env -> ModuleName -> Make Env
           go e dep = case M.lookup dep results of
             Just (_, exts)
               | not (M.member dep e) -> externsEnv e exts

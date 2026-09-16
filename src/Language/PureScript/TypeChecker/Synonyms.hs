@@ -19,7 +19,7 @@ import Data.Text (Text)
 import Language.PureScript.Environment (Environment(..), TypeKind)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), SourceSpan, errorMessage', safst)
 import Language.PureScript.Names (ProperName, ProperNameType(..), Qualified)
-import Language.PureScript.TypeChecker.Monad (CheckState, getEnv)
+import Language.PureScript.TypeChecker.Monad (Check, CheckState, getEnv)
 import Language.PureScript.Types (SourceType, Type(..), completeBinderList, everywhereOnTypesTopDownM, getAnnForType, replaceAllTypeVars)
 
 -- | Type synonym information (arguments with kinds, aliased type), indexed by name
@@ -56,6 +56,7 @@ replaceAllTypeSynonyms' syns kinds = everywhereOnTypesTopDownM try
   lookupKindArgs ctor = fromMaybe [] $ fmap (fmap (fst . snd) . fst) . completeBinderList . fst =<< M.lookup ctor kinds
 
 -- | Replace fully applied type synonyms
+{-# SPECIALIZE replaceAllTypeSynonyms :: SourceType -> Check SourceType #-}
 replaceAllTypeSynonyms :: (e ~ MultipleErrors, MonadState CheckState m, MonadError e m) => SourceType -> m SourceType
 replaceAllTypeSynonyms d = do
   env <- getEnv

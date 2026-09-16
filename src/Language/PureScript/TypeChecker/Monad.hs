@@ -11,6 +11,7 @@ import Control.Arrow (second)
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify)
 import Control.Monad (forM_, guard, join, when, (<=<))
+import Control.Monad.Supply (SupplyT)
 import Control.Monad.Writer.Class (MonadWriter(..), censor)
 
 import Data.Maybe (fromMaybe)
@@ -28,7 +29,14 @@ import Language.PureScript.Pretty.Types (prettyPrintType)
 import Language.PureScript.Pretty.Values (prettyPrintValue)
 import Language.PureScript.TypeClassDictionaries (NamedDict, TypeClassDictionaryInScope(..))
 import Language.PureScript.Types (Constraint(..), SourceType, Type(..), srcKindedType, srcTypeVar)
+import Language.PureScript.Make.Monad (Make)
 import Text.PrettyPrint.Boxes (render)
+
+-- | Concrete monad for the real compiler's type checker. Kept separate from
+-- 'TypeSearch', which runs shared type-checking logic (unification,
+-- entailment) under a different, pure stack for IDE type search -- those
+-- shared functions stay polymorphic and are 'SPECIALIZE'd for both.
+type Check = StateT CheckState (SupplyT Make)
 
 newtype UnkLevel = UnkLevel (NEL.NonEmpty Unknown)
   deriving (Eq, Show)
@@ -157,6 +165,7 @@ withScopedTypeVars mn ks ma = do
       tell . errorMessage $ ShadowedTypeVar name
   bindTypes (M.fromList (map (\(name, k) -> (Qualified (ByModuleName mn) (ProperName name), (k, ScopedTypeVar))) ks)) ma
 
+{-# SPECIALIZE withErrorMessageHint :: ErrorMessageHint -> Check a -> Check a #-}
 withErrorMessageHint
   :: (MonadState CheckState m, MonadError MultipleErrors m)
   => ErrorMessageHint
@@ -251,6 +260,7 @@ bindLocalTypeVariables moduleName bindings =
   bindTypes (M.fromList $ flip map bindings $ \(pn, kind) -> (Qualified (ByModuleName moduleName) pn, (kind, LocalTypeVariable)))
 
 -- | Update the visibility of all names to Defined
+{-# SPECIALIZE makeBindingGroupVisible :: Check () #-}
 makeBindingGroupVisible :: (MonadState CheckState m) => m ()
 makeBindingGroupVisible = modifyEnv $ \e -> e { names = M.map (\(ty, nk, _) -> (ty, nk, Defined)) (names e) }
 

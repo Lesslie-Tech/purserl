@@ -31,7 +31,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment qualified as E
 import Language.PureScript.Errors (ErrorMessageHint(..), MultipleErrors, SimpleErrorMessage(..), SourceAnn, errorMessage, internalCompilerError, onErrorMessages, rethrow, warnWithPosition, withoutPosition, safst)
 import Language.PureScript.TypeChecker.Kinds (elaborateKind, instantiateKind, unifyKinds')
-import Language.PureScript.TypeChecker.Monad (CheckState(..), Substitution(..), UnkLevel(..), Unknown, getLocalContext, guardWith, lookupUnkName, withErrorMessageHint)
+import Language.PureScript.TypeChecker.Monad (Check, CheckState(..), Substitution(..), UnkLevel(..), Unknown, getLocalContext, guardWith, lookupUnkName, withErrorMessageHint)
 import Language.PureScript.TypeChecker.Skolems (newSkolemConstant, skolemize)
 import Language.PureScript.Types (Constraint(..), pattern REmptyKinded, RowListItem(..), SourceType, Type(..), WildcardData(..), alignRowsWith, everythingOnTypes, everywhereOnTypes, everywhereOnTypesM, getAnnForType, mkForAll, rowFromList, srcTUnknown)
 
@@ -109,6 +109,7 @@ unknownsInType t = everythingOnTypes (.) go t []
   go _ = id
 
 -- | Unify two types, updating the current substitution
+{-# SPECIALIZE unifyTypes :: SourceType -> SourceType -> Check () #-}
 unifyTypes :: (MonadError MultipleErrors m, MonadState CheckState m) => SourceType -> SourceType -> m ()
 unifyTypes t1 t2 = do
   sub <- gets checkSubstitution
@@ -163,6 +164,7 @@ unifyTypes t1 t2 = do
 --
 -- Common labels are identified and unified. Remaining labels and types are unified with a
 -- trailing row unification variable, if appropriate.
+{-# SPECIALIZE unifyRows :: SourceType -> SourceType -> Check () #-}
 unifyRows :: forall m. (MonadError MultipleErrors m, MonadState CheckState m) => SourceType -> SourceType -> m ()
 unifyRows r1 r2 = sequence_ matches *> uncurry unifyTails rest where
   unifyTypesWithLabel l t1 t2 = withErrorMessageHint (ErrorInRowLabel l) $ unifyTypes t1 t2
@@ -229,6 +231,7 @@ rowItemsMapToList m =
 -- |
 -- Replace type wildcards with unknowns
 --
+{-# SPECIALIZE replaceTypeWildcards :: SourceType -> Check SourceType #-}
 replaceTypeWildcards :: (MonadWriter MultipleErrors m, MonadState CheckState m) => SourceType -> m SourceType
 replaceTypeWildcards = everywhereOnTypesM replace
   where
