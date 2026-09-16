@@ -26,7 +26,7 @@ on:
       - stack.yaml
       - stack.yaml.lock
       - update-changelog.hs
-      - weeder.dhall
+      - weeder.toml
 
 defaults:
   run:
@@ -98,6 +98,11 @@ jobs:
 
       - id: "build"
         run: "ci/fix-home ci/build.sh"
+
+      - name: "(Linux only) Restore workspace read permissions"
+        if: "${{ startsWith(matrix.os, 'ubuntu') }}"
+        run: |
+          chmod -R a+rX .
 
       # - name: "(Linux only) Glob tests"
       #   if: "${{ startsWith(matrix.os, 'ubuntu') }}"
