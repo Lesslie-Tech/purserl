@@ -61,12 +61,13 @@ optimize exports es = do -- removeUnusedFuns exports <$> do
   es
     -- & map (inlineCommonOperators EC.effect EC.effectDictionaries expander)
     -- & map (go)
-    & map
+    & mapM
       (\b ->
         b
           & inlineCommonOperators EC.effect EC.effectDictionaries id
           & specialize
           & untilFix go
+          & inlineCommonFnsM id
       )
     -- & Inliner.inline
     -- & map (untilFix go)
@@ -75,7 +76,6 @@ optimize exports es = do -- removeUnusedFuns exports <$> do
     -- & Inliner.inline
     -- & map (untilFix go)
     -- & map addMemoizeAnnotations
-    & pure
   -- pure $ es4
 
   where

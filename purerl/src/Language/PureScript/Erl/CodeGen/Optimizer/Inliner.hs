@@ -193,8 +193,8 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
 
         fn
           | isFn (EC.dataUnit, EC.unit) fn -> EAtomLiteral $ Atom Nothing "unit"
-          | isFn (EC.erlDataMap, EC.empty) fn -> EMapLiteral []
-          | isFn (EC.erlDataListTypes, EC.nil) fn -> EListLiteral []
+          | isFn ("map@ps", "empty") fn -> EMapLiteral []
+          | isFn ("list@ps", "empty") fn -> EListLiteral []
 
         -- [drathier]: constant folding
         EBinary ArrayConcat (EArrayLiteral a) (EArrayLiteral b) -> EArrayLiteral (a <> b)
@@ -499,12 +499,12 @@ inlineCommonFnsM :: forall m. (Monad m, MonadSupply m) => (Erl -> Erl) -> Erl ->
 inlineCommonFnsM _expander =
   everywhereOnErlTopDownM $
     applyAllM
-      [ inlineNonClassFunction3 (EC.dataMaybe, EC.maybe) $ \x f -> inlineMaybe x (\z -> EApp RegularApp f [z]),
-        inlineNonClassFunction3 (EC.dataMaybe, EC.maybe') $ \fx f -> inlineMaybe (applyUnit fx) (\z -> EApp RegularApp f [z]),
-        inlineNonClassFunction (EC.dataMaybe, EC.fromMaybe) $ \x -> inlineMaybe x id,
-        inlineNonClassFunction3 (EC.dataEither, EC.either) $ \l r -> inlineEither (\z -> EApp RegularApp l [z]) (\z -> EApp RegularApp r [z]),
-        inlineNonClassFunction (EC.dataEither, EC.fromLeft) $ \r -> inlineEither id (const r),
-        inlineNonClassFunction (EC.dataEither, EC.fromRight) $ \l -> inlineEither (const l) id
+      [ inlineNonClassFunction3 ("maybe@ps", "maybe") $ \x f -> inlineMaybe x (\z -> EApp RegularApp f [z]),
+        inlineNonClassFunction3 ("maybe@ps", "maybe'") $ \fx f -> inlineMaybe (applyUnit fx) (\z -> EApp RegularApp f [z]),
+        inlineNonClassFunction ("maybe@ps", "withDefault") $ \x -> inlineMaybe x id,
+        inlineNonClassFunction3 ("either@ps", "either") $ \l r -> inlineEither (\z -> EApp RegularApp l [z]) (\z -> EApp RegularApp r [z]),
+        inlineNonClassFunction ("either@ps", "fromLeft") $ \r -> inlineEither id (const r),
+        inlineNonClassFunction ("either@ps", "fromRight") $ \l -> inlineEither (const l) id
       ]
   where
     applyUnit (EFun1 _ x e)
@@ -556,13 +556,29 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
     applyAll
       [ binaryOps expander,
         unaryOps expander,
-        inlineNonClassFunction (EC.erlDataListTypes, EC.cons) $ \x xs -> EListCons [x] xs,
-        inlineNonClassUnaryFunction (EC.erlDataListTypes, EC.null) $ \x -> EBinary EqualTo (EListLiteral []) x,
-        inlineNonClassUnaryFunction (EC.erlDataList, EC.singleton) $ \x -> EListLiteral [x],
+        inlineNonClassFunction ("list@ps", "cons") $ \x xs -> EListCons [x] xs,
+        inlineNonClassUnaryFunction ("list@ps", "isEmpty") $ \x -> EBinary EqualTo (EListLiteral []) x,
+        inlineNonClassUnaryFunction ("list@ps", "isNotEmpty") $ \x -> EBinary NotEqualTo (EListLiteral []) x,
+        inlineNonClassUnaryFunction ("list@ps", "singleton") $ \x -> EListLiteral [x],
+        inlineNonClassFunction ("list@ps", "append") $ \xs ys -> EBinary ListConcat xs ys,
+        inlineNonClassUnaryFunction ("list@ps", "length") $ \x -> EApp RegularApp erlangLength [x],
+        inlineNonClassUnaryFunction ("list@ps", "reverse") $ \x -> EApp RegularApp erlangListsReverse [x],
+        inlineNonClassUnaryFunction ("list@ps", "concat") $ \x -> EApp RegularApp erlangListsAppend1 [x],
+        inlineNonClassUnaryFunction ("list@ps", "unsafeHead") $ \x -> EApp RegularApp erlangHd [x],
+        inlineArrayFromList,
+        inlineNonClassUnaryFunction ("array@ps", "size") $ \x -> EApp RegularApp erlangArraySize [x],
+        inlineNonClassUnaryFunction ("map@ps", "isEmpty") $ \x -> EBinary EqualTo (EMapLiteral []) x,
+        inlineNonClassUnaryFunction ("map@ps", "isNotEmpty") $ \x -> EBinary NotEqualTo (EMapLiteral []) x,
+        inlineNonClassFunction ("map@ps", "member") $ \k m -> EApp RegularApp erlangMapsIsKey [k, m],
+        inlineNonClassFunction ("map@ps", "delete") $ \k m -> EApp RegularApp erlangMapsRemove [k, m],
+        inlineNonClassUnaryFunction ("map@ps", "keys") $ \m -> EApp RegularApp erlangMapsKeys [m],
+        inlineNonClassUnaryFunction ("map@ps", "values") $ \m -> EApp RegularApp erlangMapsValues [m],
+        inlineNonClassUnaryFunction ("map@ps", "size") $ \m -> EApp RegularApp erlangMapsSize [m],
+        inlineArrayToList,
         inlineErlAtom,
         unaryFn (effectModule, edFunctor) functorVoid id,
         inlineNonClassUnaryFunction (EC.unsafeCoerceMod, EC.unsafeCoerce) id,
-        inlineNonClassUnaryFunction (EC.dataInt, EC.toNumber) $ \x -> EApp RegularApp erlangFloat [x],
+        inlineNonClassUnaryFunction ("int@ps", "toNumber") $ \x -> EApp RegularApp erlangFloat [x],
         unaryUndefTCFn (EC.safeCoerceMod, EC.coerce) id,
         unaryUndefTCFn (EC.dataNewtype, EC.unwrap) id,
         unaryUndefTCFn (EC.dataNewtype, EC.wrap) id,
@@ -618,6 +634,46 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         convert :: Erl -> Erl
         convert (EApp _ op' [x]) | isModFn modFn op' = f x
         convert (EApp _ op' [x]) | isUncurriedFn' modFn op' = f x
+        convert other = other
+
+    -- Local Array/List modules wrap array:to_list/1 in an FFI hop purely for
+    -- the array<->list conversion; skip straight to the OTP call, and skip
+    -- the conversion entirely when the source is already a literal array.
+    isArrayToListCall :: Erl -> Bool
+    isArrayToListCall op' =
+      isModFn ("array@ps", "toList") op'
+        || isUncurriedFn' ("array@ps", "toList") op'
+        || isModFn ("list@ps", "fromArray") op'
+        || isUncurriedFn' ("list@ps", "fromArray") op'
+
+    -- Note: `f $ x` / `x # f` (Data.Function.apply/applyFlipped) are already
+    -- beta-reduced to a plain call at the CoreFn level (see
+    -- optimizeDataFunctionApply in Language.PureScript.CoreFn.Optimizer),
+    -- long before this pass runs, so no special-casing is needed for them here.
+    inlineArrayToList :: Erl -> Erl
+    inlineArrayToList = convert
+      where
+        convert :: Erl -> Erl
+        convert (EApp _ op' [EArrayLiteral es]) | isArrayToListCall op' = EListLiteral es
+        convert (EApp _ op' [x]) | isArrayToListCall op' = EApp RegularApp erlangArrayToList [x]
+        convert other = other
+
+    -- The reverse conversion (list -> array) has no equivalent literal fold:
+    -- EArrayLiteral es already pretty-prints to exactly array:from_list([es...])
+    -- (Pretty.hs), so there's no second operation to cancel out the way
+    -- toList/fromArray on a literal array does -- just skip the FFI hop.
+    isArrayFromListCall :: Erl -> Bool
+    isArrayFromListCall op' =
+      isModFn ("array@ps", "fromList") op'
+        || isUncurriedFn' ("array@ps", "fromList") op'
+        || isModFn ("list@ps", "toArray") op'
+        || isUncurriedFn' ("list@ps", "toArray") op'
+
+    inlineArrayFromList :: Erl -> Erl
+    inlineArrayFromList = convert
+      where
+        convert :: Erl -> Erl
+        convert (EApp _ op' [x]) | isArrayFromListCall op' = EApp RegularApp erlangArrayFromList [x]
         convert other = other
 
     inlineErlAtom :: Erl -> Erl
@@ -914,3 +970,41 @@ erlangMax = EAtomLiteral (Atom (Just "erlang") "max")
 
 erlangFloat :: Erl
 erlangFloat = EAtomLiteral (Atom (Just "erlang") "float")
+
+erlangArrayToList :: Erl
+erlangArrayToList = EAtomLiteral (Atom (Just "array") "to_list")
+
+erlangArrayFromList :: Erl
+erlangArrayFromList = EAtomLiteral (Atom (Just "array") "from_list")
+
+erlangArraySize :: Erl
+erlangArraySize = EAtomLiteral (Atom (Just "array") "size")
+
+erlangLength :: Erl
+erlangLength = EAtomLiteral (Atom (Just "erlang") "length")
+
+erlangHd :: Erl
+erlangHd = EAtomLiteral (Atom (Just "erlang") "hd")
+
+erlangListsReverse :: Erl
+erlangListsReverse = EAtomLiteral (Atom (Just "lists") "reverse")
+
+-- | Flattens a list of lists (arity 1) -- distinct from the binary ListConcat
+-- operator (arity 2, used for List.append) despite the shared "append" name.
+erlangListsAppend1 :: Erl
+erlangListsAppend1 = EAtomLiteral (Atom (Just "lists") "append")
+
+erlangMapsIsKey :: Erl
+erlangMapsIsKey = EAtomLiteral (Atom (Just "maps") "is_key")
+
+erlangMapsRemove :: Erl
+erlangMapsRemove = EAtomLiteral (Atom (Just "maps") "remove")
+
+erlangMapsKeys :: Erl
+erlangMapsKeys = EAtomLiteral (Atom (Just "maps") "keys")
+
+erlangMapsValues :: Erl
+erlangMapsValues = EAtomLiteral (Atom (Just "maps") "values")
+
+erlangMapsSize :: Erl
+erlangMapsSize = EAtomLiteral (Atom (Just "maps") "size")
