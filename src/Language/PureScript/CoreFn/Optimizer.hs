@@ -218,6 +218,17 @@ lookupIdent ident = do
   pure $ fromMaybe ident ((if isCtor then Just (Ident (prefix <> runIdent ident)) else Nothing) <|> Map.lookup ident env)
   -- pure ident
 
+-- Render a per-bind-local counter as a short, rolling letter name: A, B, ..., Z, AA, AB, ...
+-- (bijective base-26, like spreadsheet column names). The counter alone already guarantees
+-- uniqueness within a top-level bind's rename pass, so no other qualifier is needed.
+counterToLetters :: Int -> Text
+counterToLetters n = go (n + 1) []
+  where
+  go 0 acc = T.pack acc
+  go k acc =
+    let (k', r) = (k - 1) `divMod` 26
+    in go k' (chr (ord 'A' + r) : acc)
+
 -- Extend the environment with a new mapping for a bound variable. Returns the input Ident for convenience in <$> <*> chains. The name will be replaced when the inner ident is processed.
 extendEnv :: Ident -> State RenameState Ident
 extendEnv old = do
@@ -227,7 +238,7 @@ extendEnv old = do
       -- (\res -> Debug.trace (show ("extendEnv ignored", old, "res", res)) res) <$>
       pure old
     False -> do
-      let new = Ident (prefix <> runIdent old <> T.pack ("_" ++ show counter))
+      let new = Ident (counterToLetters counter <> "_" <> runIdent old)
       -- (\res -> Debug.trace (show ("extendEnv change", old, counter, new, "res", res)) res) <$>
       do
         -- Debug.traceM (show ("CoreFn.Optimizer.extendEnv", old, new, counter, env))
