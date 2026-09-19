@@ -349,11 +349,10 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
         topBindToErl b
       ) decls
     reexports <- traverse reExportForeign foreigns
-    let exportTypes = mapMaybe (\(_, _, t, _) -> t) reexports
-        foreignSpecs = map (\(ident, ty) -> ESpec (qualifiedToErl' mn ForeignModule ident) (replaceVars ty)) exportTypes
+    let foreignSpecs = []
 
-        (exports, erlDecls, typeEnv) = concatRes $ res <> map (\(a, b, _, d) -> (a, b, d)) reexports
-        namedSpecs = map (\(name, (args, ty)) -> EType (Atom Nothing name) args ty) $ M.toList typeEnv
+        (exports, erlDecls, _typeEnv) = concatRes $ res <> map (\(a, b, _, d) -> (a, b, d)) reexports
+        namedSpecs = []
 
     traverse_ checkExport foreigns
     let usedFfi = Set.fromList $ map runIdent' foreigns

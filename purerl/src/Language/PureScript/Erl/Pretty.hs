@@ -71,17 +71,7 @@ literals = mkPattern' match
     , prettyPrintErl' e
     ]
 
-  match (EFunctionDef t ss x xs e) = mconcat <$> sequence (
-    (case ss of
-      (Just SourceSpan { spanName = spanName, spanStart = spanStart }) ->
-        [ do
-            tf <- gets transformFilename
-            return $ emit $ "%-file(\"" <> T.pack (tf (T.unpack spanName)) <> "\", " <> T.pack (show $ sourcePosLine spanStart) <> ").\n"
-        ]
-      _ -> [])
-    <>
-    [ return $ printFunTy (Just $ length xs) x t, return $ emit ".\n" ]
-    <>
+  match (EFunctionDef _t _ss x xs e) = mconcat <$> sequence (
     -- [ return $ emit $ runAtom x <> "(" <> intercalate "," (map escapeQuotedVar xs) <> ") -> erlang:display({drathier_call3, ?MODULE, ?FUNCTION_NAME, ?LINE})," ]
     [ return $ emit $ runAtom x <> "(" <> intercalate "," (map escapeQuotedVar xs) <> ") -> " ]
     <>
