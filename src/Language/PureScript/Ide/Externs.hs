@@ -11,9 +11,9 @@ import Codec.CBOR.Term as Term
 import Control.DeepSeq (force)
 import Control.Lens (preview, view, (&), (^.))
 import "monad-logger" Control.Monad.Logger (MonadLogger, logErrorN)
-import Data.Version (showVersion)
 import Data.Text qualified as Text
 import Language.PureScript qualified as P
+import Language.PureScript.Erl qualified as Purserl
 import Language.PureScript.Make.Monad qualified as Make
 import Language.PureScript.Interning (intern)
 import Language.PureScript.Ide.Error (IdeError (..))
@@ -50,7 +50,7 @@ readExternFile fp = do
         _ ->
           throwError (GeneralError ("Parsing the extern at: " <> toS fp <> " failed"))
     where
-      version = toS (showVersion P.version)
+      version = Purserl.versionString
 
 convertExterns :: P.ExternsFile -> ([IdeDeclarationAnn], [(P.ModuleName, P.DeclarationRef)])
 convertExterns ef =

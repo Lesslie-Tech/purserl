@@ -31,10 +31,10 @@ import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.List (foldl', find, intercalate)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Version (showVersion)
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as M
 import Data.Map.Merge.Strict qualified as M
+import Language.PureScript.Erl qualified as Purserl
 import Language.PureScript.Make.Cache qualified as Cache
 import GHC.Generics (Generic)
 
@@ -47,8 +47,6 @@ import Language.PureScript.Environment
 import Language.PureScript.TypeClassDictionaries (NamedDict, TypeClassDictionaryInScope(..))
 -- import Language.PureScript.Types (SourceConstraint, SourceType, srcInstanceType)
 import Language.PureScript.Types
-
-import Paths_purescript as Paths
 
 import Debug.Trace
 import PrettyPrint
@@ -256,7 +254,7 @@ instance Intern ExternsDeclaration
 -- version.
 externsIsCurrentVersion :: ExternsFile -> Bool
 externsIsCurrentVersion ef =
-  T.unpack (efVersion ef) == showVersion Paths.version
+  efVersion ef == Purserl.versionString
 
 -- | Convert an externs file back into a module
 applyExternsFileToEnvironment :: ExternsFile -> Environment -> Environment
@@ -1689,7 +1687,7 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
   -- let !_ = trace (sShow ("###moduleToExternsFile efOurCacheShapes", mn, efOurCacheShapes)) () in
   ExternsFile{..}
   where
-  efVersion       = T.pack (showVersion Paths.version)
+  efVersion       = Purserl.versionString
   efModuleName    = mn
   efExports       = map renameRef exports
   efImports       = mapMaybe importDecl decls

@@ -5,8 +5,8 @@ module Version where
 
 import Prelude
 
-import Data.Version (showVersion)
-import Paths_purescript as Paths
+import Data.Text qualified as T
+import Language.PureScript.Erl qualified as Purserl
 
 #ifndef RELEASE
 import Development.GitRev qualified as GitRev
@@ -20,7 +20,7 @@ prerelease :: String
 prerelease = ""
 
 versionString :: String
-versionString = showVersion Paths.version ++ prerelease ++ extra
+versionString = T.unpack Purserl.versionString ++ prerelease ++ extra
   where
 #ifdef RELEASE
   extra = ""
