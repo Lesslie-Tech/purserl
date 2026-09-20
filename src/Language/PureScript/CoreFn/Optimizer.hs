@@ -10,12 +10,13 @@ import Language.PureScript.CoreFn.Expr
     ( Bind(..),
       Expr(..),
       CaseAlternative(..),
-      bindIdents )
+      bindIdents,
+      extractAnn )
 import Language.PureScript.CoreFn.Module (Module(..))
 import Language.PureScript.CoreFn.Traversals (everywhereOnValues, traverseCoreFn)
 import Language.PureScript.Constants.Libs qualified as C
 import System.IO.Unsafe
-import Language.PureScript.Names (Ident(..), runIdent, ModuleName(..), QualifiedBy(..), runModuleName, ProperName, ProperNameType(..), Qualified(..))
+import Language.PureScript.Names (Ident(..), runIdent, ModuleName(..), QualifiedBy(..), pattern ByNullSourcePos, runModuleName, ProperName, ProperNameType(..), Qualified(..), freshIdent)
 import Control.DeepSeq (force)
 import Control.Monad.Trans.RWS.Strict (evalRWST, asks, local, RWST)
 import Control.Monad.State.Strict
@@ -40,16 +41,75 @@ import qualified Language.PureScript.Constants.Prim as C
 --
 optimizeCoreFn :: Module Ann -> Supply (Module Ann)
 -- optimizeCoreFn m = pure m
-optimizeCoreFn m =
-  fmap (\md -> m {moduleDecls = md}) $
-  -- Debug.trace (show ("optimizeCoreFn1", "dummy")) $
-  optimizeCommonSubexpressions (moduleName m) $
-  -- Debug.trace (show ("optimizeCoreFn2", "dummy")) $
-  optimizeModuleDecls (moduleName m) (moduleForeign m) $
-  --
-  translateBacktrace (moduleName m) (moduleForeign m) $
-  -- Debug.trace (show ("optimizeCoreFn3", "dummy")) $
-  moduleDecls m
+optimizeCoreFn m = do
+  -- Expand `composeFlippedF`/`>>>` chains into real `Abs`
+  -- nodes first, upstream of everything else, so every later pass (arity
+  -- counting, constructor-application detection, CSE, purerl's own
+  -- Erlang-level optimizer, ...) treats a point-free composition exactly as
+  -- if it had been hand-written as a lambda -- see expandComposeFlippedF.
+  decls0 <- expandComposeFlippedF (moduleDecls m)
+  let decls1 = translateBacktrace (moduleName m) (moduleForeign m) decls0
+      decls2 = optimizeModuleDecls (moduleName m) (moduleForeign m) decls1
+  decls3 <- optimizeCommonSubexpressions (moduleName m) decls2
+  pure m {moduleDecls = decls3}
+
+-- | `Control.Semigroupoid.composeFlippedF` (aliased as `>>>`)
+-- is a plain, non-typeclass function: `composeFlippedF f g x = g (f x)`.
+-- Used point-free (`f >>> g`, with no third argument in sight), it's just an
+-- ordinary 2-argument partial application at the CoreFn level -- nothing
+-- marks it as "this value is secretly a function" the way a literal
+-- `\x -> ...` would be, so passes that key off an actual `Abs` (top-level
+-- arity counting, constructor-application detection for e.g. `f >>> Just`,
+-- etc.) miss it entirely, and it has to be hunted down again, ad hoc, in
+-- every later pass that cares (as happened in purerl's own Erlang-level
+-- optimizer). Rewriting it into a real `Abs` here fixes that at the root.
+composeFlippedFIdent :: Qualified Ident
+composeFlippedFIdent = Qualified (ByModuleName (ModuleName "Control.Semigroupoid")) (Ident "composeFlippedF")
+
+matchComposeFlippedF2 :: Expr Ann -> Maybe (Expr Ann, Expr Ann)
+matchComposeFlippedF2 (App _ (App _ (Var _ fn) f) g)
+  | fn == composeFlippedFIdent = Just (f, g)
+matchComposeFlippedF2 _ = Nothing
+
+-- | >>> is infixr, so a nested chain only ever shows up on the right
+-- (f1 >>> (f2 >>> f3)); explicit left-nesting via parens is also unfolded
+-- here for generality. Flattening the whole chain up front (rather than
+-- letting each >>> turn into its own nested lambda one at a time) means
+-- `f1 >>> f2 >>> ... >>> fn` becomes a single `\x -> fn (... (f1 x) ...)`,
+-- not n-1 lambdas each immediately invoking the next.
+collectComposeChain :: Expr Ann -> [Expr Ann]
+collectComposeChain e
+  | Just (f, g) <- matchComposeFlippedF2 e = collectComposeChain f <> collectComposeChain g
+  | otherwise = [e]
+
+expandComposeFlippedF :: [Bind Ann] -> Supply [Bind Ann]
+expandComposeFlippedF = traverse goBind
+  where
+    goExpr :: Expr Ann -> Supply (Expr Ann)
+    goExpr e
+      | Just (f, g) <- matchComposeFlippedF2 e = do
+          -- Collect against the RAW (not-yet-recursed) subtree so a nested
+          -- chain is caught here rather than after it's already become a
+          -- lambda; each collected piece is then processed via `goExpr` in
+          -- case it independently contains further composeFlippedF usage
+          -- buried inside it (not at its own head position).
+          let chain = collectComposeChain f <> collectComposeChain g
+          chain' <- traverse goExpr chain
+          x <- freshIdent "composeArg"
+          let ann = extractAnn e
+              xVar = Var ann (Qualified ByNullSourcePos x)
+              body = foldl' (\acc fi -> App ann fi acc) xVar chain'
+          pure $ Abs ann x body
+      | otherwise = goExprOneLevel e
+
+    goBinder :: Binder Ann -> Supply (Binder Ann)
+    goBinder = goBinderOneLevel
+
+    goCaseAlt :: CaseAlternative Ann -> Supply (CaseAlternative Ann)
+    goCaseAlt = goCaseAltOneLevel
+
+    (goBind, goExprOneLevel, goBinderOneLevel, goCaseAltOneLevel) =
+      traverseCoreFn goBind goExpr goBinder goCaseAlt
 
 translateBacktrace :: ModuleName -> [Ident] -> [Bind Ann] -> [Bind Ann]
 translateBacktrace modu foreignIdents binds =
