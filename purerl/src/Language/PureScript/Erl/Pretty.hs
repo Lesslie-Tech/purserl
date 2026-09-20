@@ -352,7 +352,7 @@ prettyPrintBlockBody es = do
 -- use in compiled Erlang output.
 --
 prettyPrintStringErl :: PSString -> Text
-prettyPrintStringErl s = "<<" <> utf8Binary s <> ">>"
+prettyPrintStringErl s = "~\"" <> utf8BinaryContent s <> "\""
 
 app :: (Emit gen) => Pattern PrinterState Erl (gen, Erl)
 app = mkPattern' match

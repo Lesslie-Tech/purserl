@@ -14,7 +14,7 @@ module Language.PureScript.Erl.CodeGen.Common
 , identToAtomName
 , identToVar
 , nameIsErlReserved
-, utf8Binary
+, utf8BinaryContent
 , encodeChar
 , freshNameErl
 , freshNameErl'
@@ -71,8 +71,12 @@ hex width c =
   let hs = showHex (fromEnum c) "" in
   pack (replicate (width - length hs) '0' <> hs)
 
-utf8Binary :: PSString -> Text
-utf8Binary str = "\"" <> T.concat (convertChar <$> decodeStringEither str) <> "\"/utf8"
+-- | The escaped body of a string literal, for embedding inside a `~"..."`
+-- sigil (which produces a UTF-8 binary, matching the old `<<"..."/utf8>>`
+-- form byte-for-byte -- confirmed empirically, since sigils don't add any
+-- escaping rules beyond the ones already handled here).
+utf8BinaryContent :: PSString -> Text
+utf8BinaryContent str = T.concat (convertChar <$> decodeStringEither str)
   where
     convertChar :: Either Word16 Char -> Text
     convertChar (Left _) = "\\x{fffd}"
