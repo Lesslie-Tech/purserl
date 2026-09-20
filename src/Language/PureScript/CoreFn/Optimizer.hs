@@ -12,7 +12,7 @@ import Language.PureScript.CoreFn.Expr
       CaseAlternative(..),
       bindIdents )
 import Language.PureScript.CoreFn.Module (Module(..))
-import Language.PureScript.CoreFn.Traversals (everywhereOnValues, traverseCoreFn, traverseCoreFnFull)
+import Language.PureScript.CoreFn.Traversals (everywhereOnValues, traverseCoreFn)
 import Language.PureScript.Constants.Libs qualified as C
 import System.IO.Unsafe
 import Language.PureScript.Names (Ident(..), runIdent, ModuleName(..), QualifiedBy(..), runModuleName, ProperName, ProperNameType(..), Qualified(..))

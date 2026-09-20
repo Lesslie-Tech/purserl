@@ -9,7 +9,7 @@ import Data.Text (Text)
 import Language.PureScript.CST.Errors (ParserError, ParserErrorInfo(..), ParserErrorType(..), ParserWarning, ParserWarningType)
 import Language.PureScript.CST.Layout (LayoutStack)
 import Language.PureScript.CST.Positions (widen)
-import Language.PureScript.CST.Types (Comment, LineFeed, SourcePos(..), SourceRange(..), SourceToken(..), Token, TokenAnn(..))
+import Language.PureScript.CST.Types (Comment, LineFeed, SourcePos(..), SourceRange(..), SourceToken(..), TokenAnn(..))
 
 type LexResult = Either (LexState, ParserError) SourceToken
 
@@ -147,32 +147,6 @@ oneOf parsers = Parser $ \st kerr ksucc -> do
   case foldr1 go $ runParser (st { parserErrors = [] }) <$> parsers of
     (st', Left errs) -> kerr (st' { parserErrors = prevErrs <> NE.tail errs}) $ NE.head errs
     (st', Right res) -> ksucc (st' { parserErrors = prevErrs }) res
-
-manyDelimited :: Token -> Token -> Token -> Parser a -> Parser [a]
-manyDelimited open close sep p = do
-  _   <- token open
-  res <- go1
-  _   <- token close
-  pure res
-  where
-  go1 =
-    oneOf $ NE.fromList
-      [ go2 . pure =<< p
-      , pure []
-      ]
-
-  go2 acc =
-    oneOf $ NE.fromList
-      [ token sep *> (go2 . (: acc) =<< p)
-      , pure (reverse acc)
-      ]
-
-token :: Token -> Parser SourceToken
-token t = do
-  t' <- munch
-  if t == tokValue t'
-    then pure t'
-    else parseError t'
 
 munch :: Parser SourceToken
 munch = Parser $ \state@ParserState {..} kerr ksucc ->

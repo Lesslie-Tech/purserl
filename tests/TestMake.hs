@@ -30,12 +30,11 @@ utcMidnightOnDate :: Integer -> Int -> Int -> UTCTime
 utcMidnightOnDate year month day = UTCTime (fromGregorian year month day) (secondsToDiffTime 0)
 
 -- ASSUMPTION[drathier]: we're assuming A < B < C < ... etc in the tests below
-timestampA, timestampB, timestampC, timestampD, timestampE :: UTCTime
+timestampA, timestampB, timestampC, timestampD :: UTCTime
 timestampA = utcMidnightOnDate 2019 1 1
 timestampB = utcMidnightOnDate 2019 1 2
 timestampC = utcMidnightOnDate 2019 1 3
 timestampD = utcMidnightOnDate 2019 1 4
-timestampE = utcMidnightOnDate 2019 1 5
 
 -- stack test --fast --ta '-m asdf'
 

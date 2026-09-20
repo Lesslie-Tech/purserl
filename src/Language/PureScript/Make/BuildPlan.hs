@@ -48,16 +48,7 @@ import Language.PureScript.Names (ModuleName, runModuleName)
 import Language.PureScript.Sugar.Names.Env (Env, primEnv)
 import System.Directory (getCurrentDirectory)
 import qualified Data.Text as T
-import Debug.Trace
-import PrettyPrint
 import Data.Foldable
-
-scratchpad = do
-  -- did any dep input file hashes change?
-  -- if so, did their hashes change?
-  -- inputInfo <- getInputTimestampsAndHashes moduleName
-  -- cacheChanged <- A.forConcurrently sortedModuleNames getRebuildStatusIsUpToDate
-  Just 42
 
 -- | The BuildPlan tracks information about our build progress, and holds all
 -- prebuilt modules for incremental builds.
@@ -227,24 +218,6 @@ markComplete2 ma@MakeActions{..} buildPlan moduleName oldExt result = do
             Just ExternsChanged
     )
 
-serialiseDbEq (ExternsFile efVersion1 efModuleName1 efExports1 efImports1 efFixities1 efTypeFixities1 efDeclarations1 efSourceSpan1 efUpstreamCacheShapes1 efOurCacheShapes1) mb =
-  case mb of
-    Nothing -> []
-    Just (ExternsFile efVersion2 efModuleName2 efExports2 efImports2 efFixities2 efTypeFixities2 efDeclarations2 efSourceSpan2 efUpstreamCacheShapes2 efOurCacheShapes2) ->
-      filter
-      (\(x, y) -> not y)
-      [ ("efVersion", serialise efVersion1 == serialise efVersion2)
-      , ("efModuleName", serialise efModuleName1 == serialise efModuleName2)
-      , ("efExports", serialise efExports1 == serialise efExports2)
-      , ("efImports", serialise efImports1 == serialise efImports2)
-      , ("efFixities", serialise efFixities1 == serialise efFixities2)
-      , ("efTypeFixities", serialise efTypeFixities1 == serialise efTypeFixities2)
-      , ("efDeclarations", serialise efDeclarations1 == serialise efDeclarations2)
-      , ("efSourceSpan", serialise efSourceSpan1 == serialise efSourceSpan2)
-      , ("efUpstreamCacheShapes", serialise efUpstreamCacheShapes1 == serialise efUpstreamCacheShapes2)
-      , ("efOurCacheShapes", serialise efOurCacheShapes1 == serialise efOurCacheShapes2)
-      ]
-
 -- | Whether or not the module with the given ModuleName needs to be rebuilt
 needsRebuild :: BuildPlan -> ModuleName -> Bool
 needsRebuild bp moduleName = M.member moduleName (bpBuildJobs bp)
@@ -366,13 +339,6 @@ instance Show CacheFilesAvailable where
       UpToDate _ -> "UpToDate.."
       SourceChanged -> "SourceChanged"
       DepChanged _ -> "DepChanged.."
-
-cfaPrebuilt :: CacheFilesAvailable -> Maybe Prebuilt
-cfaPrebuilt cfa =
-  case cfa of
-    DepChanged pb -> Just pb
-    SourceChanged -> Nothing
-    UpToDate pb -> Just pb
 
 -- | Gets the the build result for a given module name independent of whether it
 -- was rebuilt or prebuilt. Prebuilt modules always return no warnings.

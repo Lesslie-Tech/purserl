@@ -214,7 +214,6 @@ library
     Language.PureScript.AST.Binders
     Language.PureScript.AST.Declarations
     Language.PureScript.AST.Declarations.ChainId
-    Language.PureScript.AST.Exported
     Language.PureScript.AST.Literals
     Language.PureScript.AST.Operators
     Language.PureScript.AST.SourcePos
@@ -348,8 +347,6 @@ library
     Language.PureScript.Erl.CodeGen.Common
     Language.PureScript.Erl.CodeGen.Constants
     Language.PureScript.Erl.CodeGen.Constants.PureScriptModules
-    Language.PureScript.Erl.CodeGen.Inliner
-    Language.PureScript.Erl.CodeGen.InlineLocal
     Language.PureScript.Erl.CodeGen.Optimizer
     Language.PureScript.Erl.CodeGen.Optimizer.Blocks
     Language.PureScript.Erl.CodeGen.Optimizer.Common
@@ -360,9 +357,7 @@ library
     Language.PureScript.Erl.CodeGen.Optimizer.Unused
     Language.PureScript.Erl.CodeGen.Types
     Language.PureScript.Erl.Errors
-    Language.PureScript.Erl.Errors.JSON
     Language.PureScript.Erl.Errors.Types
-    Language.PureScript.Erl.Make
     Language.PureScript.Erl.Make.Monad
     Language.PureScript.Erl.Parser
     Language.PureScript.Erl.Pretty

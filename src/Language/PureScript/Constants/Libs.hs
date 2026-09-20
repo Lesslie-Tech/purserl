@@ -5,51 +5,7 @@ module Language.PureScript.Constants.Libs where
 
 import Protolude qualified as P
 
-import Data.String (IsString)
-import Language.PureScript.PSString (PSString)
 import Language.PureScript.Constants.TH qualified as TH
-
--- Core lib values
-
-stRefValue :: forall a. IsString a => a
-stRefValue = "value"
-
--- Type Class Dictionary Names
-
-data EffectDictionaries = EffectDictionaries
-  { edApplicativeDict :: PSString
-  , edBindDict :: PSString
-  , edMonadDict :: PSString
-  , edWhile :: PSString
-  , edUntil :: PSString
-  }
-
-effDictionaries :: EffectDictionaries
-effDictionaries = EffectDictionaries
-  { edApplicativeDict = "applicativeEff"
-  , edBindDict = "bindEff"
-  , edMonadDict = "monadEff"
-  , edWhile = "whileE"
-  , edUntil = "untilE"
-  }
-
-effectDictionaries :: EffectDictionaries
-effectDictionaries = EffectDictionaries
-  { edApplicativeDict = "applicativeEffect"
-  , edBindDict = "bindEffect"
-  , edMonadDict = "monadEffect"
-  , edWhile = "whileE"
-  , edUntil = "untilE"
-  }
-
-stDictionaries :: EffectDictionaries
-stDictionaries = EffectDictionaries
-  { edApplicativeDict = "applicativeST"
-  , edBindDict = "bindST"
-  , edMonadDict = "monadST"
-  , edWhile = "while"
-  , edUntil = "until"
-  }
 
 $(TH.declare do
 

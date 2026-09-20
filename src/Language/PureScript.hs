@@ -3,13 +3,10 @@
 --
 module Language.PureScript
   ( module P
-  , version
   ) where
 
 
 import Control.Monad.Supply as P
-
-import Data.Version (Version)
 
 import Language.PureScript.AST as P
 import Language.PureScript.Comments as P
@@ -29,8 +26,3 @@ import Language.PureScript.Roles as P
 import Language.PureScript.Sugar as P
 import Language.PureScript.TypeChecker as P
 import Language.PureScript.Types as P
-
-import Paths_purescript qualified as Paths
-
-version :: Version
-version = Paths.version

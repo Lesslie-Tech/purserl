@@ -36,8 +36,6 @@ import Language.PureScript.Erl.CodeGen.Optimizer.Unused (removeUnusedFuns)
 import Data.Map (Map)
 import Language.PureScript.Erl.CodeGen.Optimizer.Memoize (addMemoizeAnnotations)
 import Control.Monad ((<=<))
-import Language.PureScript.Erl.CodeGen.Inliner qualified as Inliner
-import Language.PureScript.Erl.CodeGen.InlineLocal qualified as InlineLocal
 import Debug.Trace
 import Data.Function ((&))
 

@@ -120,18 +120,3 @@ extractAnn (App a _ _) = a
 extractAnn (Var a _) = a
 extractAnn (Case a _ _) = a
 extractAnn (Let a _ _) = a
-
-
--- |
--- Modify the annotation on a term
---
-modifyAnn :: (a -> a) -> Expr a -> Expr a
-modifyAnn f (Literal a b)          = Literal (f a) b
-modifyAnn f (Constructor a b c d)  = Constructor (f a) b c d
-modifyAnn f (Accessor a b c)       = Accessor (f a) b c
-modifyAnn f (ObjectUpdate a b c d) = ObjectUpdate (f a) b c d
-modifyAnn f (Abs a b c)            = Abs (f a) b c
-modifyAnn f (App a b c)            = App (f a) b c
-modifyAnn f (Var a b)              = Var (f a) b
-modifyAnn f (Case a b c)           = Case (f a) b c
-modifyAnn f (Let a b c)            = Let (f a) b c

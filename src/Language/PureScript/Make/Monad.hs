@@ -7,14 +7,11 @@ module Language.PureScript.Make.Monad
   , getTimestampMaybe
   , touchTimestampMaybe
   , readTextFile
-  , readJSONFile
-  , readJSONFileIO
   , readCborFile
   , readCborFileIO
   , readExternsFile
   , hashFile
   , writeTextFile
-  , writeJSONFile
   , writeCborFile
   , writeCborFileIO
   , copyFile
@@ -36,7 +33,6 @@ import Control.Monad.Reader (MonadReader(..), ReaderT(..))
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.Trans.Except (ExceptT, runExceptT)
 import Control.Monad.Writer.Class (MonadWriter(..))
-import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as B
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -107,18 +103,6 @@ readTextFile :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> m Text
 readTextFile path =
   makeIO ("read file: " <> Text.pack path) $
     readUTF8FileT path
-
--- | Read a JSON file in the 'Make' monad, returning 'Nothing' if the file does
--- not exist or could not be parsed. Errors are captured using the 'MonadError'
--- instance.
-readJSONFile :: (MonadIO m, MonadError MultipleErrors m) => Aeson.FromJSON a => FilePath -> m (Maybe a)
-readJSONFile path =
-  makeIO ("read JSON file: " <> Text.pack path) (readJSONFileIO path)
-
-readJSONFileIO :: Aeson.FromJSON a => FilePath -> IO (Maybe a)
-readJSONFileIO path = do
-  r <- catchDoesNotExist $ Aeson.decodeFileStrict' path
-  return $ join r
 
 -- | Read a Cbor encoded file in the 'Make' monad, returning
 -- 'Nothing' if the file does not exist or could not be parsed. Errors
@@ -257,14 +241,6 @@ writeTextFile path text = makeIO ("write file: " <> Text.pack path) $ do
       liftIO (putStrLn ("### erl-same:" <> path))
     _ ->
       liftIO (putStrLn ("### erl-diff:" <> path))
-
--- | Write a JSON file in the 'Make' monad, capturing any errors using the
--- 'MonadError' instance.
-writeJSONFile :: (MonadIO m, MonadError MultipleErrors m) => Aeson.ToJSON a => FilePath -> a -> m ()
-writeJSONFile path value = makeIO ("write JSON file: " <> Text.pack path) $ do
-  -- caching liftIO $ putStrLn ("writeJsonFile: " <> path)
-  createParentDirectory path
-  Aeson.encodeFile path value
 
 writeCborFile :: (MonadIO m, MonadError MultipleErrors m) => Maybe ExternsMemCache -> FilePath -> ExternsFile -> m ()
 writeCborFile mmemCacheRef path value = do

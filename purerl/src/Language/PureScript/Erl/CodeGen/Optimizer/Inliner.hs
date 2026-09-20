@@ -448,29 +448,11 @@ letBindPats pats rhs body =
     (a:prest,b:brest) -> ELet (EBind a b) (letBindPats prest brest body)
     ([],[]) -> body
 
-isEAtomLiteral a =
-  case a of
-    EAtomLiteral _ -> True
-    _ -> False
-
 findKey k fields =
   case fields of
     [] -> Nothing
     (k2,v):_ | k == runAtom k2 -> Just v
     _:rest -> findKey k rest
-
-allFieldsAreMapGetSame :: Maybe Erl -> [(Atom, Erl)] -> Maybe Erl
-allFieldsAreMapGetSame mrhs fields =
-  case fields of
-    [] -> mrhs
-    (key1,EApp _ (EAtomLiteral (Atom (Just "maps") "get")) [EAtomLiteral key2, rhs]):rest | key1 == key2 ->
-      case mrhs of
-        Nothing -> allFieldsAreMapGetSame (Just rhs) rest
-        Just oldRhs ->
-          case oldRhs == rhs of
-            True -> allFieldsAreMapGetSame (Just rhs) rest
-            False -> Nothing
-    (_:rest) -> Nothing
 
 varsInExpr e =
   everything (<>)
@@ -479,15 +461,6 @@ varsInExpr e =
         _ -> []
     ) e
 
-
-isAnyMentioned :: [Text] -> [Text] -> Bool
-isAnyMentioned needles hay =
-  case needles of
-    (n:ns) ->
-      case n `elem` hay of
-        True -> True
-        False -> isAnyMentioned ns hay
-    [] -> False
 
 data Binary
   = Binary (Text, PSString) (Text, PSString) BinaryOperator
@@ -859,9 +832,6 @@ ringInt = (EC.dataRing, snd C.P_ringInt)
 
 euclideanRingNumber :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 euclideanRingNumber = (EC.dataEuclideanRing, snd C.P_euclideanRingNumber)
-
-euclideanRingInt :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-euclideanRingInt = (EC.dataEuclideanRing, EC.euclideanRingInt)
 
 eqNumber :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 eqNumber = (EC.dataEq, snd C.P_eqNumber)

@@ -6,7 +6,6 @@
 module Language.PureScript.Erl.Synonyms
   ( SynonymMap
   , KindMap
-  , replaceRecordRowTypeSynonymsM
   , replaceAllTypeSynonyms'
   ) where
 
@@ -27,21 +26,6 @@ import           Language.PureScript.AST
 type SynonymMap = M.Map (Qualified (ProperName 'TypeName)) ([(Text, Maybe SourceType)], SourceType)
 
 type KindMap = M.Map (Qualified (ProperName 'TypeName)) (SourceType, TypeKind)
-
-replaceRecordRowTypeSynonyms'
-  :: SynonymMap
-  -> KindMap
-  -> SourceType
-  -> Either MultipleErrors SourceType
-replaceRecordRowTypeSynonyms' syns kinds = everywhereOnTypesTopDownM try
-  where
-  try :: SourceType -> Either MultipleErrors SourceType
-  try t = fromMaybe t <$> go t
-
-  go :: SourceType -> Either MultipleErrors (Maybe SourceType)
-  go t@(TypeApp _ tr _) | tr == tyRecord 
-    = Just <$> replaceAllTypeSynonyms' syns kinds t                   
-  go _ = return Nothing
 
 replaceAllTypeSynonyms'
   :: SynonymMap
@@ -70,13 +54,3 @@ replaceAllTypeSynonyms' syns kinds = everywhereOnTypesTopDownM try
 
   lookupKindArgs :: Qualified (ProperName 'TypeName) -> [Text]
   lookupKindArgs ctor = fromMaybe [] $ fmap (fmap (fst . snd) . fst) . completeBinderList . fst =<< M.lookup ctor kinds
-
-
--- | Replace fully applied type synonyms by explicitly providing a 'SynonymMap'.
-replaceRecordRowTypeSynonymsM
-  :: MonadError MultipleErrors m
-  => SynonymMap
-  -> KindMap
-  -> SourceType
-  -> m SourceType
-replaceRecordRowTypeSynonymsM syns kinds = either throwError pure . replaceRecordRowTypeSynonyms' syns kinds

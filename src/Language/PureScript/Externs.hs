@@ -17,7 +17,6 @@ module Language.PureScript.Externs
   , externsFileName
   , DB(..)
   , DBOpaque(..)
-  , dbDiffDiff
   , dbOpaqueDiffDiffIgnoringExportsListChanges
   ) where
 
@@ -79,9 +78,6 @@ instance Monoid a => Monoid (SerializationFormat a) where
   mempty = SerializationFormat mempty
 instance Semigroup a => Semigroup (SerializationFormat a) where
   SerializationFormat a <> SerializationFormat b = SerializationFormat (a <> b)
-
-toSerialized :: a -> SerializationFormat a
-toSerialized a = SerializationFormat a
 
 -- | The data which will be serialized to an externs file
 data ExternsFile = ExternsFile
@@ -1071,39 +1067,6 @@ newtype CacheShapeHash = CacheShapeHash BS8.ByteString
 instance Serialise CacheShapeHash
 instance Intern CacheShapeHash where intern = id
 
-dbIsctExports :: M.Map ModuleName DB -> ExportSummary -> DB -> DB
-dbIsctExports upstreamDBs (ExportSummary values typeName typeOpName typeClass typeClassInstance valueOpName reExportedRefs) (DB a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
-  let
-    upstreamReExports =
-      M.intersectionWith
-        (\innerExportSummary innerDB -> dbIsctExports upstreamDBs innerExportSummary innerDB)
-        reExportedRefs
-        upstreamDBs
-    ourDB =
-      DB
-        { _dataOrNewtypeDeclsTypeOnly = M.intersectionWith (\_ b -> b) typeName a1
-        , _dataOrNewtypeDeclsFull = a2
-        , _ctorTypes = M.intersectionWith (\_ b -> b) values a3
-        , _typeSynonymDecls = M.intersectionWith (\_ b -> b) typeName a4
-        , _valueDecls = M.intersectionWith (\_ b -> b) values a5
-        , _externDecls = M.intersectionWith (\_ b -> b) values a6
-        , _externDataDecls = M.intersectionWith (\_ b -> b) typeName a7
-        , _opFixity = M.intersectionWith (\_ b -> b) valueOpName a8
-        , _ctorFixity = M.intersectionWith (\_ b -> b) valueOpName a9
-        , _tyOpFixity = M.intersectionWith (\_ b -> b) typeOpName a10
-        , _tyClassDecls = M.intersectionWith (\_ b -> b) typeClass a11
-        , _tyClassInstanceDecls = M.intersectionWith (\_ b -> b) typeClassInstance a12
-        , _exports = a13
-        }
-  in
-  foldl'
-    (\dbSoFar upstreamDB ->
-      -- [drathier]: <> is Map union; it keeps left arg on conflict
-      dbSoFar <> upstreamDB
-    )
-    ourDB
-    upstreamReExports
-
 dbOpaqueIsctExports :: Show meta => meta -> M.Map ModuleName DBOpaque -> ExportSummary -> DBOpaque -> DBOpaque
 dbOpaqueIsctExports meta upstreamDBs (ExportSummary valueName typeName typeOpName typeClass typeClassInstance valueOpName reExportedRefs) (DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
   let
@@ -1136,24 +1099,6 @@ dbOpaqueIsctExports meta upstreamDBs (ExportSummary valueName typeName typeOpNam
     )
     ourDB
     upstreamReExports
-
-
-dbDiffDiff (DB a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) (DB b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13) =
-    DB
-      { _dataOrNewtypeDeclsTypeOnly = M.differenceWith (\x y -> if x == y then Nothing else Just x) a1 b1
-      , _dataOrNewtypeDeclsFull = M.differenceWith (\x y -> if x == y then Nothing else Just x) a2 b2
-      , _ctorTypes = M.differenceWith (\x y -> if x == y then Nothing else Just x) a3 b3
-      , _typeSynonymDecls = M.differenceWith (\x y -> if x == y then Nothing else Just x) a4 b4
-      , _valueDecls = M.differenceWith (\x y -> if x == y then Nothing else Just x) a5 b5
-      , _externDecls = M.differenceWith (\x y -> if x == y then Nothing else Just x) a6 b6
-      , _externDataDecls = M.differenceWith (\x y -> if x == y then Nothing else Just x) a7 b7
-      , _opFixity = M.differenceWith (\x y -> if x == y then Nothing else Just x) a8 b8
-      , _ctorFixity = M.differenceWith (\x y -> if x == y then Nothing else Just x) a9 b9
-      , _tyOpFixity = M.differenceWith (\x y -> if x == y then Nothing else Just x) a10 b10
-      , _tyClassDecls = M.differenceWith (\x y -> if x == y then Nothing else Just x) a11 b11
-      , _tyClassInstanceDecls = M.differenceWith (\x y -> if x == y then Nothing else Just x) a12 b12
-      , _exports = if a13 == b13 then mempty else a13
-      }
 
 dbOpaqueDiffDiffIgnoringExportsListChanges (DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) (DBOpaque b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13) =
     DBOpaque
@@ -1434,16 +1379,6 @@ exsumPutOpName ref v =
       ref
       ()
       (_refOpName v)
-   }
-
-exsumPutExportRef (ExportSource _ origSrc) ref v =
-  v {
-    _reExportRef =
-     M.insertWith
-      (<>)
-      origSrc
-      ref
-      (_reExportRef v)
    }
 
 exsumPutTypeClassRef ref v =

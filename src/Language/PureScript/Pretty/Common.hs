@@ -5,8 +5,6 @@ module Language.PureScript.Pretty.Common where
 
 import Prelude
 
-import Control.Monad.State (StateT, modify, get)
-
 import Data.List (elemIndices, intersperse)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -92,10 +90,6 @@ instance Emit PlainString where
   emit = PlainString . Builder.fromText
   addMapping _ = mempty
 
-addMapping' :: (Emit gen) => Maybe SourceSpan -> gen
-addMapping' (Just ss) = addMapping ss
-addMapping' Nothing = mempty
-
 bumpPos :: SourcePos -> SMap -> SMap
 bumpPos p (SMap f s g) = SMap f s $ p `addPos` g
 
@@ -103,32 +97,6 @@ addPos :: SourcePos -> SourcePos -> SourcePos
 addPos (SourcePos n m) (SourcePos 0 m') = SourcePos n (m + m')
 addPos (SourcePos n _) (SourcePos n' m') = SourcePos (n + n') m'
 
-
-data PrinterState = PrinterState { indent :: Int }
-
--- |
--- Number of characters per indentation level
---
-blockIndent :: Int
-blockIndent = 4
-
--- |
--- Pretty print with a new indentation level
---
-withIndent :: StateT PrinterState Maybe gen -> StateT PrinterState Maybe gen
-withIndent action = do
-  modify $ \st -> st { indent = indent st + blockIndent }
-  result <- action
-  modify $ \st -> st { indent = indent st - blockIndent }
-  return result
-
--- |
--- Get the current indentation level
---
-currentIndent :: (Emit gen) => StateT PrinterState Maybe gen
-currentIndent = do
-  current <- get
-  return $ emit $ T.replicate (indent current) " "
 
 objectKeyRequiresQuoting :: Text -> Bool
 objectKeyRequiresQuoting = not . isUnquotedKey

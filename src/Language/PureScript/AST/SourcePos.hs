@@ -76,11 +76,6 @@ instance Serialise SourcePos where
     pure (SourcePos 0 0)
 
 
-displaySourcePos :: SourcePos -> Text
-displaySourcePos sp =
-  "line " <> T.pack (show (sourcePosLine sp)) <>
-    ", column " <> T.pack (show (sourcePosColumn sp))
-
 displaySourcePosShort :: SourcePos -> Text
 displaySourcePosShort sp =
   T.pack (show (sourcePosLine sp)) <>

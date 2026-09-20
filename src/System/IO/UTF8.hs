@@ -5,7 +5,6 @@ import Prelude
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Search qualified as BSS
-import Data.ByteString.UTF8 qualified as UTF8
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
 import Protolude (ordNub)
@@ -26,7 +25,3 @@ readUTF8FileT inFile =
 writeUTF8FileT :: FilePath -> Text -> IO ()
 writeUTF8FileT inFile text =
   BS.writeFile inFile (TE.encodeUtf8 text)
-
-readUTF8File :: FilePath -> IO String
-readUTF8File inFile =
-  fmap (UTF8.toString . fixCRLF) (BS.readFile inFile)

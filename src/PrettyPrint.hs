@@ -2,16 +2,10 @@
 module PrettyPrint where
 
 import Prelude
-import qualified Data.Text as T
-import Data.Function ((&))
 
 -- |
 sShow :: Show a => a -> String
 sShow a = pformat 0 $! show a -- T.unpack $! pShow a
-
--- |
-tShow :: Show a => a -> T.Text
-tShow a = T.pack $ sShow a
 
 -- |
 pformat :: Int -> String -> String

@@ -1255,22 +1255,6 @@ letbind elet exprs innermost =
     e:es -> elet e (letbind elet es innermost)
 
 
-mapMK :: Monad m => ((Erl -> Erl) -> a -> m (b, Erl -> Erl)) -> (Erl -> Erl) -> [a] -> m ([b], Erl -> Erl)
-mapMK f kont values =
-  case values of
-    [] -> pure ([], kont)
-    v:vs -> do
-      (v', kont') <- f kont v
-      (res, kont3) <- mapMK f kont' vs
-      pure (v':res, kont3)
-
-funBinderToBinder = \case
-  (EFunBinder [e], ee) -> (EBinder e, ee)
-  -- (EFunBinder [e] (Just g), ee) -> (EGuardedBinder e g, ee)
-  (EFunBinder es, ee) -> (EBinder (ETupleLiteral es), ee)
-  -- (EFunBinder es (Just g), ee) -> (EGuardedBinder (ETupleLiteral es) g, ee)
-
-
 --letbindM :: (Erl -> Bind Ann -> m Erl) -> [Bind Ann] -> Erl -> m Erl
 --letbindM runBind binds innermost =
 --  case binds of

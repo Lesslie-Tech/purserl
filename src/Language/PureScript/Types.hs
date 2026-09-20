@@ -133,9 +133,6 @@ srcTypeLevelString = TypeLevelString NullSourceAnn
 srcTypeLevelInt :: Integer -> SourceType
 srcTypeLevelInt = TypeLevelInt NullSourceAnn
 
-srcTypeWildcard :: SourceType
-srcTypeWildcard = TypeWildcard NullSourceAnn UnnamedWildcard
-
 srcTypeConstructor :: Qualified (ProperName 'TypeName) -> SourceType
 srcTypeConstructor = TypeConstructor NullSourceAnn
 
