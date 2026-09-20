@@ -47,7 +47,11 @@ optimizeCoreFn m = do
   -- counting, constructor-application detection, CSE, purerl's own
   -- Erlang-level optimizer, ...) treats a point-free composition exactly as
   -- if it had been hand-written as a lambda -- see expandComposeFlippedF.
-  decls0 <- expandComposeFlippedF (moduleDecls m)
+  decls0a <- expandComposeFlippedF (moduleDecls m)
+  -- Likewise for `Control.Alt.alt`/`<|>` chains over a statically-known
+  -- `Maybe`/`Either` dictionary -- see expandAltChains. Order relative to
+  -- expandComposeFlippedF doesn't matter, they match disjoint shapes.
+  decls0 <- expandAltChains decls0a
   let decls1 = translateBacktrace (moduleName m) (moduleForeign m) decls0
       decls2 = optimizeModuleDecls (moduleName m) (moduleForeign m) decls1
   decls3 <- optimizeCommonSubexpressions (moduleName m) decls2
@@ -110,6 +114,90 @@ expandComposeFlippedF = traverse goBind
 
     (goBind, goExprOneLevel, goBinderOneLevel, goCaseAltOneLevel) =
       traverseCoreFn goBind goExpr goBinder goCaseAlt
+
+-- | `x <|> y` (`Control.Alt.alt`) for a statically-known `Maybe`/`Either`
+-- dictionary is a plain 2-clause short-circuit: "first operand that isn't
+-- the type's designated failure value, else the last operand regardless".
+-- That's exactly what Erlang's `maybe ... end` block expresses natively via
+-- its `Pattern ?= Expr` short-circuit-on-non-match semantics: matching the
+-- failure pattern means "keep trying the next line", anything else means
+-- "stop here and return this value". Rewriting a whole `<|>` chain into one
+-- `CodeGen.erlang "maybe ... end" {...}` call -- which purerl's own
+-- Erlang-level Inliner.hs already turns into real Erlang source via its
+-- pre-existing raw-source escape hatch -- produces a single flat `maybe`
+-- block with one line per operand, instead of leaving each `<|>` as its own
+-- typeclass-dictionary application for later passes to partially resolve.
+altIdent :: Qualified Ident
+altIdent = Qualified (ByModuleName (ModuleName "Control.Alt")) (Ident "alt")
+
+-- | (dictionary identifier, the Erlang pattern that means "this operand
+-- failed, keep trying") for each `Alt` instance this rewrite covers.
+altDicts :: [(Qualified Ident, Text)]
+altDicts =
+  [ (Qualified (ByModuleName (ModuleName "Maybe")) (Ident "altMaybe"), "{nothing}"),
+    (Qualified (ByModuleName (ModuleName "Either")) (Ident "altEither"), "{left, _}")
+  ]
+
+codeGenErlangIdent :: Qualified Ident
+codeGenErlangIdent = Qualified (ByModuleName (ModuleName "CodeGen")) (Ident "erlang")
+
+matchAlt2 :: Expr Ann -> Maybe (Text, Expr Ann, Expr Ann)
+matchAlt2 (App _ (App _ (App _ (Var _ fn) (Var _ dict)) a) b)
+  | fn == altIdent, [failPattern] <- [t | (d, t) <- altDicts, d == dict] = Just (failPattern, a, b)
+matchAlt2 _ = Nothing
+
+-- | `<|>` is infixl, so a nested chain only ever shows up on the left
+-- (a <|> b) <|> c; explicit right-nesting via parens is also unfolded here
+-- for generality, mirroring collectComposeChain.
+collectAltChain :: Text -> Expr Ann -> [Expr Ann]
+collectAltChain failPattern e
+  | Just (failPattern', a, b) <- matchAlt2 e, failPattern' == failPattern =
+      collectAltChain failPattern a <> collectAltChain failPattern b
+  | otherwise = [e]
+
+expandAltChains :: [Bind Ann] -> Supply [Bind Ann]
+expandAltChains = traverse goBind
+  where
+    goExpr :: Expr Ann -> Supply (Expr Ann)
+    goExpr e
+      | Just (failPattern, a, b) <- matchAlt2 e = do
+          let chain = collectAltChain failPattern a <> collectAltChain failPattern b
+          chain' <- traverse goExpr chain
+          pure $ buildAltMaybeBlock (extractAnn e) failPattern chain'
+      | otherwise = goExprOneLevel e
+
+    goBinder :: Binder Ann -> Supply (Binder Ann)
+    goBinder = goBinderOneLevel
+
+    goCaseAlt :: CaseAlternative Ann -> Supply (CaseAlternative Ann)
+    goCaseAlt = goCaseAltOneLevel
+
+    (goBind, goExprOneLevel, goBinderOneLevel, goCaseAltOneLevel) =
+      traverseCoreFn goBind goExpr goBinder goCaseAlt
+
+-- | Each operand appears exactly once in the resulting block (one line
+-- each), so -- unlike composeFlippedF's chain, where a single value could
+-- end up applied to N different functions -- there's no risk of duplicated
+-- evaluation here and thus no need for fresh let-bound names.
+buildAltMaybeBlock :: Ann -> Text -> [Expr Ann] -> Expr Ann
+buildAltMaybeBlock ann failPattern operands =
+  App
+    ann
+    (App ann (Var ann codeGenErlangIdent) (Literal ann (StringLiteral (PS.mkString fmt))))
+    (Literal ann (ObjectLiteral fields))
+  where
+    -- No real newlines in the template: it round-trips through
+    -- PS.prettyPrintString (see the existing CodeGen.erlang -> ERawErlangSource
+    -- rule in purerl's Inliner.hs), which escapes control characters into
+    -- literal backslash sequences -- fine for hand-written single-line format
+    -- strings, but it would turn a real newline here into a literal `\n` in
+    -- the generated .erl text. Erlang doesn't need newlines between `maybe`
+    -- clauses, only the commas, so just use spaces.
+    n = length operands
+    fieldName i = "e" <> T.pack (show (i :: Int))
+    fmtLine i = failPattern <> " ?= $" <> fieldName i <> ", "
+    fmt = "maybe " <> T.concat (map fmtLine [1 .. n - 1]) <> "$" <> fieldName n <> " end"
+    fields = [(PS.mkString (fieldName i), e) | (i, e) <- zip [1 ..] operands]
 
 translateBacktrace :: ModuleName -> [Ident] -> [Bind Ann] -> [Bind Ann]
 translateBacktrace modu foreignIdents binds =
