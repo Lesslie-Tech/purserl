@@ -4,6 +4,7 @@ import Protolude hiding (Type, moduleName, traceM, State, evalState)
 import Prelude (error)
 
 import Control.Monad.Supply (Supply)
+import Control.Monad.Supply.Class (fresh)
 import Language.PureScript.CoreFn.Ann (Ann)
 import Language.PureScript.CoreFn.CSE (optimizeCommonSubexpressions)
 import Language.PureScript.CoreFn.Expr
@@ -47,14 +48,17 @@ optimizeCoreFn m = do
   -- counting, constructor-application detection, CSE, purerl's own
   -- Erlang-level optimizer, ...) treats a point-free composition exactly as
   -- if it had been hand-written as a lambda -- see expandComposeFlippedF.
-  decls0a <- expandComposeFlippedF (moduleDecls m)
-  -- Likewise for `Control.Alt.alt`/`<|>` chains over a statically-known
-  -- `Maybe`/`Either` dictionary -- see expandAltChains. Order relative to
-  -- expandComposeFlippedF doesn't matter, they match disjoint shapes.
-  decls0 <- expandAltChains decls0a
+  decls0 <- expandComposeFlippedF (moduleDecls m)
   let decls1 = translateBacktrace (moduleName m) (moduleForeign m) decls0
       decls2 = optimizeModuleDecls (moduleName m) (moduleForeign m) decls1
-  decls3 <- optimizeCommonSubexpressions (moduleName m) decls2
+  -- `Control.Alt.alt`/`<|>` chains over a statically-known `Maybe`/`Either`/
+  -- `Veither` dictionary -- see expandAltChains. Runs after
+  -- optimizeModuleDecls so `x # Maybe.alt y` (piped through
+  -- Data.Function.apply/applyFlipped) has already been reduced to a plain
+  -- application by optimizeDataFunctionApply; still runs before CSE so a
+  -- whole chain is seen at once.
+  decls2a <- expandAltChains decls2
+  decls3 <- optimizeCommonSubexpressions (moduleName m) decls2a
   pure m {moduleDecls = decls3}
 
 -- | `Control.Semigroupoid.composeFlippedF` (aliased as `>>>`)
@@ -130,29 +134,48 @@ expandComposeFlippedF = traverse goBind
 altIdent :: Qualified Ident
 altIdent = Qualified (ByModuleName (ModuleName "Control.Alt")) (Ident "alt")
 
--- | (dictionary identifier, the Erlang pattern that means "this operand
--- failed, keep trying") for each `Alt` instance this rewrite covers.
-altDicts :: [(Qualified Ident, Text)]
+-- | How to recognize "this operand failed" for a given `Alt` instance.
+-- `SimpleFail` is a fixed Erlang pattern (`Nothing`, `Left _`). `Veither`'s
+-- failure isn't a fixed pattern -- it's "any type other than `"_"`" -- so it
+-- needs a `case` first, see veitherCheckLine.
+data AltKind = SimpleFail Text | VeitherKind
+  deriving (Eq)
+
+-- | (dictionary identifier, how to recognize failure) for each `Alt`
+-- instance this rewrite covers.
+altDicts :: [(Qualified Ident, AltKind)]
 altDicts =
-  [ (Qualified (ByModuleName (ModuleName "Maybe")) (Ident "altMaybe"), "{nothing}"),
-    (Qualified (ByModuleName (ModuleName "Either")) (Ident "altEither"), "{left, _}")
+  [ (Qualified (ByModuleName (ModuleName "Maybe")) (Ident "altMaybe"), SimpleFail "{nothing}"),
+    (Qualified (ByModuleName (ModuleName "Either")) (Ident "altEither"), SimpleFail "{left, _}"),
+    (Qualified (ByModuleName (ModuleName "Veither")) (Ident "altVeither"), VeitherKind)
   ]
 
 codeGenErlangIdent :: Qualified Ident
 codeGenErlangIdent = Qualified (ByModuleName (ModuleName "CodeGen")) (Ident "erlang")
 
-matchAlt2 :: Expr Ann -> Maybe (Text, Expr Ann, Expr Ann)
+-- | Each instance's own plain `alt` function (e.g. `Maybe.alt`), for direct
+-- calls that bypass the `Control.Alt` typeclass dictionary entirely.
+directAltIdents :: [(Qualified Ident, AltKind)]
+directAltIdents =
+  [ (Qualified (ByModuleName (ModuleName "Maybe")) (Ident "alt"), SimpleFail "{nothing}"),
+    (Qualified (ByModuleName (ModuleName "Either")) (Ident "alt"), SimpleFail "{left, _}"),
+    (Qualified (ByModuleName (ModuleName "Veither")) (Ident "alt"), VeitherKind)
+  ]
+
+matchAlt2 :: Expr Ann -> Maybe (AltKind, Expr Ann, Expr Ann)
 matchAlt2 (App _ (App _ (App _ (Var _ fn) (Var _ dict)) a) b)
-  | fn == altIdent, [failPattern] <- [t | (d, t) <- altDicts, d == dict] = Just (failPattern, a, b)
+  | fn == altIdent, [kind] <- [k | (d, k) <- altDicts, d == dict] = Just (kind, a, b)
+matchAlt2 (App _ (App _ (Var _ fn) a) b)
+  | [kind] <- [k | (d, k) <- directAltIdents, d == fn] = Just (kind, a, b)
 matchAlt2 _ = Nothing
 
 -- | `<|>` is infixl, so a nested chain only ever shows up on the left
 -- (a <|> b) <|> c; explicit right-nesting via parens is also unfolded here
 -- for generality, mirroring collectComposeChain.
-collectAltChain :: Text -> Expr Ann -> [Expr Ann]
-collectAltChain failPattern e
-  | Just (failPattern', a, b) <- matchAlt2 e, failPattern' == failPattern =
-      collectAltChain failPattern a <> collectAltChain failPattern b
+collectAltChain :: AltKind -> Expr Ann -> [Expr Ann]
+collectAltChain kind e
+  | Just (kind', a, b) <- matchAlt2 e, kind' == kind =
+      collectAltChain kind a <> collectAltChain kind b
   | otherwise = [e]
 
 expandAltChains :: [Bind Ann] -> Supply [Bind Ann]
@@ -160,10 +183,10 @@ expandAltChains = traverse goBind
   where
     goExpr :: Expr Ann -> Supply (Expr Ann)
     goExpr e
-      | Just (failPattern, a, b) <- matchAlt2 e = do
-          let chain = collectAltChain failPattern a <> collectAltChain failPattern b
+      | Just (kind, a, b) <- matchAlt2 e = do
+          let chain = collectAltChain kind a <> collectAltChain kind b
           chain' <- traverse goExpr chain
-          pure $ buildAltMaybeBlock (extractAnn e) failPattern chain'
+          buildAltMaybeBlock (extractAnn e) kind chain'
       | otherwise = goExprOneLevel e
 
     goBinder :: Binder Ann -> Supply (Binder Ann)
@@ -175,29 +198,50 @@ expandAltChains = traverse goBind
     (goBind, goExprOneLevel, goBinderOneLevel, goCaseAltOneLevel) =
       traverseCoreFn goBind goExpr goBinder goCaseAlt
 
--- | Each operand appears exactly once in the resulting block (one line
--- each), so -- unlike composeFlippedF's chain, where a single value could
--- end up applied to N different functions -- there's no risk of duplicated
--- evaluation here and thus no need for fresh let-bound names.
-buildAltMaybeBlock :: Ann -> Text -> [Expr Ann] -> Expr Ann
-buildAltMaybeBlock ann failPattern operands =
-  App
-    ann
-    (App ann (Var ann codeGenErlangIdent) (Literal ann (StringLiteral (PS.mkString fmt))))
-    (Literal ann (ObjectLiteral fields))
+-- | Template is one line, no real newlines: it round-trips through
+-- PS.prettyPrintString (see the CodeGen.erlang -> ERawErlangSource rule in
+-- purerl's Inliner.hs), which would escape a real newline into a literal
+-- `\n`. Erlang doesn't need newlines between `maybe` clauses, just commas.
+buildAltMaybeBlock :: Ann -> AltKind -> [Expr Ann] -> Supply (Expr Ann)
+buildAltMaybeBlock ann kind operands = do
+  fmt <- buildFmt kind (length operands)
+  let fields = [(PS.mkString (fieldName i), e) | (i, e) <- zip [1 :: Int ..] operands]
+  pure $
+    App
+      ann
+      (App ann (Var ann codeGenErlangIdent) (Literal ann (StringLiteral (PS.mkString fmt))))
+      (Literal ann (ObjectLiteral fields))
   where
-    -- No real newlines in the template: it round-trips through
-    -- PS.prettyPrintString (see the existing CodeGen.erlang -> ERawErlangSource
-    -- rule in purerl's Inliner.hs), which escapes control characters into
-    -- literal backslash sequences -- fine for hand-written single-line format
-    -- strings, but it would turn a real newline here into a literal `\n` in
-    -- the generated .erl text. Erlang doesn't need newlines between `maybe`
-    -- clauses, only the commas, so just use spaces.
-    n = length operands
-    fieldName i = "e" <> T.pack (show (i :: Int))
-    fmtLine i = failPattern <> " ?= $" <> fieldName i <> ", "
-    fmt = "maybe " <> T.concat (map fmtLine [1 .. n - 1]) <> "$" <> fieldName n <> " end"
-    fields = [(PS.mkString (fieldName i), e) | (i, e) <- zip [1 ..] operands]
+    fieldName i = "e" <> T.pack (show i)
+
+    -- Each operand appears once, so no risk of duplicate evaluation and no
+    -- need for let-bound names.
+    buildFmt (SimpleFail failPattern) n =
+      pure $ "maybe " <> T.concat (map (fmtLine failPattern) [1 .. n - 1]) <> "$" <> fieldName n <> " end"
+      where
+        fmtLine failPattern' i = failPattern' <> " ?= $" <> fieldName i <> ", "
+    -- Each checked operand runs through a `case` that captures it via an
+    -- aliased pattern (`V = #{...}`) directly in the matching clause, so it's
+    -- evaluated once. Success yields the captured value (never `true`, so it
+    -- always short-circuits the `?=`); failure yields `true`, continuing to
+    -- the next operand. Capture names must be fresh per check -- Erlang
+    -- rejects reusing one across separate `case`s as an unsafe variable.
+    buildFmt VeitherKind n = do
+      names <- traverse (const freshVeitherVar) [1 .. n - 1]
+      let checks = T.concat (zipWith veitherCheckLine names [1 ..])
+      pure $ "maybe " <> checks <> "$" <> fieldName n <> " end"
+
+    freshVeitherVar = do
+      i <- fresh
+      pure $ "AltVeither" <> T.pack (show i)
+
+    -- `<<95>>` is `_` as a byte literal: avoids `"` (escaped by
+    -- PS.prettyPrintString) and `$` (read as a $name placeholder here).
+    veitherCheckLine varName i =
+      "true ?= case $" <> fieldName i <> " of " <> varName
+        <> " = #{type := <<95>>} -> "
+        <> varName
+        <> "; _ -> true end, "
 
 translateBacktrace :: ModuleName -> [Ident] -> [Bind Ann] -> [Bind Ann]
 translateBacktrace modu foreignIdents binds =
