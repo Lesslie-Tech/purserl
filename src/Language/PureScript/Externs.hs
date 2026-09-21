@@ -14,6 +14,8 @@ module Language.PureScript.Externs
   , externsIsCurrentVersion
   , moduleToExternsFile
   , applyExternsFileToEnvironment
+  , shallowForceExterns
+  , decodeExternsFileSelective
   , externsFileName
   , DB(..)
   , DBOpaque(..)
@@ -22,10 +24,38 @@ module Language.PureScript.Externs
 
 import Prelude
 
-import Codec.Serialise (Serialise, serialise, encode, decode)
+import Codec.Serialise (Serialise, serialise, encode, decode, deserialiseOrFail)
 import Codec.Serialise.Encoding (encodeString)
-import Codec.Serialise.Decoding (decodeString)
-import Control.DeepSeq (NFData)
+import Codec.Serialise.Decoding
+  ( Decoder
+  , decodeString
+  , decodeListLen
+  , decodeListLenIndef
+  , decodeListLenOrIndef
+  , decodeSequenceLenIndef
+  , decodeSequenceLenN
+  , decodeWord
+  , decodeWord64
+  , decodeNegWord
+  , decodeNegWord64
+  , decodeInteger
+  , decodeDouble
+  , decodeBytes
+  , decodeBytesIndef
+  , decodeStringIndef
+  , decodeMapLen
+  , decodeMapLenIndef
+  , decodeTag64
+  , decodeBool
+  , decodeNull
+  , decodeSimple
+  , decodeBreakOr
+  , peekTokenType
+  , TokenType(..)
+  )
+import Codec.CBOR.Decoding (decodeWithByteSpan, ByteOffset)
+import Codec.CBOR.Decoding qualified as CBOR.Decoding
+import Control.DeepSeq (NFData, deepseq)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.List (foldl', find, intercalate)
 import Data.Text (Text)
@@ -63,6 +93,7 @@ import Language.PureScript.Roles (Role)
 import Language.PureScript.Interning (Intern(..))
 import qualified Data.ByteString.UTF8 as BS8
 import Data.ByteString.Lazy (ByteString)
+import Data.ByteString.Lazy qualified as BSL
 import qualified Data.ByteString as BS
 import Data.Hashable (hashWithSalt)
 import qualified Data.ByteArray.Encoding as BAE
@@ -281,6 +312,239 @@ applyExternsFileToEnvironment ExternsFile{..} = flip (foldl' applyDecl) efDeclar
 
   qual :: a -> Qualified a
   qual = Qualified (ByModuleName efModuleName)
+
+-- | Force an 'ExternsFile' on its spine and on the fields every declaration
+-- consumer needs eagerly (see the identifying-name fields matched below),
+-- without forcing the fields the on-demand declaration decoder in
+-- 'Language.PureScript.Make.Monad' defers to first-use ('EDType'\'s kind,
+-- 'EDTypeSynonym'\'s and 'EDValue'\'s types, 'EDDataConstructor'\'s type and
+-- fields). Using plain 'Control.DeepSeq.force' here would walk and build
+-- those deferred fields immediately, defeating the point of deferring them.
+-- 'EDClass' and 'EDInstance' stay fully eager, matching the decoder.
+shallowForceExterns :: ExternsFile -> ExternsFile
+shallowForceExterns ef@ExternsFile{..} =
+  efVersion `deepseq`
+  efModuleName `deepseq`
+  efExports `deepseq`
+  efImports `deepseq`
+  efFixities `deepseq`
+  efTypeFixities `deepseq`
+  forceDeclSpine efDeclarations `seq`
+  efSourceSpan `deepseq`
+  efUpstreamCacheShapes `deepseq`
+  efOurCacheShapes `deepseq`
+  ef
+  where
+  forceDeclSpine :: [ExternsDeclaration] -> ()
+  forceDeclSpine = foldl' (\() d -> forceDeclEager d) ()
+
+  forceDeclEager :: ExternsDeclaration -> ()
+  forceDeclEager (EDType n _ _) = n `deepseq` ()
+  forceDeclEager (EDTypeSynonym n _ _) = n `deepseq` ()
+  forceDeclEager (EDDataConstructor n o t _ _) = n `deepseq` o `deepseq` t `deepseq` ()
+  forceDeclEager (EDValue n _) = n `deepseq` ()
+  -- EDClass/EDInstance stay fully eager: nothing about them is deferred, so
+  -- the ordinary derived NFData instance is exactly what we want here.
+  forceDeclEager d@EDClass{} = d `deepseq` ()
+  forceDeclEager d@EDInstance{} = d `deepseq` ()
+
+-- | A hand-written decoder for 'ExternsFile', used in place of the derived
+-- 'Serialise' instance on the read path (see
+-- 'Language.PureScript.Make.Monad.readExternsFileImplFromBytes'). It
+-- produces byte-for-byte identical results to the derived instance -- this
+-- function only exists so that 'decodeExternsDeclarationSelective' below has
+-- a place to (eventually) skip decoding declarations nobody needs, without
+-- touching the write side or any other reader of this format.
+--
+-- The shape mirrors exactly what @Codec.Serialise@'s @DeriveAnyClass@-style
+-- generic instance produces for a single-constructor record: a definite
+-- CBOR list of (field count + 1) elements, a leading constructor tag of 0,
+-- then each field in declaration order. See 'decodeExternsDeclarationSelective'
+-- for the analogous sum-type shape used by 'ExternsDeclaration'.
+--
+-- Takes the whole input the caller is about to feed to
+-- 'Codec.CBOR.Read.deserialiseFromBytes' as an explicit argument (as well as
+-- being what that call decodes): 'decodeSkippedSpan' reports byte offsets
+-- relative to the start of that same input, so a deferred field's bytes can
+-- later be sliced directly out of it -- see 'decodeSkippedSpan'.
+decodeExternsFileSelective :: ByteString -> Decoder s ExternsFile
+decodeExternsFileSelective wholeInput = do
+  n <- decodeListLen
+  when (n /= 11) $ fail ("ExternsFile: expected an 11-element CBOR record, got " <> show n)
+  tag <- decodeWord
+  when (tag /= 0) $ fail ("ExternsFile: expected constructor tag 0, got " <> show tag)
+  efVersion <- decode
+  efModuleName <- decode
+  efExports <- decode
+  efImports <- decode
+  efFixities <- decode
+  efTypeFixities <- decode
+  efDeclarations <- decodeExternsDeclarationsSelective wholeInput
+  efSourceSpan <- decode
+  efUpstreamCacheShapes <- decode
+  efOurCacheShapes <- decode
+  pure ExternsFile{..}
+
+-- | Mirrors @Codec.Serialise@'s @defaultDecodeList@ exactly (empty lists are
+-- a definite-length list of 0; non-empty lists are indefinite-length,
+-- break-terminated), just decoding each element via
+-- 'decodeExternsDeclarationSelective' instead of the generic 'decode'.
+decodeExternsDeclarationsSelective :: ByteString -> Decoder s [ExternsDeclaration]
+decodeExternsDeclarationsSelective wholeInput = do
+  mn <- decodeListLenOrIndef
+  case mn of
+    Nothing -> decodeSequenceLenIndef (flip (:)) [] reverse (decodeExternsDeclarationSelective wholeInput)
+    Just n  -> decodeSequenceLenN     (flip (:)) [] reverse n (decodeExternsDeclarationSelective wholeInput)
+
+-- | Skip over exactly one CBOR value of arbitrary/unknown shape -- the
+-- bytes of a single record field, whatever type it happens to be -- without
+-- building ANY Haskell representation of it, not even a generic
+-- 'Codec.CBOR.Term.Term' (an earlier version of this used
+-- 'Codec.CBOR.Term.decodeTerm' here, but profiling showed that allocating a
+-- full generic term tree just to throw it away cost nearly as much as
+-- building the real domain type would have -- see the on-demand-externs-
+-- decoding plan's perf notes). 'skipCborValue' mirrors
+-- 'Codec.CBOR.Term.decodeTerm's structure exactly, replacing every "build a
+-- Term constructor" step with nothing.
+decodeSkippedSpan :: Decoder s (ByteOffset, ByteOffset)
+decodeSkippedSpan = do
+  (_, before, after) <- decodeWithByteSpan skipCborValue
+  pure (before, after)
+
+skipCborValue :: Decoder s ()
+skipCborValue = do
+  tkty <- peekTokenType
+  case tkty of
+    TypeUInt         -> void decodeWord
+    TypeUInt64       -> void decodeWord64
+    TypeNInt         -> void decodeNegWord
+    TypeNInt64       -> void decodeNegWord64
+    TypeInteger      -> void decodeInteger
+    TypeFloat16      -> void CBOR.Decoding.decodeFloat
+    TypeFloat32      -> void CBOR.Decoding.decodeFloat
+    TypeFloat64      -> void decodeDouble
+    TypeBytes        -> void decodeBytes
+    TypeBytesIndef   -> decodeBytesIndef >> skipBytesIndefLen
+    TypeString       -> void decodeString
+    TypeStringIndef  -> decodeStringIndef >> skipStringIndefLen
+    TypeListLen      -> decodeListLen >>= skipCborValues
+    TypeListLen64    -> decodeListLen >>= skipCborValues
+    TypeListLenIndef -> decodeListLenIndef >> skipCborValuesIndef
+    TypeMapLen       -> decodeMapLen >>= skipCborPairs
+    TypeMapLen64     -> decodeMapLen >>= skipCborPairs
+    TypeMapLenIndef  -> decodeMapLenIndef >> skipCborPairsIndef
+    TypeTag          -> decodeTag64 >> skipCborValue
+    TypeTag64        -> decodeTag64 >> skipCborValue
+    TypeBool         -> void decodeBool
+    TypeNull         -> decodeNull
+    TypeSimple       -> void decodeSimple
+    TypeBreak        -> fail "skipCborValue: unexpected break"
+    TypeInvalid      -> fail "skipCborValue: invalid token encoding"
+  where
+  -- Mirrors 'Codec.CBOR.Term.decodeBytesIndefLen'/'decodeStringIndefLen':
+  -- an indefinite bytes/string value is a sequence of definite-length
+  -- chunks of the same type, terminated by a break.
+  skipBytesIndefLen :: Decoder s ()
+  skipBytesIndefLen = do
+    stop <- decodeBreakOr
+    unless stop (decodeBytes >> skipBytesIndefLen)
+
+  skipStringIndefLen :: Decoder s ()
+  skipStringIndefLen = do
+    stop <- decodeBreakOr
+    unless stop (decodeString >> skipStringIndefLen)
+
+  skipCborValues :: Int -> Decoder s ()
+  skipCborValues n = replicateM_ n skipCborValue
+
+  skipCborValuesIndef :: Decoder s ()
+  skipCborValuesIndef = do
+    stop <- decodeBreakOr
+    unless stop (skipCborValue >> skipCborValuesIndef)
+
+  skipCborPairs :: Int -> Decoder s ()
+  skipCborPairs n = replicateM_ n (skipCborValue >> skipCborValue)
+
+  skipCborPairsIndef :: Decoder s ()
+  skipCborPairsIndef = do
+    stop <- decodeBreakOr
+    unless stop (skipCborValue >> skipCborValue >> skipCborPairsIndef)
+
+-- | Slice out exactly the bytes 'decodeSkippedSpan' walked past, from the
+-- same overall input it computed its offsets against.
+sliceSpan :: ByteString -> ByteOffset -> ByteOffset -> ByteString
+sliceSpan wholeInput start end = BSL.take (end - start) (BSL.drop start wholeInput)
+
+-- | Decode a byte slice captured via 'decodeSkippedSpan'/'sliceSpan' into
+-- its real target type, lazily: routed through a 'NOINLINE' function
+-- (rather than inlined at each call site) so GHC's @-O2@ demand analysis
+-- (this project builds with @-O2 -fspecialize-aggressively@) cannot see
+-- through to the field constructor it feeds and prove the result is always
+-- forced, which would silently force this eagerly and defeat the deferral.
+-- Same idiom as 'Language.PureScript.Make.Actions.erlForeigns'.
+{-# NOINLINE decodeDeferredCbor #-}
+decodeDeferredCbor :: Serialise a => ByteString -> a
+decodeDeferredCbor bytes = case deserialiseOrFail bytes of
+  Right a -> a
+  Left err -> internalError ("corrupt deferred externs slice: " <> show err)
+
+-- | The exact shape the derived 'Serialise' instance produces (a definite
+-- CBOR list of (field count + 1) elements per constructor, leading tag =
+-- constructor index in source-declaration order: EDType=0, EDTypeSynonym=1,
+-- EDDataConstructor=2, EDValue=3, EDClass=4, EDInstance=5). For the four
+-- constructors with an expensive type payload, only the identifying
+-- field(s) are decoded eagerly here; the rest are captured as a byte slice
+-- via 'decodeSkippedSpan'/'sliceSpan' and wrapped in a 'decodeDeferredCbor'
+-- thunk, so building the actual 'SourceType'/'TypeKind' value is deferred
+-- to whatever environment lookup, wildcard-export resolution, or
+-- 'Coercible' entailment first needs that particular declaration -- see the
+-- on-demand-externs-decoding plan. 'EDClass'/'EDInstance' stay fully eager:
+-- nothing about them is deferred (see 'shallowForceExterns', which this
+-- mirrors).
+decodeExternsDeclarationSelective :: ByteString -> Decoder s ExternsDeclaration
+decodeExternsDeclarationSelective wholeInput = do
+  n <- decodeListLen
+  conIx <- decodeWord
+  case conIx of
+    0 -> do
+      when (n /= 4) $ fail ("EDType: expected 4-element CBOR record, got " <> show n)
+      name <- decode
+      (kindBefore, kindAfter) <- decodeSkippedSpan
+      (declKindBefore, declKindAfter) <- decodeSkippedSpan
+      let kind = decodeDeferredCbor (sliceSpan wholeInput kindBefore kindAfter)
+          declKind = decodeDeferredCbor (sliceSpan wholeInput declKindBefore declKindAfter)
+      pure (EDType name kind declKind)
+    1 -> do
+      when (n /= 4) $ fail ("EDTypeSynonym: expected 4-element CBOR record, got " <> show n)
+      name <- decode
+      (argsBefore, argsAfter) <- decodeSkippedSpan
+      (tyBefore, tyAfter) <- decodeSkippedSpan
+      let args = decodeDeferredCbor (sliceSpan wholeInput argsBefore argsAfter)
+          ty = decodeDeferredCbor (sliceSpan wholeInput tyBefore tyAfter)
+      pure (EDTypeSynonym name args ty)
+    2 -> do
+      when (n /= 6) $ fail ("EDDataConstructor: expected 6-element CBOR record, got " <> show n)
+      name <- decode
+      origin <- decode
+      tyCtor <- decode
+      (tyBefore, tyAfter) <- decodeSkippedSpan
+      (fieldsBefore, fieldsAfter) <- decodeSkippedSpan
+      let ty = decodeDeferredCbor (sliceSpan wholeInput tyBefore tyAfter)
+          fields = decodeDeferredCbor (sliceSpan wholeInput fieldsBefore fieldsAfter)
+      pure (EDDataConstructor name origin tyCtor ty fields)
+    3 -> do
+      when (n /= 3) $ fail ("EDValue: expected 3-element CBOR record, got " <> show n)
+      name <- decode
+      (tyBefore, tyAfter) <- decodeSkippedSpan
+      let ty = decodeDeferredCbor (sliceSpan wholeInput tyBefore tyAfter)
+      pure (EDValue name ty)
+    4 -> do
+      when (n /= 7) $ fail ("EDClass: expected 7-element CBOR record, got " <> show n)
+      EDClass <$> decode <*> decode <*> decode <*> decode <*> decode <*> decode
+    5 -> do
+      when (n /= 11) $ fail ("EDInstance: expected 11-element CBOR record, got " <> show n)
+      EDInstance <$> decode <*> decode <*> decode <*> decode <*> decode <*> decode <*> decode <*> decode <*> decode <*> decode
+    _ -> fail ("ExternsDeclaration: unknown constructor tag " <> show conIx)
 
 
 -- Declarations suitable for caching, where things like SourcePos are removed, and each ctor is isolated
