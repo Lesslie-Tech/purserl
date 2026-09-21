@@ -23,7 +23,6 @@ import Prelude
 
 import Codec.Serialise (Serialise)
 import Codec.Serialise qualified as Serialise
-import Codec.CBOR.Read qualified as CBOR.Read
 import Control.Exception (fromException, tryJust, Exception (displayException))
 import Control.Monad (join, guard, when)
 import Control.Monad.Base (MonadBase(..))
@@ -39,7 +38,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors, SimpleErrorMessage(..), singleError)
-import Language.PureScript.Externs (ExternsFile, externsIsCurrentVersion, shallowForceExterns, decodeExternsFileSelective)
+import Language.PureScript.Externs (ExternsFile, externsIsCurrentVersion)
 import Language.PureScript.Make.Cache (ContentHash, hash)
 import Language.PureScript.Options (Options)
 import System.Directory (createDirectoryIfMissing, getModificationTime, setModificationTime)
@@ -165,31 +164,16 @@ maybeWriteExternsToMemCache mmemCacheRef path mexternsHash mexterns = do
             case mexterns of
               Nothing -> pure ()
               Just externs ->
-                -- Deliberately not plain `force` here: that would deep-force
-                -- every field of `externs`, including the ones the on-demand
-                -- declaration decoder means to leave as unforced thunks
-                -- until first use (see `shallowForceExterns`'s docs) --
-                -- defeating that deferral before it can ever pay off.
-                IORef.atomicModifyIORef' memCacheRef (\x -> (MS.insert path (force externsHash, shallowForceExterns externs) x, ()))
+                IORef.atomicModifyIORef' memCacheRef (\x -> (MS.insert path (force (externsHash, externs)) x, ()))
       pure ()
 
 readExternsFileImplFromBytes :: (MonadIO m, MonadError MultipleErrors m) => FilePath -> BS.ByteString -> m (Maybe ExternsFile)
 readExternsFileImplFromBytes path bytes = do
-  -- Uses the hand-written 'decodeExternsFileSelective' instead of the
-  -- derived 'Serialise' instance's plain 'Serialise.deserialiseOrFail' --
-  -- see that function's docs. Byte-for-byte the same on-disk format either
-  -- way; only how much of it gets built into Haskell values differs.
-  --
-  -- 'wholeInput' is passed to 'decodeExternsFileSelective' as well as being
-  -- what's decoded: deferred declaration fields are captured as byte-offset
-  -- spans into this same value (see 'Language.PureScript.Externs.sliceSpan'),
-  -- so the offsets 'decodeWithByteSpan' reports line up with it exactly.
-  let wholeInput = BSL.fromStrict bytes
-  mexterns <- case CBOR.Read.deserialiseFromBytes (decodeExternsFileSelective wholeInput) wholeInput of
+  mexterns <- case Serialise.deserialiseOrFail (BSL.fromStrict bytes) of
     Left _ -> do
       liftIO $ putStrLn ("### corrupt-cbor:" <> path)
       pure Nothing
-    Right (_leftover, externs) ->
+    Right externs ->
       pure (Just externs)
   return $ do
     externs <- mexterns
