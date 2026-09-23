@@ -366,7 +366,6 @@ library
 
   other-modules:
     Data.Text.PureScript
-    Language.PureScript.Constants.TH
     Paths_purescript
     -- purerl
     -- Paths_purerl
