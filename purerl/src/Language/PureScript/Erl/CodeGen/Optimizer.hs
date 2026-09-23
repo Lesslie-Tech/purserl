@@ -13,28 +13,15 @@ import Control.Monad.Supply.Class (MonadSupply)
 
 import Language.PureScript.Erl.CodeGen.AST
     ( everywhereOnErl, Erl(..), pattern EApp, Atom )
-import Language.PureScript.Erl.CodeGen.Optimizer.MagicDo
-    ( magicDo )
-import Language.PureScript.Erl.CodeGen.Optimizer.Blocks
-    ( collapseNestedBlocks )
-import Language.PureScript.Erl.CodeGen.Optimizer.Common
-    ( applyAll, applyAllM )
 import Language.PureScript.Erl.CodeGen.Optimizer.Inliner
-    ( beginBinds,
-      etaConvert,
-      evaluateIifes,
-      inlineCommonOperators,
+    ( inlineCommonOperators,
       inlineCommonValuesTopDown,
       inlineCommonValuesBottomUp,
       specialize,
-      singleBegin, collectLists, replaceAppliedFunRefs, inlineCommonFnsM )
--- import Language.PureScript.Erl.CodeGen.Optimizer.Guards
---     ( inlineSimpleGuards )
+      inlineCommonFnsM )
 
 import qualified Language.PureScript.Erl.CodeGen.Constants as EC
-import Language.PureScript.Erl.CodeGen.Optimizer.Unused (removeUnusedFuns)
 import Data.Map (Map)
-import Language.PureScript.Erl.CodeGen.Optimizer.Memoize (addMemoizeAnnotations)
 import Control.Monad ((<=<))
 import Debug.Trace
 import Data.Function ((&))
@@ -45,20 +32,8 @@ import Data.Function ((&))
 optimize :: MonadSupply m => [(Atom, Int)] -> [Erl] -> m [Erl]
 -- optimize exports es = pure es
 -- optimize exports es = pure (Inliner.inline es)
--- optimize exports es = removeUnusedFuns exports <$> pure (Inliner.inline es)
-optimize exports es = do -- removeUnusedFuns exports <$> do
-  -- es2 <-
-  --     pure es
-  -- let es3 = Inliner.inline es2
-  -- es4 <- untilFixedPoint (traverse go) es2
-  -- es4 <- untilFixedPoint (traverse go) es3
-  -- let es5 = InlineLocal.inlineVarBinds es4
-  -- es6 <- untilFixedPoint (traverse go) es5
-  -- let es7 = InlineLocal.inlineVarBinds es6
-  -- es8 <- untilFixedPoint (traverse go) es7
+optimize exports es = do 
   es
-    -- & map (inlineCommonOperators EC.effect EC.effectDictionaries expander)
-    -- & map (go)
     & mapM
       (\b ->
         b
@@ -67,14 +42,6 @@ optimize exports es = do -- removeUnusedFuns exports <$> do
           & untilFix go
           & inlineCommonFnsM id
       )
-    -- & Inliner.inline
-    -- & map (untilFix go)
-    -- & Inliner.inline
-    -- & map (untilFix go)
-    -- & Inliner.inline
-    -- & map (untilFix go)
-    -- & map addMemoizeAnnotations
-  -- pure $ es4
 
   where
   go erl =
@@ -86,36 +53,6 @@ optimize exports es = do -- removeUnusedFuns exports <$> do
       -- Compilation took 102926 ms -- only bottomup
       -- Compilation took 102995 ms -- only bottomup
       -- Compilation took 109079 ms -- both
-
-
---   do
---    erl' <-
---      -- INVARIANT[drathier]: these transforms must never duplicate expressions, or they might duplicate bound variables without renaming the copies. We could (and probably should) rewrite them to actually inline variables, but we could also implement that step later, which we have already done in the inliner module.
---        erl
---        & pure
---
---    -- erl2 <- Inliner.inline erl
---
---    -- erl'' <- untilFixedPoint tidyUp
---    --   =<< untilFixedPoint (return . magicDo expander)
---    --   erl'
---    -- pure $ addMemoizeAnnotations erl''
---    pure $ erl'
---    -- pure $ addMemoizeAnnotations erl2
-
-  -- expander = id -- buildExpander es
-
-  tidyUp :: MonadSupply m => Erl -> m Erl
-  tidyUp = applyAllM
-    [ pure . collapseNestedBlocks
-    -- , pure . inlineSimpleGuards
-    , pure . beginBinds
-    , pure . evaluateIifes -- NOTE[drathier]: skipping this step doesn't change the resulting output/ folder contents at all; presumably it's handled by the etaConvert step
-    , pure . singleBegin
-    , pure . replaceAppliedFunRefs
-    , pure . collectLists
-    , etaConvert -- NOTE[drathier]: this removes/inlines IIFE's statefully, but `evaluateIifes` step before also perhaps does the same?
-    ]
 
 
 untilFixedPoint :: Show a => (Monad m, Eq a) => (a -> m a) -> a -> m a

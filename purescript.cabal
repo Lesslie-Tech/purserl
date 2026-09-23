@@ -348,13 +348,8 @@ library
     Language.PureScript.Erl.CodeGen.Constants
     Language.PureScript.Erl.CodeGen.Constants.PureScriptModules
     Language.PureScript.Erl.CodeGen.Optimizer
-    Language.PureScript.Erl.CodeGen.Optimizer.Blocks
     Language.PureScript.Erl.CodeGen.Optimizer.Common
-    Language.PureScript.Erl.CodeGen.Optimizer.Guards
     Language.PureScript.Erl.CodeGen.Optimizer.Inliner
-    Language.PureScript.Erl.CodeGen.Optimizer.MagicDo
-    Language.PureScript.Erl.CodeGen.Optimizer.Memoize
-    Language.PureScript.Erl.CodeGen.Optimizer.Unused
     Language.PureScript.Erl.CodeGen.Types
     Language.PureScript.Erl.Errors
     Language.PureScript.Erl.Errors.Types
