@@ -18,15 +18,10 @@ module Language.PureScript.Pretty.Types
 
 import Prelude hiding ((<>))
 
-import Control.Arrow ((<+>))
-import Control.Lens (_2, (%~))
-import Control.PatternArrows as PA
-
-import Data.Maybe (fromMaybe, catMaybes)
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Data.Text qualified as T
 
-import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment (tyFunction, tyRecord)
 import Language.PureScript.Names (OpName(..), OpNameType(..), ProperName(..), ProperNameType(..), Qualified, coerceProperName, disqualify, showQualified)
 import Language.PureScript.Pretty.Common (before, objectKeyRequiresQuoting)
@@ -141,104 +136,36 @@ prettyPrintRowWith tro open close labels rest =
   tailToPs Nothing = nullBox
   tailToPs (Just other) = text "| " <> typeAsBox' other
 
-typeApp :: Pattern () PrettyPrintType (PrettyPrintType, PrettyPrintType)
-typeApp = mkPattern match
-  where
-  match (PPTypeApp f x) = Just (f, x)
-  match _ = Nothing
+-- |
+-- Precedence rank of each "operator" shape, tightest-binding first. This
+-- mirrors the old operator-table's level order and drives parenthesization:
+-- an operand renders bare when it's strictly tighter than its parent, or
+-- (`operand`'s `allowChain` flag) when it's the exact same shape recursing
+-- into its one chainable slot (e.g. `@\@k`, `f x y`, `a -> b -> c`, nested
+-- foralls/parens...); anything else falls back to a fully parenthesized
+-- render. Every rank below corresponds to exactly one constructor, so rank
+-- equality already implies "same shape" with no further check needed.
+-- Everything not listed (the plain "atoms": vars, constructors, records,
+-- rows, wildcards, etc.) is rank 0, tighter than every real operator.
+rank :: PrettyPrintType -> Int
+rank (PPKindArg _) = 1
+rank (PPTypeApp _ _) = 2
+rank (PPFunction _ _) = 3
+rank (PPConstrainedType _ _) = 4
+rank (PPForAll _ _) = 5
+rank (PPKindedType _ _) = 6
+rank (PPParensInType _) = 7
+rank _ = 0
 
-kindArg :: Pattern () PrettyPrintType ((), PrettyPrintType)
-kindArg = mkPattern match
-  where
-  match (PPKindArg ty) = Just ((), ty)
-  match _ = Nothing
-
-appliedFunction :: Pattern () PrettyPrintType (PrettyPrintType, PrettyPrintType)
-appliedFunction = mkPattern match
-  where
-  match (PPFunction arg ret) = Just (arg, ret)
-  match _ = Nothing
-
-kinded :: Pattern () PrettyPrintType (PrettyPrintType, PrettyPrintType)
-kinded = mkPattern match
-  where
-  match (PPKindedType t k) = Just (t, k)
-  match _ = Nothing
-
-constrained :: Pattern () PrettyPrintType (PrettyPrintConstraint, PrettyPrintType)
-constrained = mkPattern match
-  where
-  match (PPConstrainedType deps ty) = Just (deps, ty)
-  match _ = Nothing
-
-explicitParens :: Pattern () PrettyPrintType ((), PrettyPrintType)
-explicitParens = mkPattern match
-  where
-  match (PPParensInType ty) = Just ((), ty)
-  match _ = Nothing
-
-matchTypeAtom :: TypeRenderOptions -> Pattern () PrettyPrintType Box
-matchTypeAtom tro@TypeRenderOptions{troSuggesting = suggesting} =
-    typeLiterals <+> fmap ((`before` text ")") . (text "(" <>)) (matchType tro)
-  where
-    typeLiterals :: Pattern () PrettyPrintType Box
-    typeLiterals = mkPattern match where
-      match (PPTypeWildcard name) = Just $ text $ maybe "_" (('?' :) . T.unpack) name
-      match (PPTypeVar var _) = Just $ text $ T.unpack var
-      match (PPTypeLevelString s) = Just $ text $ T.unpack $ prettyPrintString s
-      match (PPTypeLevelInt n) = Just $ text $ show n
-      match (PPTypeConstructor ctor) = Just $ text $ T.unpack $ runProperName $ disqualify ctor
-      match (PPTUnknown u)
-        | suggesting = Just $ text "_"
-        | otherwise = Just $ text $ 't' : show u
-      match (PPSkolem name s)
-        | suggesting =  Just $ text $ T.unpack name
-        | otherwise = Just $ text $ T.unpack name ++ show s
-      match (PPRecord labels tail_) = Just $ prettyPrintRowWith tro '{' '}' labels tail_
-      match (PPRow labels tail_) = Just $ prettyPrintRowWith tro '(' ')' labels tail_
-      match (PPBinaryNoParensType op l r) =
-        Just $ typeAsBox' l <> text " " <> typeAsBox' op <> text " " <> typeAsBox' r
-      match (PPTypeOp op) = Just $ text $ T.unpack $ showQualified runOpName op
-      match PPTruncated = Just $ text "..."
-      match _ = Nothing
-
-matchType :: TypeRenderOptions -> Pattern () PrettyPrintType Box
-matchType tro = buildPrettyPrinter operators (matchTypeAtom tro) where
-  operators :: OperatorTable () PrettyPrintType Box
-  operators =
-    OperatorTable [ [ Wrap kindArg $ \_ ty -> text "@" <> ty ]
-                  , [ AssocL typeApp $ \f x -> keepSingleLinesOr (moveRight 2) f x ]
-                  , [ AssocR appliedFunction $ \arg ret -> keepSingleLinesOr id arg (text rightArrow <> " " <> ret) ]
-                  , [ Wrap constrained $ \deps ty -> constraintsAsBox tro deps ty ]
-                  , [ Wrap forall_ $ \idents ty -> keepSingleLinesOr (moveRight 2) (hsep 1 top (text forall' : fmap printMbKindedType idents) <> text ".") ty ]
-                  , [ Wrap kinded $ \ty k -> keepSingleLinesOr (moveRight 2) (typeAsBox' ty) (text (doubleColon ++ " ") <> k) ]
-                  , [ Wrap explicitParens $ \_ ty -> ty ]
-                  ]
-
-  rightArrow = if troUnicode tro then "→" else "->"
-  forall' = if troUnicode tro then "∀" else "forall"
-  doubleColon = if troUnicode tro then "∷" else "::"
-
-  printMbKindedType (vis, v, Nothing) = text (T.unpack $ typeVarVisibilityPrefix vis) <> text v
-  printMbKindedType (vis, v, Just k) = text ("(" ++ T.unpack (typeVarVisibilityPrefix vis) ++ v ++ " " ++ doubleColon ++ " ") <> typeAsBox' k <> text ")"
-
-  -- If both boxes span a single line, keep them on the same line, or else
-  -- use the specified function to modify the second box, then combine vertically.
-  keepSingleLinesOr :: (Box -> Box) -> Box -> Box -> Box
-  keepSingleLinesOr f b1 b2
-    | rows b1 > 1 || rows b2 > 1 = vcat left [ b1, f b2 ]
-    | otherwise = hcat top [ b1, text " ", b2]
-
-forall_ :: Pattern () PrettyPrintType ([(TypeVarVisibility, String, Maybe PrettyPrintType)], PrettyPrintType)
-forall_ = mkPattern match
-  where
-  match (PPForAll idents ty) = Just ((_2 %~ T.unpack) <$> idents, ty)
-  match _ = Nothing
+-- | Wrap a box in literal parens, matching the original's placement of the
+-- closing paren on its own line when the wrapped content is multi-row.
+wrapParens :: Box -> Box
+wrapParens inner = (text "(" <> inner) `before` text ")"
 
 typeAtomAsBox' :: PrettyPrintType -> Box
-typeAtomAsBox'
-  = fromMaybe (internalError "Incomplete pattern")
-  . PA.pattern (matchTypeAtom defaultOptions) ()
+typeAtomAsBox' ty
+  | rank ty == 0 = typeAsBox' ty
+  | otherwise = wrapParens (typeAsBox' ty)
 
 typeAtomAsBox :: Int -> Type a -> Box
 typeAtomAsBox maxDepth = typeAtomAsBox' . convertPrettyPrintType maxDepth
@@ -278,9 +205,66 @@ unicodeOptions :: TypeRenderOptions
 unicodeOptions = TypeRenderOptions False True False
 
 typeAsBoxImpl :: TypeRenderOptions -> PrettyPrintType -> Box
-typeAsBoxImpl tro
-  = fromMaybe (internalError "Incomplete pattern")
-  . PA.pattern (matchType tro) ()
+typeAsBoxImpl = renderType
+
+-- | Render an operand of a "rank `selfRank`" construct: bare if it's
+-- strictly tighter, bare (recursing straight back into `renderType`) if
+-- `allowChain` and it's the exact same shape, otherwise a fully
+-- parenthesized render.
+operand :: TypeRenderOptions -> Int -> Bool -> PrettyPrintType -> Box
+operand tro selfRank allowChain x
+  | rank x < selfRank = renderType tro x
+  | allowChain && rank x == selfRank = renderType tro x
+  | otherwise = wrapParens (renderType tro x)
+
+-- If both boxes span a single line, keep them on the same line, or else
+-- use the specified function to modify the second box, then combine vertically.
+keepSingleLinesOr :: (Box -> Box) -> Box -> Box -> Box
+keepSingleLinesOr f b1 b2
+  | rows b1 > 1 || rows b2 > 1 = vcat left [ b1, f b2 ]
+  | otherwise = hcat top [ b1, text " ", b2]
+
+printMbKindedType :: TypeRenderOptions -> (TypeVarVisibility, Text, Maybe PrettyPrintType) -> Box
+printMbKindedType tro (vis, v, mbK) = case mbK of
+  Nothing -> text (T.unpack (typeVarVisibilityPrefix vis) ++ T.unpack v)
+  Just k -> text ("(" ++ T.unpack (typeVarVisibilityPrefix vis) ++ T.unpack v ++ " " ++ doubleColon tro ++ " ") <> typeAsBox' k <> text ")"
+
+doubleColon :: TypeRenderOptions -> String
+doubleColon tro = if troUnicode tro then "∷" else "::"
+
+renderType :: TypeRenderOptions -> PrettyPrintType -> Box
+renderType tro = go
+  where
+  rightArrow = if troUnicode tro then "→" else "->"
+  forall' = if troUnicode tro then "∀" else "forall"
+
+  go :: PrettyPrintType -> Box
+  go (PPTypeWildcard name) = text $ maybe "_" (('?' :) . T.unpack) name
+  go (PPTypeVar var _) = text $ T.unpack var
+  go (PPTypeLevelString s) = text $ T.unpack $ prettyPrintString s
+  go (PPTypeLevelInt n) = text $ show n
+  go (PPTypeConstructor ctor) = text $ T.unpack $ runProperName $ disqualify ctor
+  go (PPTUnknown u)
+    | troSuggesting tro = text "_"
+    | otherwise = text $ 't' : show u
+  go (PPSkolem name s)
+    | troSuggesting tro = text $ T.unpack name
+    | otherwise = text $ T.unpack name ++ show s
+  go (PPRecord labels tail_) = prettyPrintRowWith tro '{' '}' labels tail_
+  go (PPRow labels tail_) = prettyPrintRowWith tro '(' ')' labels tail_
+  go (PPBinaryNoParensType op l r) =
+    typeAsBox' l <> text " " <> typeAsBox' op <> text " " <> typeAsBox' r
+  go (PPTypeOp op) = text $ T.unpack $ showQualified runOpName op
+  go PPTruncated = text "..."
+
+  go (PPKindArg ty) = text "@" <> operand tro 1 True ty
+  go (PPTypeApp f x) = keepSingleLinesOr (moveRight 2) (operand tro 2 True f) (operand tro 2 False x)
+  go (PPFunction argT ret) = keepSingleLinesOr id (operand tro 3 False argT) (text rightArrow <> " " <> operand tro 3 True ret)
+  go (PPConstrainedType deps ty) = constraintsAsBox tro deps (operand tro 4 True ty)
+  go (PPForAll idents ty) =
+    keepSingleLinesOr (moveRight 2) (hsep 1 top (text forall' : fmap (printMbKindedType tro) idents) <> text ".") (operand tro 5 True ty)
+  go (PPKindedType t k) = keepSingleLinesOr (moveRight 2) (typeAsBox' t) (text (doubleColon tro ++ " ") <> operand tro 6 True k)
+  go (PPParensInType ty) = operand tro 7 True ty
 
 -- | Generate a pretty-printed string representing a 'Type'
 prettyPrintType :: Int -> Type a -> String
