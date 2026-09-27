@@ -1,3 +1,4 @@
+{- HLINT ignore "Use if" -}
 module Language.PureScript.Make
   (
   -- * Make API
@@ -57,6 +58,9 @@ import Data.Text.IO qualified as T
 -- purserl
 import qualified Build as Erl.Build
 import           System.Directory (getCurrentDirectory)
+import System.CPUTime (getCPUTime)
+import GHC.Float (int2Float)
+import System.Clock (getTime, Clock (..), toNanoSecs)
 -- import System.IO.Unsafe (unsafePerformIO)
 --
 
@@ -100,6 +104,12 @@ data ModuleCheckResult = ModuleCheckResult
   , mcrNextVar :: Integer
   }
 
+diffTime :: Integer -> Integer -> T.Text
+diffTime start end = T.pack (show (fromInteger (end - start) / 1000000.0)) <> " ms"
+
+realTime :: MonadIO m => m Integer
+realTime = liftIO $ fmap toNanoSecs (liftIO (getTime Realtime))
+
 -- | Phase A of rebuilding a single module: parse (already done by the
 -- caller) through typecheck, CoreFn generation/optimization, renaming, and
 -- ffiCodegen -- i.e. everything needed to fully determine this module's
@@ -116,21 +126,27 @@ rebuildModuleTypecheck
   -> Make ModuleCheckResult
 rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ _) moduleIndex causedByModule = do
   progress $ CompilingModule moduleName moduleIndex causedByModule
-  progress $ CompileMeta ("### CS.goBuildEnv13[" <> runModuleName moduleName <> "]")
+  st1 <- realTime
   let env = foldl' (flip applyExternsFileToEnvironment) initEnvironment externs
       withPrim = importPrim m
   lint withPrim
+  end1 <- realTime
+  progress $ CompileMeta ("### CS.doneBuildEnv13[" <> runModuleName moduleName <> "] " <> diffTime st1 end1)
 
-  progress $ CompileMeta ("### CS.goDesugar1[" <> runModuleName moduleName <> "]")
+  st2 <- realTime
   ((Module ss coms _ elaborated exps, env'), nextVar) <- runSupplyT 0 $ do
     -- lift $ progress $ CompilingModule moduleName moduleIndex "2"
     (desugared, (exEnv', usedImports)) <- runStateT (desugar externs withPrim) (exEnv, mempty)
-    lift $ progress $ CompileMeta ("### CS.goTypeCheck2[" <> runModuleName moduleName <> "]")
+    end2 <- realTime
+    lift $ progress $ CompileMeta ("### CS.doneDesugar1[" <> runModuleName moduleName <> "] " <> diffTime st2 end2)
+    st3 <- realTime
     -- lift $ progress $ CompilingModule moduleName moduleIndex "3"
     let modulesExports = (\(_, _, exports) -> exports) <$> exEnv'
     -- lift $ progress $ CompilingModule moduleName moduleIndex "4"
     (checked, CheckState{..}) <- runStateT (typeCheckModule modulesExports desugared) $ emptyCheckState env
-    lift $ progress $ CompileMeta ("### CS.goLintImports3[" <> runModuleName moduleName <> "]")
+    end3 <- realTime
+    lift $ progress $ CompileMeta ("### CS.doneTypeCheck2[" <> runModuleName moduleName <> "] " <> diffTime st3 end3)
+    st4 <- realTime
     -- lift $ progress $ CompilingModule moduleName moduleIndex "5"
     let usedImports' = foldl' (flip $ \(fromModuleName, newtypeCtorName) ->
           M.alter (Just . (fmap DctorName newtypeCtorName :) . fold) fromModuleName) usedImports checkConstructorImportsForCoercible
@@ -138,21 +154,27 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
     -- known which newtype constructors are used to solve Coercible
     -- constraints in order to not report them as unused.
     censor (addHint (ErrorInModule moduleName)) $ lintImports checked exEnv' usedImports'
-    lift $ progress $ CompileMeta ("### CS.goDesugarCaseGuards4[" <> runModuleName moduleName <> "]")
+    end4 <- realTime
+    lift $ progress $ CompileMeta ("### CS.doneLintImports3[" <> runModuleName moduleName <> "] " <> diffTime st4 end4)
     return (checked, checkEnv)
 
   -- progress $ CompilingModule moduleName moduleIndex "6"
 
+  st5 <- realTime
   -- desugar case declarations *after* type- and exhaustiveness checking
   -- since pattern guards introduces cases which the exhaustiveness checker
   -- reports as not-exhaustive.
   (deguarded, nextVar') <- runSupplyT nextVar $ do
     desugarCaseGuards elaborated
-  progress $ CompileMeta ("### CS.goCreateBindingGroups5[" <> runModuleName moduleName <> "]")
+  end5 <- realTime
+  progress $ CompileMeta ("### CS.doneDesugarCaseGuards4[" <> runModuleName moduleName <> "] " <> diffTime st5 end5)
 
+  st6 <- realTime
   regrouped <- createBindingGroups moduleName . collapseBindingGroups $ deguarded
+  end6 <- realTime
 
-  progress $ CompileMeta ("### CS.goFfiCodegen6[" <> runModuleName moduleName <> "]")
+  progress $ CompileMeta ("### CS.doneCreateBindingGroups5[" <> runModuleName moduleName <> "] " <> diffTime st6 end6)
+  st7 <- realTime
   let upstreamDBs = M.fromList $ (\e -> (efModuleName e, efOurCacheShapes e)) <$> externs
   let mod' = Module ss coms moduleName regrouped exps
       corefn = CF.moduleToCoreFn env' mod'
@@ -160,6 +182,8 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
       (renamedIdents, renamed) = renameInModule optimized
       exts = moduleToExternsFile upstreamDBs mod' env' renamedIdents
   ffiCodegen renamed
+  end7 <- realTime
+  progress $ CompileMeta ("### CS.doneFfiCodegen6[" <> runModuleName moduleName <> "] " <> diffTime st7 end7)
 
   pure ModuleCheckResult
     { mcrUpstreamEnv = env
@@ -178,15 +202,15 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
 -- the NOTE at its call site about grabbing a copy of the old externs file
 -- before running this if you want to diff them.
 rebuildModuleCodegen
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => MakeActions m
+  :: MakeActions Make
   -> ModuleName
   -> ModuleCheckResult
-  -> m ()
+  -> Make ()
 rebuildModuleCodegen MakeActions{..} moduleName ModuleCheckResult{..} = do
-  progress $ CompileMeta ("### CS.goCodegen7[" <> runModuleName moduleName <> "]")
+  st <- realTime
   evalSupplyT mcrNextVar $ codegen mcrUpstreamEnv mcrRenamed mcrExterns
+  end <- realTime
+  progress $ CompileMeta ("### CS.doneCodegen7[" <> runModuleName moduleName <> "] " <> diffTime st end)
 
 -- | Rebuild a single module, running both phase A (typecheck) and phase B
 -- (codegen) in sequence. Used by callers that don't need (or can't use) the
@@ -214,26 +238,25 @@ make :: MakeActions Make
      -> [CST.PartialResult Module]
      -> Make [ExternsFile]
 make ma@MakeActions{..} ms = do
-  progress $ CompileMeta "### CS.goReadCacheDb8"
 
+  st1 <- realTime
   checkModuleNames
   cacheDb <- readCacheDb
-  progress $ CompileMeta "### CS.goSortModules9"
+  end1 <- realTime
+  progress $ CompileMeta ("### CS.doneReadCacheDb8 " <> diffTime st1 end1)
 
-  -- let !_ = unsafePerformIO $ putStrLn (show ("cacheDb", cacheDb))
-
+  st2 <- realTime
   (sorted, graph) <- sortModules Transitive (moduleSignature . CST.resPartial) ms
-  progress $ CompileMeta "### CS.goConstructBuildPlan10"
+  end2 <- realTime
+  progress $ CompileMeta ("### CS.doneSortModules9 " <> diffTime st2 end2)
 
-  -- (buildPlan2, newCacheDb2) <- BuildPlan.construct2 ma cacheDb (sortedDirect, graphDirect)
+
+  st3 <- realTime
   (buildPlan, newCacheDb) <- BuildPlan.construct2 ma cacheDb (sorted, graph)
+  end3 <- realTime
+  progress $ CompileMeta ("### CS.doneConstructBuildPlan10 " <> diffTime st3 end3)
   progress $ CompileMeta "### CS.goFork11"
 
-  -- Limit concurrent module builds to the number of capabilities as
-  -- (by default) inferred from `+RTS -N -RTS` or set explicitly like `-N4`.
-  -- This is to ensure that modules complete fully before moving on, to avoid
-  -- holding excess memory during compilation from modules that were paused
-  -- by the Haskell runtime.
   capabilities <- getNumCapabilities
   let concurrency = max 1 capabilities
   lock <- C.newQSem concurrency
