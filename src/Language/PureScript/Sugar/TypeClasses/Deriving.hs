@@ -4,26 +4,24 @@ module Language.PureScript.Sugar.TypeClasses.Deriving (deriveInstances) where
 import Prelude
 import Protolude (note)
 
-import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.Supply.Class (MonadSupply)
+import Control.Monad.Error.Class (throwError)
 import Data.List (foldl', find, unzip5)
 import Language.PureScript.AST (Binder(..), CaseAlternative(..), DataConstructorDeclaration(..), Declaration(..), Expr(..), pattern MkUnguarded, Module(..), SourceSpan(..), TypeInstanceBody(..), pattern ValueDecl, SourceAnn(..))
 import Language.PureScript.AST.Utils (UnwrappedTypeConstructor(..), lamCase, unguarded, unwrapTypeConstructor)
 import Language.PureScript.Constants.Libs qualified as Libs
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment (DataDeclType(..), NameKind(..))
-import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), errorMessage')
+import Language.PureScript.Errors (SimpleErrorMessage(..), errorMessage')
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName, ProperName(..), ProperNameType(..), Qualified(..), QualifiedBy(..), freshIdent)
 import Language.PureScript.PSString (mkString)
+import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Types (SourceType, Type(..), WildcardData(..), replaceAllTypeVars, srcTypeApp, srcTypeConstructor, srcTypeLevelString)
 import Language.PureScript.TypeChecker (checkNewtype)
 
 -- | Elaborates deriving instance declarations by code generation.
 deriveInstances
-  :: forall m
-   . (MonadError MultipleErrors m, MonadSupply m)
-  => Module
-  -> m Module
+  :: Module
+  -> DesugarM Module
 deriveInstances (Module ss coms mn ds exts) =
     Module ss coms mn <$> mapM (deriveInstance mn ds) ds <*> pure exts
 
@@ -37,16 +35,14 @@ deriveInstances (Module ss coms mn ds exts) =
 --   to replace them.
 --
 deriveInstance
-  :: forall m
-   . (MonadError MultipleErrors m, MonadSupply m)
-  => ModuleName
+  :: ModuleName
   -> [Declaration]
   -> Declaration
-  -> m Declaration
+  -> DesugarM Declaration
 deriveInstance mn ds decl =
   case decl of
     TypeInstanceDeclaration sa@(SourceAnn ss _) na ch idx nm deps className tys DerivedInstance -> let
-      binaryWildcardClass :: (Declaration -> [SourceType] -> m ([Declaration], SourceType)) -> m Declaration
+      binaryWildcardClass :: (Declaration -> [SourceType] -> DesugarM ([Declaration], SourceType)) -> DesugarM Declaration
       binaryWildcardClass f = case tys of
         [ty1, ty2] -> case unwrapTypeConstructor ty1 of
           Just UnwrappedTypeConstructor{..} | mn == utcModuleName -> do
@@ -64,13 +60,11 @@ deriveInstance mn ds decl =
     _ -> pure decl
 
 deriveGenericRep
-  :: forall m
-   . (MonadError MultipleErrors m, MonadSupply m)
-  => SourceSpan
+  :: SourceSpan
   -> ModuleName
   -> Declaration
   -> [SourceType]
-  -> m ([Declaration], SourceType)
+  -> DesugarM ([Declaration], SourceType)
 deriveGenericRep ss mn tyCon tyConArgs =
   case tyCon of
     DataDeclaration (SourceAnn ss' _) _ _ args dctors -> do
@@ -124,7 +118,7 @@ deriveGenericRep ss mn tyCon tyConArgs =
 
     makeInst
       :: DataConstructorDeclaration
-      -> m (SourceType, CaseAlternative, CaseAlternative)
+      -> DesugarM (SourceType, CaseAlternative, CaseAlternative)
     makeInst (DataConstructorDeclaration _ ctorName args) = do
         let args' = map snd args
         (ctorTy, matchProduct, ctorArgs, matchCtor, mkProduct) <- makeProduct args'
@@ -139,7 +133,7 @@ deriveGenericRep ss mn tyCon tyConArgs =
 
     makeProduct
       :: [SourceType]
-      -> m (SourceType, Binder, [Expr], [Binder], Expr)
+      -> DesugarM (SourceType, Binder, [Expr], [Binder], Expr)
     makeProduct [] =
       pure (srcTypeConstructor Libs.NoArguments, NullBinder, [], [], Constructor ss Libs.C_NoArguments)
     makeProduct args = do
@@ -151,7 +145,7 @@ deriveGenericRep ss mn tyCon tyConArgs =
            , foldr1 (\e1 -> App (App (Constructor ss Libs.C_Product) e1)) es2
            )
 
-    makeArg :: SourceType -> m (SourceType, Binder, Expr, Binder, Expr)
+    makeArg :: SourceType -> DesugarM (SourceType, Binder, Expr, Binder, Expr)
     makeArg arg = do
       argName <- freshIdent "arg"
       pure ( srcTypeApp (srcTypeConstructor Libs.Argument) arg
@@ -173,17 +167,15 @@ deriveGenericRep ss mn tyCon tyConArgs =
     toRepTy [only] = only
     toRepTy ctors = foldr1 (\f -> srcTypeApp (srcTypeApp (srcTypeConstructor Libs.Sum) f)) ctors
 
-checkIsWildcard :: MonadError MultipleErrors m => SourceSpan -> ProperName 'TypeName -> SourceType -> m ()
+checkIsWildcard :: SourceSpan -> ProperName 'TypeName -> SourceType -> DesugarM ()
 checkIsWildcard _ _ (TypeWildcard _ UnnamedWildcard) = return ()
 checkIsWildcard ss tyConNm _ =
   throwError . errorMessage' ss $ ExpectedWildcard tyConNm
 
 deriveNewtype
-  :: forall m
-   . MonadError MultipleErrors m
-  => Declaration
+  :: Declaration
   -> [SourceType]
-  -> m ([Declaration], SourceType)
+  -> DesugarM ([Declaration], SourceType)
 deriveNewtype tyCon tyConArgs =
   case tyCon of
     DataDeclaration (SourceAnn ss' _) Data name _ _ ->
@@ -195,11 +187,10 @@ deriveNewtype tyCon tyConArgs =
     _ -> internalError "deriveNewtype: expected DataDeclaration"
 
 findTypeDecl
-  :: (MonadError MultipleErrors m)
-  => SourceSpan
+  :: SourceSpan
   -> ProperName 'TypeName
   -> [Declaration]
-  -> m Declaration
+  -> DesugarM Declaration
 findTypeDecl ss tyConNm = note (errorMessage' ss $ CannotFindDerivingType tyConNm) . find isTypeDecl
   where
   isTypeDecl :: Declaration -> Bool

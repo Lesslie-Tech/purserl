@@ -32,6 +32,7 @@ import Language.PureScript.Names (pattern ByNullSourcePos, Ident, OpName, OpName
 import Language.PureScript.Sugar.Names.Env (Env, Exports(..), ImportProvenance(..), ImportRecord(..), Imports(..), checkImportConflicts, nullImports, primEnv)
 import Language.PureScript.Sugar.Names.Exports (findExportable, resolveExports)
 import Language.PureScript.Sugar.Names.Imports (resolveImports, resolveModuleImport)
+import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Traversals (defS, sndM)
 import Language.PureScript.Types (Constraint(..), SourceConstraint, SourceType, Type(..), everywhereOnTypesM)
 
@@ -39,13 +40,11 @@ import Language.PureScript.Types (Constraint(..), SourceConstraint, SourceType, 
 -- Replaces all local names with qualified names.
 --
 desugarImports
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m, MonadState (Env, UsedImports) m)
-  => Module
-  -> m Module
+  :: Module
+  -> DesugarM Module
 desugarImports = updateEnv >=> renameInModule'
   where
-  updateEnv :: Module -> m Module
+  updateEnv :: Module -> DesugarM Module
   updateEnv m@(Module ss _ mn _ refs) = do
     members <- findExportable m
     env' <- gets $ M.insert mn (ss, nullImports, members) . fst
@@ -54,7 +53,7 @@ desugarImports = updateEnv >=> renameInModule'
     modify . first $ M.insert mn (ss, imps, exps)
     return m'
 
-  renameInModule' :: Module -> m Module
+  renameInModule' :: Module -> DesugarM Module
   renameInModule' m@(Module _ _ mn _ _) =
     warnAndRethrow (addHint (ErrorInModule mn)) $ do
       env <- gets fst
@@ -164,11 +163,9 @@ reorderExports decls originalRefs =
 -- qualified names are valid.
 --
 renameInModule
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m, MonadState UsedImports m)
-  => Imports
+  :: Imports
   -> Module
-  -> m Module
+  -> StateT UsedImports DesugarM Module
 renameInModule imports (Module modSS coms mn decls exps) =
   Module modSS coms mn <$> parU decls go <*> pure exps
   where
@@ -186,7 +183,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
   updateDecl
     :: M.Map Ident SourcePos
     -> Declaration
-    -> m (M.Map Ident SourcePos, Declaration)
+    -> StateT UsedImports DesugarM (M.Map Ident SourcePos, Declaration)
   updateDecl bound (DataDeclaration sa dtype name args dctors) =
     fmap (bound,) $
       DataDeclaration sa dtype name
@@ -248,7 +245,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
   updateValue
     :: (SourceSpan, M.Map Ident SourcePos)
     -> Expr
-    -> m ((SourceSpan, M.Map Ident SourcePos), Expr)
+    -> StateT UsedImports DesugarM ((SourceSpan, M.Map Ident SourcePos), Expr)
   updateValue (_, bound) v@(PositionedValue pos' _ _) =
     return ((pos', bound), v)
   updateValue (pos, bound) (Abs (VarBinder ss arg) val') =
@@ -296,7 +293,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
   updateBinder
     :: (SourceSpan, M.Map Ident SourcePos)
     -> Binder
-    -> m ((SourceSpan, M.Map Ident SourcePos), Binder)
+    -> StateT UsedImports DesugarM ((SourceSpan, M.Map Ident SourcePos), Binder)
   updateBinder (_, bound) v@(PositionedBinder pos _ _) =
     return ((pos, bound), v)
   updateBinder (_, bound) (ConstructorBinder ss name b) =
@@ -312,7 +309,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
   updateCase
     :: (SourceSpan, M.Map Ident SourcePos)
     -> CaseAlternative
-    -> m ((SourceSpan, M.Map Ident SourcePos), CaseAlternative)
+    -> StateT UsedImports DesugarM ((SourceSpan, M.Map Ident SourcePos), CaseAlternative)
   updateCase (pos, bound) c@(CaseAlternative bs _) =
     return ((pos, rUnionMap binderNamesWithSpans' bs `M.union` bound), c)
     where
@@ -321,7 +318,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
   updateGuard
     :: (SourceSpan, M.Map Ident SourcePos)
     -> Guard
-    -> m ((SourceSpan, M.Map Ident SourcePos), Guard)
+    -> StateT UsedImports DesugarM ((SourceSpan, M.Map Ident SourcePos), Guard)
   updateGuard (pos, bound) g@(ConditionGuard _) =
     return ((pos, bound), g)
   updateGuard (pos, bound) g@(PatternGuard b _) =
@@ -346,22 +343,22 @@ renameInModule imports (Module modSS coms mn decls exps) =
 
   updateTypeArguments
     :: (Traversable f, Traversable g)
-    => f (a, g SourceType) -> m (f (a, g SourceType))
+    => f (a, g SourceType) -> StateT UsedImports DesugarM (f (a, g SourceType))
   updateTypeArguments = traverse (sndM (traverse updateTypesEverywhere))
 
-  updateTypesEverywhere :: SourceType -> m SourceType
+  updateTypesEverywhere :: SourceType -> StateT UsedImports DesugarM SourceType
   updateTypesEverywhere = everywhereOnTypesM updateType
     where
-    updateType :: SourceType -> m SourceType
+    updateType :: SourceType -> StateT UsedImports DesugarM SourceType
     updateType (TypeOp ann@(SourceAnn ss _) name) = TypeOp ann <$> updateTypeOpName name ss
     updateType (TypeConstructor ann@(SourceAnn ss _) name) = TypeConstructor ann <$> updateTypeName name ss
     updateType (ConstrainedType ann c t) = ConstrainedType ann <$> updateInConstraint c <*> pure t
     updateType t = return t
-    updateInConstraint :: SourceConstraint -> m SourceConstraint
+    updateInConstraint :: SourceConstraint -> StateT UsedImports DesugarM SourceConstraint
     updateInConstraint (Constraint ann@(SourceAnn ss _) name ks ts info) =
       Constraint ann <$> updateClassName name ss <*> pure ks <*> pure ts <*> pure info
 
-  updateConstraints :: [SourceConstraint] -> m [SourceConstraint]
+  updateConstraints :: [SourceConstraint] -> StateT UsedImports DesugarM [SourceConstraint]
   updateConstraints = traverse $ \(Constraint ann@(SourceAnn pos _) name ks ts info) ->
     Constraint ann
       <$> updateClassName name pos
@@ -372,34 +369,34 @@ renameInModule imports (Module modSS coms mn decls exps) =
   updateTypeName
     :: Qualified (ProperName 'TypeName)
     -> SourceSpan
-    -> m (Qualified (ProperName 'TypeName))
+    -> StateT UsedImports DesugarM (Qualified (ProperName 'TypeName))
   updateTypeName = update (importedTypes imports) TyName
 
   updateTypeOpName
     :: Qualified (OpName 'TypeOpName)
     -> SourceSpan
-    -> m (Qualified (OpName 'TypeOpName))
+    -> StateT UsedImports DesugarM (Qualified (OpName 'TypeOpName))
   updateTypeOpName = update (importedTypeOps imports) TyOpName
 
   updateDataConstructorName
     :: Qualified (ProperName 'ConstructorName)
     -> SourceSpan
-    -> m (Qualified (ProperName 'ConstructorName))
+    -> StateT UsedImports DesugarM (Qualified (ProperName 'ConstructorName))
   updateDataConstructorName = update (importedDataConstructors imports) DctorName
 
   updateClassName
     :: Qualified (ProperName 'ClassName)
     -> SourceSpan
-    -> m (Qualified (ProperName 'ClassName))
+    -> StateT UsedImports DesugarM (Qualified (ProperName 'ClassName))
   updateClassName = update (importedTypeClasses imports) TyClassName
 
-  updateValueName :: Qualified Ident -> SourceSpan -> m (Qualified Ident)
+  updateValueName :: Qualified Ident -> SourceSpan -> StateT UsedImports DesugarM (Qualified Ident)
   updateValueName = update (importedValues imports) IdentName
 
   updateValueOpName
     :: Qualified (OpName 'ValueOpName)
     -> SourceSpan
-    -> m (Qualified (OpName 'ValueOpName))
+    -> StateT UsedImports DesugarM (Qualified (OpName 'ValueOpName))
   updateValueOpName = update (importedValueOps imports) ValOpName
 
   -- Update names so unqualified references become qualified, and locally
@@ -411,7 +408,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
     -> (a -> Name)
     -> Qualified a
     -> SourceSpan
-    -> m (Qualified a)
+    -> StateT UsedImports DesugarM (Qualified a)
   update imps toName qname@(Qualified mn' name) pos = warnAndRethrowWithPosition pos $
     case (M.lookup qname imps, mn') of
 

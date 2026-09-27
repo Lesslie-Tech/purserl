@@ -107,7 +107,7 @@ data ModuleCheckResult = ModuleCheckResult
 diffTime :: Integer -> Integer -> T.Text
 diffTime start end = T.pack (show (fromInteger (end - start) / 1000000.0)) <> " ms"
 
-realTime :: MonadIO m => m Integer
+realTime :: Make Integer
 realTime = liftIO $ fmap toNanoSecs (liftIO (getTime Realtime))
 
 -- | Phase A of rebuilding a single module: parse (already done by the
@@ -137,24 +137,24 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
   ((Module ss coms _ elaborated exps, env'), nextVar) <- runSupplyT 0 $ do
     -- lift $ progress $ CompilingModule moduleName moduleIndex "2"
     (desugared, (exEnv', usedImports)) <- runStateT (desugar externs withPrim) (exEnv, mempty)
-    end2 <- realTime
+    end2 <- lift realTime
     lift $ progress $ CompileMeta ("### CS.doneDesugar1[" <> runModuleName moduleName <> "] " <> diffTime st2 end2)
-    st3 <- realTime
+    st3 <- lift realTime
     -- lift $ progress $ CompilingModule moduleName moduleIndex "3"
     let modulesExports = (\(_, _, exports) -> exports) <$> exEnv'
     -- lift $ progress $ CompilingModule moduleName moduleIndex "4"
     (checked, CheckState{..}) <- runStateT (typeCheckModule modulesExports desugared) $ emptyCheckState env
-    end3 <- realTime
+    end3 <- lift realTime
     lift $ progress $ CompileMeta ("### CS.doneTypeCheck2[" <> runModuleName moduleName <> "] " <> diffTime st3 end3)
-    st4 <- realTime
+    st4 <- lift realTime
     -- lift $ progress $ CompilingModule moduleName moduleIndex "5"
     let usedImports' = foldl' (flip $ \(fromModuleName, newtypeCtorName) ->
           M.alter (Just . (fmap DctorName newtypeCtorName :) . fold) fromModuleName) usedImports checkConstructorImportsForCoercible
     -- Imports cannot be linted before type checking because we need to
     -- known which newtype constructors are used to solve Coercible
     -- constraints in order to not report them as unused.
-    censor (addHint (ErrorInModule moduleName)) $ lintImports checked exEnv' usedImports'
-    end4 <- realTime
+    lift $ censor (addHint (ErrorInModule moduleName)) $ lintImports checked exEnv' usedImports'
+    end4 <- lift realTime
     lift $ progress $ CompileMeta ("### CS.doneLintImports3[" <> runModuleName moduleName <> "] " <> diffTime st4 end4)
     return (checked, checkEnv)
 

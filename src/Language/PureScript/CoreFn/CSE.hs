@@ -6,8 +6,7 @@ import Protolude hiding (pass)
 
 import Control.Lens (At(..), makeLenses, non, view, (%~), (.=), (.~), (<>~), (^.))
 import Control.Monad.Supply (Supply)
-import Control.Monad.Supply.Class (MonadSupply)
-import Control.Monad.RWS (MonadWriter, RWST, censor, evalRWST, listen, pass, tell)
+import Control.Monad.RWS (RWST, censor, evalRWST, listen, pass, tell)
 import Data.Bitraversable (bitraverse)
 import Data.Functor.Compose (Compose(..))
 import Data.IntMap.Monoidal qualified as IM
@@ -29,71 +28,6 @@ import Language.PureScript.Environment (dictTypeName)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName(..), ProperName(..), Qualified(..), QualifiedBy(..), freshIdent, runIdent, toMaybeModuleName)
 import Language.PureScript.PSString (decodeString)
 import Data.Text qualified as T
-
--- |
--- `discuss f m` is an action that listens to the output of `m`, passes that
--- and its value through `f`, and uses (only) the value of the result to set
--- the new value and output. (Any output produced via the monad in `f` is
--- ignored, though other monadic effects will hold.)
---
-discuss :: MonadWriter w m => ((a, w) -> m (b, w)) -> m a -> m b
-discuss f = pass . fmap (second const) . (f <=< listen)
-
--- |
--- Modify the target of an optic in the state with a monadic computation that
--- returns some extra information of type `r` in a tuple.
---
--- I would prefer that this be a named function, but I don't know what to name
--- it. I went with symbols instead because the function that this operator most
--- resembles is `(%%=)`, which doesn't have a textual name as far as I know.
--- Compare the following (approximate) types:
---
--- @
--- (%%=)  :: MonadState s m => Lens s s a b -> (a ->   (r, b)) -> m r
--- (%%<~) :: MonadState s m => Lens s s a b -> (a -> m (r, b)) -> m r
--- @
---
--- Replacing the `=` with `<~` was inspired by analogy with the following pair:
---
--- @
--- (.=) :: MonadState s m => Lens s s a b ->   b -> m ()
--- (<~) :: MonadState s m => Lens s s a b -> m b -> m ()
--- @
---
--- I regret any confusion that ensues.
---
--- Note that there are two interpretations that could reasonably be expected
--- for this type.
---
--- @
--- (%%<~) :: MonadState s m => Lens s s a b -> (a -> m (r, b)) -> m r
--- @
---
--- One is:
--- * Get the focused `a` value from the monad
--- * Run the computation
--- * Get the new state from the returned monad
--- * Take the returned `b` value and set it in the new state
---
--- The other is:
--- * Get the focused `a` value from the monad
--- * Run the computation
--- * Take the returned `b` value and set it in the *original* state
--- * Put the result into the returned monad
---
--- This operator corresponds to the second interpretation. The purpose of this,
--- and part of the purpose of having this operator at all instead of composing
--- simpler operators, is to enable using the lens only once (on the original
--- state) instead of twice (for a get and a set on different states).
---
-(%%<~)
-  :: MonadState s m
-  => ((a -> Compose m ((,) r) b) -> s -> Compose m ((,) r) s)
-     -- ^ please read as Lens s s a b
-  -> (a -> m (r, b))
-  -> m r
-l %%<~ f = get >>= getCompose . l (Compose . f) >>= state . const
-infix 4 %%<~
 
 -- |
 -- A PluralityMap is like a weaker multiset: like a multiset, it can hold
@@ -180,10 +114,6 @@ type CSEState = IM.MonoidalIntMap (M.Map (Expr ()) Ident)
 --
 type CSEMonad a = RWST CSEEnvironment CSESummary CSEState Supply a
 
-type HasCSEReader = MonadReader CSEEnvironment
-type HasCSEWriter = MonadWriter CSESummary
-type HasCSEState = MonadState CSEState
-
 -- |
 -- Run a CSEMonad computation; the return value is augmented with a map of
 -- identifiers that should be replaced in the final expression because they
@@ -193,19 +123,84 @@ runCSEMonad :: CSEMonad a -> Supply (a, M.Map Ident (Expr Ann))
 runCSEMonad x = second (^. toBeReinlined) <$> evalRWST x (CSEEnvironment 0 0 M.empty) IM.empty
 
 -- |
+-- `discuss f m` is an action that listens to the output of `m`, passes that
+-- and its value through `f`, and uses (only) the value of the result to set
+-- the new value and output. (Any output produced via the monad in `f` is
+-- ignored, though other monadic effects will hold.)
+--
+discuss :: ((a, CSESummary) -> CSEMonad (b, CSESummary)) -> CSEMonad a -> CSEMonad b
+discuss f = pass . fmap (second const) . (f <=< listen)
+
+-- |
+-- Modify the target of an optic in the state with a monadic computation that
+-- returns some extra information of type `r` in a tuple.
+--
+-- I would prefer that this be a named function, but I don't know what to name
+-- it. I went with symbols instead because the function that this operator most
+-- resembles is `(%%=)`, which doesn't have a textual name as far as I know.
+-- Compare the following (approximate) types:
+--
+-- @
+-- (%%=)  :: MonadState s m => Lens s s a b -> (a ->   (r, b)) -> m r
+-- (%%<~) :: MonadState s m => Lens s s a b -> (a -> m (r, b)) -> m r
+-- @
+--
+-- Replacing the `=` with `<~` was inspired by analogy with the following pair:
+--
+-- @
+-- (.=) :: MonadState s m => Lens s s a b ->   b -> m ()
+-- (<~) :: MonadState s m => Lens s s a b -> m b -> m ()
+-- @
+--
+-- I regret any confusion that ensues.
+--
+-- Note that there are two interpretations that could reasonably be expected
+-- for this type.
+--
+-- @
+-- (%%<~) :: MonadState s m => Lens s s a b -> (a -> m (r, b)) -> m r
+-- @
+--
+-- One is:
+-- * Get the focused `a` value from the monad
+-- * Run the computation
+-- * Get the new state from the returned monad
+-- * Take the returned `b` value and set it in the new state
+--
+-- The other is:
+-- * Get the focused `a` value from the monad
+-- * Run the computation
+-- * Take the returned `b` value and set it in the *original* state
+-- * Put the result into the returned monad
+--
+-- This operator corresponds to the second interpretation. The purpose of this,
+-- and part of the purpose of having this operator at all instead of composing
+-- simpler operators, is to enable using the lens only once (on the original
+-- state) instead of twice (for a get and a set on different states).
+--
+(%%<~)
+  :: ((a -> Compose (RWST CSEEnvironment CSESummary CSEState Supply) ((,) r) b)
+      -> CSEState -> Compose (RWST CSEEnvironment CSESummary CSEState Supply) ((,) r) CSEState)
+     -- ^ please read as Lens CSEState CSEState a b
+  -> (a -> CSEMonad (r, b))
+  -> CSEMonad r
+l %%<~ f = get >>= getCompose . l (Compose . f) >>= state . const
+infix 4 %%<~
+
+-- |
 -- Mark all expressions floated out of this computation as "plural". This pass
 -- assumes that any given Abs may be invoked multiple times, so any expressions
 -- inside the Abs but floated out of it also count as having multiple uses,
 -- even if they only appear once within the Abs. Consequently, any expressions
 -- that can be floated out of an Abs won't be reinlined at the end.
 --
-enterAbs :: HasCSEWriter m => m a -> m a
+enterAbs :: CSEMonad a -> CSEMonad a
 enterAbs = censor $ plurality %~ PluralityMap . fmap (const True) . getPluralityMap
 
 -- |
 -- Run the provided computation in a new scope.
 --
-newScope :: (HasCSEReader m, HasCSEWriter m) => Bool -> (Int -> m a) -> m a
+newScope :: Bool -> (Int -> CSEMonad a) -> CSEMonad a
 newScope isTopLevel body = local goDeeper $ do
   d <- view depth
   censor (filterToDepth d) (body d)
@@ -223,21 +218,21 @@ newScope isTopLevel body = local goDeeper $ do
 -- |
 -- Record a list of identifiers as being bound in the given scope.
 --
-withBoundIdents :: HasCSEReader m => [Ident] -> (Int, BindingType) -> m a -> m a
+withBoundIdents :: [Ident] -> (Int, BindingType) -> CSEMonad a -> CSEMonad a
 withBoundIdents idents t = local (bound %~ flip (foldl' (flip (flip M.insert t))) idents)
 
 -- |
 -- Run the provided computation in a new scope in which the provided
 -- identifiers are bound non-recursively.
 --
-newScopeWithIdents :: (HasCSEReader m, HasCSEWriter m) => Bool -> [Ident] -> m a -> m a
+newScopeWithIdents :: Bool -> [Ident] -> CSEMonad a -> CSEMonad a
 newScopeWithIdents isTopLevel idents = newScope isTopLevel . flip (withBoundIdents idents . (, NonRecursive))
 
 -- |
 -- Produce, or retrieve from the state, an identifier for referencing the given
 -- expression, at and below the given depth.
 --
-generateIdentFor :: (HasCSEState m, MonadSupply m) => Int -> Expr () -> m (Bool, Ident)
+generateIdentFor :: Int -> Expr () -> CSEMonad (Bool, Ident)
 generateIdentFor d e = at d . non mempty . at e %%<~ \case
   Nothing    -> freshIdent (nameHint e) <&> \ident -> ((True, ident), Just ident)
   Just ident -> pure ((False, ident), Just ident)
@@ -280,10 +275,9 @@ replaceLocals m = if M.null m then identity else map f' where
 -- replacement.
 --
 floatExpr
-  :: (HasCSEReader m, HasCSEState m, MonadSupply m)
-  => QualifiedBy
+  :: QualifiedBy
   -> (Expr Ann, CSESummary)
-  -> m (Expr Ann, CSESummary)
+  -> CSEMonad (Expr Ann, CSESummary)
 floatExpr topLevelQB = \case
   (e, w@CSESummary{ _noFloatWithin = Nothing, .. }) -> do
     let deepestScope = if IS.null _scopesUsed then 0 else IS.findMax _scopesUsed
@@ -302,9 +296,8 @@ floatExpr topLevelQB = \case
 -- whatever value is returned by the provided computation.
 --
 getNewBinds
-  :: (HasCSEReader m, HasCSEState m, HasCSEWriter m)
-  => m a
-  -> m ([Bind Ann], a)
+  :: CSEMonad a
+  -> CSEMonad ([Bind Ann], a)
 getNewBinds =
   discuss $ \(a, w) -> do
     d <- view depth
@@ -324,9 +317,8 @@ getNewBinds =
 -- Let instead.
 --
 getNewBindsAsLet
-  :: (HasCSEReader m, HasCSEWriter m, HasCSEState m)
-  => m (Expr Ann)
-  -> m (Expr Ann)
+  :: CSEMonad (Expr Ann)
+  -> CSEMonad (Expr Ann)
 getNewBindsAsLet = fmap (uncurry go) . getNewBinds where
   go bs = if null bs then identity else \case
     Let a bs' e' -> Let a (bs ++ bs') e'
@@ -336,10 +328,9 @@ getNewBindsAsLet = fmap (uncurry go) . getNewBinds where
 -- Feed the Writer part of the monad with the requirements of this name.
 --
 summarizeName
-  :: (HasCSEReader m, HasCSEWriter m)
-  => ModuleName
+  :: ModuleName
   -> Qualified Ident
-  -> m ()
+  -> CSEMonad ()
 summarizeName mn (Qualified mn' ident) = do
   m <- view bound
   let (s, bt) =

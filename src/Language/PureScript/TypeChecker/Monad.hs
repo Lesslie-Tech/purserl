@@ -63,7 +63,7 @@ data Substitution = Substitution
   -- ^ The original names of unknowns
   }
 
-insertUnkName :: (MonadState CheckState m) => Unknown -> Text -> m ()
+insertUnkName :: Unknown -> Text -> Check ()
 insertUnkName u t = do
   modify (\s ->
             s { checkSubstitution =
@@ -73,7 +73,7 @@ insertUnkName u t = do
               }
          )
 
-lookupUnkName :: (MonadState CheckState m) => Unknown -> m (Maybe Text)
+lookupUnkName :: Unknown -> Check (Maybe Text)
 lookupUnkName u = gets $ IM.lookup u . substNames . checkSubstitution
 
 -- | An empty substitution
@@ -125,10 +125,9 @@ type Unknown = Int
 
 -- | Temporarily bind a collection of names to values
 bindNames
-  :: MonadState CheckState m
-  => M.Map (Qualified Ident) (SourceType, NameKind, NameVisibility)
-  -> m a
-  -> m a
+  :: M.Map (Qualified Ident) (SourceType, NameKind, NameVisibility)
+  -> Check a
+  -> Check a
 bindNames newNames action = do
   orig <- get
   modify $ \st -> st { checkEnv = (checkEnv st) { names = newNames `mUnionLeftBiasRightLarger` (names . checkEnv $ st) } }
@@ -137,6 +136,7 @@ bindNames newNames action = do
   return a
 
 -- | Temporarily bind a collection of names to types
+{-# SPECIALIZE bindTypes :: M.Map (Qualified (ProperName 'TypeName)) (SourceType, TypeKind) -> Check a -> Check a #-}
 bindTypes
   :: MonadState CheckState m
   => M.Map (Qualified (ProperName 'TypeName)) (SourceType, TypeKind)
@@ -153,11 +153,10 @@ mUnionLeftBiasRightLarger small large = M.unionWith (\_ s -> s) large small
 
 -- | Temporarily bind a collection of names to types
 withScopedTypeVars
-  :: (MonadState CheckState m, MonadWriter MultipleErrors m)
-  => ModuleName
+  :: ModuleName
   -> [(Text, SourceType)]
-  -> m a
-  -> m a
+  -> Check a
+  -> Check a
 withScopedTypeVars mn ks ma = do
   orig <- get
   forM_ ks $ \(name, _) ->
@@ -181,29 +180,27 @@ withErrorMessageHint hint action = do
 
 -- | These hints are added at the front, so the most nested hint occurs
 -- at the front, but the simplifier assumes the reverse order.
+{-# SPECIALIZE getHints :: Check [ErrorMessageHint] #-}
 getHints :: MonadState CheckState m => m [ErrorMessageHint]
 getHints = gets (reverse . checkHints)
 
 rethrowWithPositionTC
-  :: (MonadState CheckState m, MonadError MultipleErrors m)
-  => SourceSpan
-  -> m a
-  -> m a
+  :: SourceSpan
+  -> Check a
+  -> Check a
 rethrowWithPositionTC pos = withErrorMessageHint (positionedError pos)
 
 warnAndRethrowWithPositionTC
-  :: (MonadState CheckState m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => SourceSpan
-  -> m a
-  -> m a
+  :: SourceSpan
+  -> Check a
+  -> Check a
 warnAndRethrowWithPositionTC pos = rethrowWithPositionTC pos . warnWithPosition pos
 
 -- | Temporarily make a collection of type class dictionaries available
 withTypeClassDictionaries
-  :: MonadState CheckState m
-  => [NamedDict]
-  -> m a
-  -> m a
+  :: [NamedDict]
+  -> Check a
+  -> Check a
 withTypeClassDictionaries entries action = do
   orig <- get
 
@@ -220,6 +217,7 @@ withTypeClassDictionaries entries action = do
   return a
 
 -- | Get the currently available map of type class dictionaries
+{-# SPECIALIZE getTypeClassDictionaries :: Check (M.Map QualifiedBy (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict)))) #-}
 getTypeClassDictionaries
   :: (MonadState CheckState m)
   => m (M.Map QualifiedBy (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict))))
@@ -227,29 +225,27 @@ getTypeClassDictionaries = gets $ typeClassDictionaries . checkEnv
 
 -- | Lookup type class dictionaries in a module.
 lookupTypeClassDictionaries
-  :: (MonadState CheckState m)
-  => QualifiedBy
-  -> m (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict)))
+  :: QualifiedBy
+  -> Check (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict)))
 lookupTypeClassDictionaries mn = gets $ fromMaybe M.empty . M.lookup mn . typeClassDictionaries . checkEnv
 
 -- | Lookup type class dictionaries in a module.
 lookupTypeClassDictionariesForClass
-  :: (MonadState CheckState m)
-  => QualifiedBy
+  :: QualifiedBy
   -> Qualified (ProperName 'ClassName)
-  -> m (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict))
+  -> Check (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict))
 lookupTypeClassDictionariesForClass mn cn = fromMaybe M.empty . M.lookup cn <$> lookupTypeClassDictionaries mn
 
 -- | Temporarily bind a collection of names to local variables
 bindLocalVariables
-  :: (MonadState CheckState m)
-  => [(SourceSpan, Ident, SourceType, NameVisibility)]
-  -> m a
-  -> m a
+  :: [(SourceSpan, Ident, SourceType, NameVisibility)]
+  -> Check a
+  -> Check a
 bindLocalVariables bindings =
   bindNames (M.fromList $ flip map bindings $ \(ss, name, ty, visibility) -> (Qualified (BySourcePos $ spanStart ss) name, (ty, Private, visibility)))
 
 -- | Temporarily bind a collection of names to local type variables
+{-# SPECIALIZE bindLocalTypeVariables :: ModuleName -> [(ProperName 'TypeName, SourceType)] -> Check a -> Check a #-}
 bindLocalTypeVariables
   :: (MonadState CheckState m)
   => ModuleName
@@ -260,16 +256,15 @@ bindLocalTypeVariables moduleName bindings =
   bindTypes (M.fromList $ flip map bindings $ \(pn, kind) -> (Qualified (ByModuleName moduleName) pn, (kind, LocalTypeVariable)))
 
 -- | Update the visibility of all names to Defined
-{-# SPECIALIZE makeBindingGroupVisible :: Check () #-}
-makeBindingGroupVisible :: (MonadState CheckState m) => m ()
+makeBindingGroupVisible :: Check ()
 makeBindingGroupVisible = modifyEnv $ \e -> e { names = M.map (\(ty, nk, _) -> (ty, nk, Defined)) (names e) }
 
 -- | Update the visibility of all names to Defined in the scope of the provided action
-withBindingGroupVisible :: (MonadState CheckState m) => m a -> m a
+withBindingGroupVisible :: Check a -> Check a
 withBindingGroupVisible action = preservingNames $ makeBindingGroupVisible >> action
 
 -- | Perform an action while preserving the names from the @Environment@.
-preservingNames :: (MonadState CheckState m) => m a -> m a
+preservingNames :: Check a -> Check a
 preservingNames action = do
   orig <- gets (names . checkEnv)
   a <- action
@@ -277,10 +272,7 @@ preservingNames action = do
   return a
 
 -- | Lookup the type of a value by name in the @Environment@
-lookupVariable
-  :: (e ~ MultipleErrors, MonadState CheckState m, MonadError e m)
-  => Qualified Ident
-  -> m SourceType
+lookupVariable :: Qualified Ident -> Check SourceType
 lookupVariable qual = do
   env <- getEnv
   case M.lookup qual (names env) of
@@ -288,10 +280,7 @@ lookupVariable qual = do
     Just (ty, _, _) -> return ty
 
 -- | Lookup the visibility of a value by name in the @Environment@
-getVisibility
-  :: (e ~ MultipleErrors, MonadState CheckState m, MonadError e m)
-  => Qualified Ident
-  -> m NameVisibility
+getVisibility :: Qualified Ident -> Check NameVisibility
 getVisibility qual = do
   env <- getEnv
   case M.lookup qual (names env) of
@@ -299,10 +288,7 @@ getVisibility qual = do
     Just (_, _, vis) -> return vis
 
 -- | Assert that a name is visible
-checkVisibility
-  :: (e ~ MultipleErrors, MonadState CheckState m, MonadError e m)
-  => Qualified Ident
-  -> m ()
+checkVisibility :: Qualified Ident -> Check ()
 checkVisibility name@(Qualified _ var) = do
   vis <- getVisibility name
   case vis of
@@ -310,6 +296,7 @@ checkVisibility name@(Qualified _ var) = do
     _ -> return ()
 
 -- | Lookup the kind of a type by name in the @Environment@
+{-# SPECIALIZE lookupTypeVariable :: ModuleName -> Qualified (ProperName 'TypeName) -> Check SourceType #-}
 lookupTypeVariable
   :: (e ~ MultipleErrors, MonadState CheckState m, MonadError e m)
   => ModuleName
@@ -326,21 +313,23 @@ lookupTypeVariable currentModule (Qualified qb name) = do
     BySourcePos _ -> currentModule
 
 -- | Get the current @Environment@
+{-# SPECIALIZE getEnv :: Check Environment #-}
 getEnv :: (MonadState CheckState m) => m Environment
 getEnv = gets checkEnv
 
 -- | Get locally-bound names in context, to create an error message.
+{-# SPECIALIZE getLocalContext :: Check Context #-}
 getLocalContext :: MonadState CheckState m => m Context
 getLocalContext = do
   env <- getEnv
   return [ (ident, ty') | (Qualified (BySourcePos _) ident@Ident{}, (ty', _, Defined)) <- M.toList (names env) ]
 
 -- | Update the @Environment@
-putEnv :: (MonadState CheckState m) => Environment -> m ()
+putEnv :: Environment -> Check ()
 putEnv env = modify (\s -> s { checkEnv = env })
 
 -- | Modify the @Environment@
-modifyEnv :: (MonadState CheckState m) => (Environment -> Environment) -> m ()
+modifyEnv :: (Environment -> Environment) -> Check ()
 modifyEnv f = modify (\s -> s { checkEnv = f (checkEnv s) })
 
 -- | Run a computation in the typechecking monad, failing with an error, or succeeding with a return value and the final @Environment@.
@@ -348,24 +337,23 @@ runCheck :: (Functor m) => CheckState -> StateT CheckState m a -> m (a, Environm
 runCheck st check = second checkEnv <$> runStateT check st
 
 -- | Make an assertion, failing with an error message
+{-# SPECIALIZE guardWith :: MultipleErrors -> Bool -> Check () #-}
 guardWith :: (MonadError e m) => e -> Bool -> m ()
 guardWith _ True = return ()
 guardWith e False = throwError e
 
 capturingSubstitution
-  :: MonadState CheckState m
-  => (a -> Substitution -> b)
-  -> m a
-  -> m b
+  :: (a -> Substitution -> b)
+  -> Check a
+  -> Check b
 capturingSubstitution f ma = do
   a <- ma
   subst <- gets checkSubstitution
   return (f a subst)
 
 withFreshSubstitution
-  :: MonadState CheckState m
-  => m a
-  -> m a
+  :: Check a
+  -> Check a
 withFreshSubstitution ma = do
   orig <- get
   modify $ \st -> st { checkSubstitution = emptySubstitution }
@@ -374,11 +362,11 @@ withFreshSubstitution ma = do
   return a
 
 withoutWarnings
-  :: MonadWriter w m
-  => m a
-  -> m (a, w)
+  :: Check a
+  -> Check (a, MultipleErrors)
 withoutWarnings = censor (const mempty) . listen
 
+{-# SPECIALIZE unsafeCheckCurrentModule :: Check ModuleName #-}
 unsafeCheckCurrentModule
   :: forall m
    . (MonadError MultipleErrors m, MonadState CheckState m)

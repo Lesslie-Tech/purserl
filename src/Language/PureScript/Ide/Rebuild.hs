@@ -104,9 +104,7 @@ dayZero :: Time.UTCTime
 dayZero = Time.UTCTime (Time.ModifiedJulianDay 0) 0
 
 updateCacheDb
-  :: MonadIO m
-  => MonadError P.MultipleErrors m
-  => Set P.CodegenTarget
+  :: Set P.CodegenTarget
   -> FilePath
   -- ^ The output directory
   -> FilePath
@@ -115,7 +113,7 @@ updateCacheDb
   -- ^ The file name to update in the cache
   -> P.ModuleName
   -- ^ The module name to update in the cache
-  -> m ()
+  -> P.Make ()
 updateCacheDb _codegenTargets outputDirectory file actualFile moduleName = do
   cwd <- liftIO getCurrentDirectory
   contentHash <- P.hashFile file

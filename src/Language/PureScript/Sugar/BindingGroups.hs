@@ -29,6 +29,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment (NameKind)
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors(..), SimpleErrorMessage(..), errorMessage', parU, positionedError)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident, ModuleName, ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), coerceProperName)
+import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Types (Constraint(..), SourceConstraint, SourceType, Type(..), everythingOnTypes)
 
 data VertexType
@@ -40,10 +41,13 @@ data VertexType
 -- |
 -- Replace all sets of mutually-recursive declarations in a module with binding groups
 --
+-- NB: concretized to 'DesugarM' -- its sole caller is "Language.PureScript.Sugar"'s
+-- @desugar@ pipeline. It calls the still-polymorphic 'createBindingGroups' internally,
+-- which is fine: that function is also called bare (outside any StateT/SupplyT wrapper)
+-- from "Language.PureScript.Make", so it must stay polymorphic.
 createBindingGroupsModule
-  :: (MonadError MultipleErrors m)
-  => Module
-  -> m Module
+  :: Module
+  -> DesugarM Module
 createBindingGroupsModule (Module ss coms name ds exps) =
   Module ss coms name <$> createBindingGroups name ds <*> pure exps
 

@@ -15,8 +15,8 @@ import Prelude
 
 import Control.Arrow ((&&&))
 import Control.Monad (unless, when, zipWithM_)
-import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.State (MonadState(..), runState, state)
+import Control.Monad.Error.Class (throwError)
+import Control.Monad.State (runState, state)
 import Data.Coerce (coerce)
 import Data.Map qualified as M
 import Data.Maybe (fromMaybe)
@@ -25,9 +25,10 @@ import Data.Semigroup (Any(..))
 import Data.Text (Text)
 
 import Language.PureScript.Environment (Environment(..), TypeKind(..))
-import Language.PureScript.Errors (DataConstructorDeclaration(..), MultipleErrors, RoleDeclarationData(..), SimpleErrorMessage(..), errorMessage)
+import Language.PureScript.Errors (DataConstructorDeclaration(..), RoleDeclarationData(..), SimpleErrorMessage(..), errorMessage)
 import Language.PureScript.Names (ModuleName, ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..))
 import Language.PureScript.Roles (Role(..))
+import Language.PureScript.TypeChecker.Monad (Check)
 import Language.PureScript.Types (Constraint(..), SourceType, Type(..), freeTypeVariables, unapplyTypes)
 
 -- |
@@ -90,25 +91,21 @@ lookupRoles env tyName =
 -- inferred ones.
 --
 checkRoles
-  :: forall m
-   . (MonadError MultipleErrors m)
-  => [(Text, Maybe SourceType, Role)]
+  :: [(Text, Maybe SourceType, Role)]
     -- ^ type parameters for the data type whose roles we are checking
   -> [Role]
     -- ^ roles declared for the data type
-  -> m ()
+  -> Check ()
 checkRoles tyArgs declaredRoles = do
   let k (var, _, inf) dec =
         when (inf < dec) . throwError . errorMessage $ RoleMismatch var inf dec
   zipWithM_ k tyArgs declaredRoles
 
 checkRoleDeclarationArity
-  :: forall m
-   . (MonadError MultipleErrors m)
-  => ProperName 'TypeName
+  :: ProperName 'TypeName
   -> [Role]
   -> Int
-  -> m ()
+  -> Check ()
 checkRoleDeclarationArity tyName roles expected = do
   let actual = length roles
   unless (expected == actual) $

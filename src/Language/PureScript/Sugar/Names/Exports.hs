@@ -21,15 +21,21 @@ import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHi
 import Language.PureScript.Names (Ident, ModuleName, Name(..), OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), disqualifyFor, isQualifiedWith, isUnqualified)
 import Language.PureScript.Sugar.Names.Env (Env, ExportMode(..), Exports(..), ImportRecord(..), Imports(..), checkImportConflicts, envModuleExports, exportType, exportTypeClass, exportTypeOp, exportValue, exportValueOp, nullExports)
 import Language.PureScript.Sugar.Names.Common (warnDuplicateRefs)
+import Language.PureScript.Sugar.Monad (DesugarM)
 
 -- |
 -- Finds all exportable members of a module, disregarding any explicit exports.
 --
-findExportable :: forall m. (MonadError MultipleErrors m) => Module -> m Exports
+-- NB: concretized to 'DesugarM' since its sole caller is
+-- "Language.PureScript.Sugar.Names"'s @desugarImports@. Contrast with
+-- 'resolveExports'/'filterModule' below, which are also called from
+-- @externsEnv@ (itself dual-site between @WriterT MultipleErrors Make@ and
+-- bare @Make@ in "Language.PureScript.Make") and so must stay polymorphic.
+findExportable :: Module -> DesugarM Exports
 findExportable (Module _ _ mn ds _) =
   rethrow (addHint (ErrorInModule mn)) $ foldM updateExports' nullExports ds
   where
-  updateExports' :: Exports -> Declaration -> m Exports
+  updateExports' :: Exports -> Declaration -> DesugarM Exports
   updateExports' exps decl = rethrowWithPosition (declSourceSpan decl) $ updateExports exps decl
 
   source =
@@ -38,7 +44,7 @@ findExportable (Module _ _ mn ds _) =
     , exportSourceImportedFrom = Nothing
     }
 
-  updateExports :: Exports -> Declaration -> m Exports
+  updateExports :: Exports -> Declaration -> DesugarM Exports
   updateExports exps (TypeClassDeclaration (SourceAnn ss _) tcn _ _ _ ds') = do
     exps' <- rethrowWithPosition ss $ exportTypeClass ss Internal exps tcn source
     foldM go exps' ds'

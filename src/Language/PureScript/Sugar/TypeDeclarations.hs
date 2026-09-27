@@ -9,21 +9,20 @@ module Language.PureScript.Sugar.TypeDeclarations
 import Prelude
 
 import Control.Monad (unless)
-import Control.Monad.Error.Class (MonadError(..))
+import Control.Monad.Error.Class (throwError)
 
 import Language.PureScript.AST (Declaration(..), ErrorMessageHint(..), Expr(..), GuardedExpr(..), KindSignatureFor(..), pattern MkUnguarded, Module(..), RoleDeclarationData(..), TypeDeclarationData(..), TypeInstanceBody(..), pattern ValueDecl, declSourceSpan, everywhereOnValuesTopDownM, safst, SourceAnn(..))
 import Language.PureScript.Names (Ident, coerceProperName)
 import Language.PureScript.Environment (DataDeclType(..), NameKind)
-import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage', rethrow)
+import Language.PureScript.Errors (SimpleErrorMessage(..), addHint, errorMessage', rethrow)
+import Language.PureScript.Sugar.Monad (DesugarM)
 
 -- |
 -- Replace all top level type declarations in a module with type annotations
 --
 desugarTypeDeclarationsModule
-  :: forall m
-   . MonadError MultipleErrors m
-  => Module
-  -> m Module
+  :: Module
+  -> DesugarM Module
 desugarTypeDeclarationsModule (Module modSS coms name ds exps) =
   rethrow (addHint (ErrorInModule name)) $ do
     checkKindDeclarations ds
@@ -31,12 +30,12 @@ desugarTypeDeclarationsModule (Module modSS coms name ds exps) =
     Module modSS coms name <$> desugarTypeDeclarations ds <*> pure exps
   where
 
-  desugarTypeDeclarations :: [Declaration] -> m [Declaration]
+  desugarTypeDeclarations :: [Declaration] -> DesugarM [Declaration]
   desugarTypeDeclarations (TypeDeclaration (TypeDeclarationData sa name' ty) : d : rest) = do
     (_, nameKind, val) <- fromValueDeclaration d
     desugarTypeDeclarations (ValueDecl sa name' nameKind [] [MkUnguarded (TypedValue True val ty)] : rest)
     where
-    fromValueDeclaration :: Declaration -> m (Ident, NameKind, Expr)
+    fromValueDeclaration :: Declaration -> DesugarM (Ident, NameKind, Expr)
     fromValueDeclaration (ValueDecl _ name'' nameKind [] [MkUnguarded val])
       | name' == name'' = return (name'', nameKind, val)
     fromValueDeclaration d' =
@@ -57,7 +56,7 @@ desugarTypeDeclarationsModule (Module modSS coms name ds exps) =
   desugarTypeDeclarations (d:rest) = (:) d <$> desugarTypeDeclarations rest
   desugarTypeDeclarations [] = return []
 
-  checkKindDeclarations :: [Declaration] -> m ()
+  checkKindDeclarations :: [Declaration] -> DesugarM ()
   checkKindDeclarations (KindDeclaration sa kindFor name' _ : d : rest) = do
     unless (matchesDeclaration d) . throwError . errorMessage' (safst sa) $ OrphanKindDeclaration name'
     checkKindDeclarations rest
@@ -73,7 +72,7 @@ desugarTypeDeclarationsModule (Module modSS coms name ds exps) =
   checkKindDeclarations (_ : rest) = checkKindDeclarations rest
   checkKindDeclarations [] = return ()
 
-  checkRoleDeclarations :: Maybe Declaration -> [Declaration] -> m ()
+  checkRoleDeclarations :: Maybe Declaration -> [Declaration] -> DesugarM ()
   checkRoleDeclarations Nothing (RoleDeclaration RoleDeclarationData{..} : _) =
     throwError . errorMessage' (safst rdeclSourceAnn) $ OrphanRoleDeclaration rdeclIdent
   checkRoleDeclarations (Just (RoleDeclaration (RoleDeclarationData _ name' _))) ((RoleDeclaration RoleDeclarationData{..}) : _) | name' == rdeclIdent =

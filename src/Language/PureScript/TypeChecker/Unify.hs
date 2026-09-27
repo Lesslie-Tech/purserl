@@ -53,6 +53,7 @@ freshType = state $ \st -> do
   (srcTUnknown (t + 1), st')
 
 -- | Generate a fresh type variable with a known kind.
+{-# SPECIALIZE freshTypeWithKind :: SourceType -> Check SourceType #-}
 freshTypeWithKind :: (MonadState CheckState m) => SourceType -> m SourceType
 freshTypeWithKind kind = state $ \st -> do
   let
@@ -252,22 +253,22 @@ replaceTypeWildcards = everywhereOnTypesM replace
 -- |
 -- Replace outermost unsolved unification variables with named type variables
 --
-varIfUnknown :: forall m. (MonadState CheckState m) => [(Unknown, SourceType)] -> SourceType -> m SourceType
+varIfUnknown :: [(Unknown, SourceType)] -> SourceType -> Check SourceType
 varIfUnknown unks ty = do
   bn' <- traverse toBinding unks
   ty' <- go ty
   pure $ mkForAll bn' ty'
   where
-  toName :: Unknown -> m T.Text
+  toName :: Unknown -> Check T.Text
   toName u = (<> T.pack (show u)) . fromMaybe "t" <$> lookupUnkName u
 
-  toBinding :: (Unknown, SourceType) -> m (SourceAnn, (T.Text, Maybe SourceType))
+  toBinding :: (Unknown, SourceType) -> Check (SourceAnn, (T.Text, Maybe SourceType))
   toBinding (u, k) = do
     u' <- toName u
     k' <- go k
     pure (getAnnForType ty, (u', Just k'))
 
-  go :: SourceType -> m SourceType
+  go :: SourceType -> Check SourceType
   go = everywhereOnTypesM $ \case
     (TUnknown ann u) ->
       TypeVar ann <$> toName u

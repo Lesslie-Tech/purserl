@@ -188,20 +188,18 @@ cacheDbFile :: FilePath -> FilePath
 cacheDbFile = (</> "cache-db.bin")
 
 readCacheDb'
-  :: (MonadIO m, MonadError MultipleErrors m)
-  => FilePath
+  :: FilePath
   -- ^ The path to the output directory
-  -> m CacheDb
+  -> Make CacheDb
 readCacheDb' outputDir =
   fromMaybe mempty <$> readCborFile (cacheDbFile outputDir)
 
 writeCacheDb'
-  :: (MonadIO m, MonadError MultipleErrors m)
-  => FilePath
+  :: FilePath
   -- ^ The path to the output directory
   -> CacheDb
   -- ^ The CacheDb to be written
-  -> m ()
+  -> Make ()
 writeCacheDb' outputDir cacheDb =
   makeIO ("write Cbor file: " <> T.pack (cacheDbFile outputDir)) (writeCborFileIO (cacheDbFile outputDir) cacheDb)
 

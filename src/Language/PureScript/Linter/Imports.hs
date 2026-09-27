@@ -23,17 +23,13 @@ import Language.PureScript.AST.Declarations (Declaration(..), DeclarationRef(..)
 import Language.PureScript.AST.SourcePos (SourceSpan)
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), errorMessage')
+import Language.PureScript.Linter.UsedImports (UsedImports)
+import Language.PureScript.Make.Monad (Make)
 import Language.PureScript.Names
 import Language.PureScript.Sugar.Names.Common (warnDuplicateRefs)
 import Language.PureScript.Sugar.Names.Env (Env, Exports(..), ImportRecord(..), Imports(..), envModuleExports, nullImports)
 import Language.PureScript.Sugar.Names.Imports (ImportDef, findImports)
 import Language.PureScript.Constants.Prim qualified as C
-
--- |
--- Map of module name to list of imported names from that module which have
--- been used.
---
-type UsedImports = M.Map ModuleName [Qualified Name]
 
 -- |
 -- Find and warn on:
@@ -50,12 +46,10 @@ type UsedImports = M.Map ModuleName [Qualified Name]
 -- * Imports using `hiding` (this is another form of implicit importing)
 --
 lintImports
-  :: forall m
-   . MonadWriter MultipleErrors m
-  => Module
+  :: Module
   -> Env
   -> UsedImports
-  -> m ()
+  -> Make ()
 lintImports (Module _ _ _ _ Nothing) _ _ =
   internalError "lintImports needs desugared exports"
 lintImports (Module _ _ mn mdecls (Just mexports)) env usedImps = do
@@ -214,16 +208,14 @@ simplifyTypeRef shouldOpen (TypeRef ss name (Just dctors))
 simplifyTypeRef _ other = other
 
 lintImportDecl
-  :: forall m
-   . MonadWriter MultipleErrors m
-  => Env
+  :: Env
   -> ModuleName
   -> Maybe ModuleName
   -> [Qualified Name]
   -> SourceSpan
   -> ImportDeclarationType
   -> Bool
-  -> m Bool
+  -> Make Bool
 lintImportDecl env mni qualifierName names ss declType allowImplicit =
   case declType of
     Implicit -> case qualifierName of
@@ -240,7 +232,7 @@ lintImportDecl env mni qualifierName names ss declType allowImplicit =
 
   checkImplicit
     :: (ModuleName -> [DeclarationRef] -> SimpleErrorMessage)
-    -> m Bool
+    -> Make Bool
   checkImplicit warning =
     if null allRefs
     then unused
@@ -248,7 +240,7 @@ lintImportDecl env mni qualifierName names ss declType allowImplicit =
 
   checkExplicit
     :: [DeclarationRef]
-    -> m Bool
+    -> Make Bool
   checkExplicit declrefs = do
     let idents = ordNub (mapMaybe runDeclRef declrefs)
         dctors = mapMaybe (getDctorName <=< disqualifyFor qualifierName) names
@@ -280,10 +272,10 @@ lintImportDecl env mni qualifierName names ss declType allowImplicit =
           isMatch name (TypeRef _ name' Nothing) = name == name'
           isMatch _ _ = False
 
-  unused :: m Bool
+  unused :: Make Bool
   unused = warn (UnusedImport mni qualifierName)
 
-  warn :: SimpleErrorMessage -> m Bool
+  warn :: SimpleErrorMessage -> Make Bool
   warn err = tell (errorMessage' ss err) >> return True
 
   -- Unless the boolean is true, run the action. Return false when the action is
@@ -292,7 +284,7 @@ lintImportDecl env mni qualifierName names ss declType allowImplicit =
   -- The return value is intended for cases where we want to track whether some
   -- work was done, as there may be further conditions in the action that mean
   -- it ends up doing nothing.
-  unless' :: Bool -> m Bool -> m Bool
+  unless' :: Bool -> Make Bool -> Make Bool
   unless' False m = m
   unless' True _ = return False
 
@@ -377,11 +369,10 @@ runDeclRef (TypeClassRef _ pn) = Just $ TyClassName pn
 runDeclRef _ = Nothing
 
 checkDuplicateImports
-  :: MonadWriter MultipleErrors m
-  => ModuleName
+  :: ModuleName
   -> [ImportDef]
   -> (ImportDef, ImportDef)
-  -> m [ImportDef]
+  -> Make [ImportDef]
 checkDuplicateImports mn xs ((_, t1, q1), (pos, t2, q2)) =
   if t1 == t2 && q1 == q2
   then do

@@ -6,22 +6,21 @@ module Language.PureScript.Sugar.AdoNotation (desugarAdoModule) where
 import Prelude hiding (abs)
 
 import Control.Monad (foldM)
-import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.Supply.Class (MonadSupply)
 import Data.List (foldl')
 import Language.PureScript.AST (Binder(..), CaseAlternative(..), Declaration, DoNotationElement(..), Expr(..), pattern MkUnguarded, Module(..), SourceSpan, WhereProvenance(..), declSourceSpan, everywhereOnValuesM)
-import Language.PureScript.Errors (MultipleErrors, parU, rethrowWithPosition)
+import Language.PureScript.Errors (parU, rethrowWithPosition)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName, Qualified(..), byMaybeModuleName, freshIdent')
 import Language.PureScript.Constants.Libs qualified as C
+import Language.PureScript.Sugar.Monad (DesugarM)
 
 -- | Replace all @AdoNotationBind@ and @AdoNotationValue@ constructors with
 -- applications of the pure and apply functions in scope, and all @AdoNotationLet@
 -- constructors with let expressions.
-desugarAdoModule :: forall m. (MonadSupply m, MonadError MultipleErrors m) => Module -> m Module
+desugarAdoModule :: Module -> DesugarM Module
 desugarAdoModule (Module ss coms mn ds exts) = Module ss coms mn <$> parU ds desugarAdo <*> pure exts
 
 -- | Desugar a single ado statement
-desugarAdo :: forall m. (MonadSupply m, MonadError MultipleErrors m) => Declaration -> m Declaration
+desugarAdo :: Declaration -> DesugarM Declaration
 desugarAdo d =
   let ss = declSourceSpan d
       (f, _, _) = everywhereOnValuesM return (replace ss) return
@@ -36,7 +35,7 @@ desugarAdo d =
   apply :: SourceSpan -> Maybe ModuleName -> Expr
   apply ss m = Var ss (Qualified (byMaybeModuleName m) (Ident C.S_apply))
 
-  replace :: SourceSpan -> Expr -> m Expr
+  replace :: SourceSpan -> Expr -> DesugarM Expr
   replace pos (Ado m els yield) = do
     (func, args) <- foldM (go pos) (yield, []) (reverse els)
     return $ case args of
@@ -45,7 +44,7 @@ desugarAdo d =
   replace _ (PositionedValue pos com v) = PositionedValue pos com <$> rethrowWithPosition pos (replace pos v)
   replace _ other = return other
 
-  go :: SourceSpan -> (Expr, [Expr]) -> DoNotationElement -> m (Expr, [Expr])
+  go :: SourceSpan -> (Expr, [Expr]) -> DoNotationElement -> DesugarM (Expr, [Expr])
   go _ (yield, args) (DoNotationValue val) =
     return (Abs NullBinder yield, val : args)
   go _ (yield, args) (DoNotationBind (VarBinder ss ident) val) =

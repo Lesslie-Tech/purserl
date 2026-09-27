@@ -24,6 +24,7 @@ import Language.PureScript.TypeChecker.Monad (Check, CheckState(..))
 import Language.PureScript.Types (SkolemScope(..), SourceType, Type(..), everythingOnTypes, everywhereOnTypesM, replaceTypeVars)
 
 -- | Generate a new skolem constant
+{-# SPECIALIZE newSkolemConstant :: Check Int #-}
 newSkolemConstant :: MonadState CheckState m => m Int
 newSkolemConstant = do
   s <- gets checkNextSkolem
@@ -39,6 +40,7 @@ introduceSkolemScope = everywhereOnTypesM go
   go other = return other
 
 -- | Generate a new skolem scope
+{-# SPECIALIZE newSkolemScope :: Check SkolemScope #-}
 newSkolemScope :: MonadState CheckState m => m SkolemScope
 newSkolemScope = do
   s <- gets checkNextSkolemScope
@@ -86,7 +88,7 @@ skolemizeTypesInValue ann ident mbK sko scope =
 -- This function traverses the tree top-down, and collects any 'SkolemScope's
 -- introduced by 'ForAll's. If a 'Skolem' is encountered whose 'SkolemScope' is
 -- not in the current list, then we have found an escaped skolem variable.
-skolemEscapeCheck :: MonadError MultipleErrors m => Expr -> m ()
+skolemEscapeCheck :: Expr -> Check ()
 skolemEscapeCheck (TypedValue False _ _) = return ()
 skolemEscapeCheck expr@TypedValue{} =
     traverse_ (throwError . singleError) (toSkolemErrors expr)

@@ -3,7 +3,7 @@ module Language.PureScript.Sugar.Operators.Common where
 import Prelude
 
 import Control.Monad (guard, join)
-import Control.Monad.Except (MonadError(..))
+import Control.Monad.Except (throwError)
 
 import Data.Either (rights)
 import Data.Functor.Identity (Identity)
@@ -20,6 +20,7 @@ import Language.PureScript.AST (Associativity(..), ErrorMessageHint(..), SourceS
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors(..), SimpleErrorMessage(..))
 import Language.PureScript.Names (OpName, Qualified, eraseOpName)
+import Language.PureScript.Sugar.Monad (DesugarM)
 
 type Chain a = [Either a a]
 
@@ -60,9 +61,8 @@ opTable ops fromOp reapply =
   map (map (\(name, a) -> P.Infix (P.try (matchOp fromOp name) >>= \ss -> return (reapply ss name)) (toAssoc a))) ops
 
 matchOperators
-  :: forall m a nameType
+  :: forall a nameType
    . Show a
-  => MonadError MultipleErrors m
   => (a -> Bool)
   -> (a -> Maybe (a, a, a))
   -> FromOp nameType a
@@ -70,10 +70,10 @@ matchOperators
   -> ([[P.Operator (Chain a) () Identity a]] -> P.OperatorTable (Chain a) () Identity a)
   -> [[(Qualified (OpName nameType), Associativity)]]
   -> a
-  -> m a
+  -> DesugarM a
 matchOperators isBinOp extractOp fromOp reapply modOpTable ops = parseChains
   where
-  parseChains :: a -> m a
+  parseChains :: a -> DesugarM a
   parseChains ty
     | True <- isBinOp ty = bracketChain (extendChain ty)
     | otherwise = pure ty
@@ -81,7 +81,7 @@ matchOperators isBinOp extractOp fromOp reapply modOpTable ops = parseChains
   extendChain ty
     | Just (op, l, r) <- extractOp ty = Left l : Right op : extendChain r
     | otherwise = [Left ty]
-  bracketChain :: Chain a -> m a
+  bracketChain :: Chain a -> DesugarM a
   bracketChain chain =
     case P.parse opParser "operator expression" chain of
       Right a -> pure a

@@ -2,19 +2,17 @@ module Language.PureScript.Sugar.Operators.Types where
 
 import Prelude
 
-import Control.Monad.Except (MonadError)
 import Language.PureScript.AST (Associativity, SourceSpan, SourceAnn(..))
-import Language.PureScript.Errors (MultipleErrors)
 import Language.PureScript.Names (OpName(..), OpNameType(..), Qualified(..))
 import Language.PureScript.Sugar.Operators.Common (matchOperators)
+import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Types (SourceType, Type(..), srcTypeApp)
 
 matchTypeOperators
-  :: MonadError MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> [[(Qualified (OpName 'TypeOpName), Associativity)]]
   -> SourceType
-  -> m SourceType
+  -> DesugarM SourceType
 matchTypeOperators ss = matchOperators isBinOp extractOp fromOp reapply id
   where
 

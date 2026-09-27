@@ -2,18 +2,15 @@ module Language.PureScript.Sugar.Operators.Binders where
 
 import Prelude
 
-import Control.Monad.Except (MonadError)
-
 import Language.PureScript.AST (Associativity, Binder(..), SourceSpan)
-import Language.PureScript.Errors (MultipleErrors)
 import Language.PureScript.Names (OpName(..), OpNameType(..), Qualified(..))
 import Language.PureScript.Sugar.Operators.Common (matchOperators)
+import Language.PureScript.Sugar.Monad (DesugarM)
 
 matchBinderOperators
-  :: MonadError MultipleErrors m
-  => [[(Qualified (OpName 'ValueOpName), Associativity)]] 
+  :: [[(Qualified (OpName 'ValueOpName), Associativity)]]
   -> Binder
-  -> m Binder
+  -> DesugarM Binder
 matchBinderOperators = matchOperators isBinOp extractOp fromOp reapply id
   where
 

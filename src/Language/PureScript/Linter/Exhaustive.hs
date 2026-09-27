@@ -30,6 +30,7 @@ import Language.PureScript.Environment (DataDeclType, Environment(..), TypeKind(
 import Language.PureScript.Errors (MultipleErrors, pattern NullSourceAnn, SimpleErrorMessage(..), SourceSpan, errorMessage')
 import Language.PureScript.Names as P
 import Language.PureScript.Pretty.Values (prettyPrintBinderAtom)
+import Language.PureScript.TypeChecker.Monad (Check)
 import Language.PureScript.Types as P
 import Language.PureScript.Constants.Prim qualified as C
 
@@ -235,15 +236,13 @@ missingAlternative env mn ca uncovered
 -- Then, returns the uncovered set of case alternatives.
 --
 checkExhaustive
-  :: forall m
-   . MonadWriter MultipleErrors m
-   => SourceSpan
-   -> Environment
-   -> ModuleName
-   -> Int
-   -> [CaseAlternative]
-   -> Expr
-   -> m Expr
+  :: SourceSpan
+  -> Environment
+  -> ModuleName
+  -> Int
+  -> [CaseAlternative]
+  -> Expr
+  -> Check Expr
 checkExhaustive ss env mn numArgs cas expr = makeResult . first ordNub $ foldl' step ([initialize numArgs], (pure True, [])) cas
   where
   step :: ([[Binder]], (Either RedundancyError Bool, [[Binder]])) -> CaseAlternative -> ([[Binder]], (Either RedundancyError Bool, [[Binder]]))
@@ -260,7 +259,7 @@ checkExhaustive ss env mn numArgs cas expr = makeResult . first ordNub $ foldl' 
                  )
        )
 
-  makeResult :: ([[Binder]], (Either RedundancyError Bool, [[Binder]])) -> m Expr
+  makeResult :: ([[Binder]], (Either RedundancyError Bool, [[Binder]])) -> Check Expr
   makeResult (bss, (rr, bss')) =
     do unless (null bss') tellRedundant
        case rr of
@@ -290,18 +289,16 @@ checkExhaustive ss env mn numArgs cas expr = makeResult . first ordNub $ foldl' 
 -- Exhaustivity checking
 --
 checkExhaustiveExpr
-  :: forall m
-   . MonadWriter MultipleErrors m
-   => SourceSpan
-   -> Environment
-   -> ModuleName
-   -> Expr
-   -> m Expr
+  :: SourceSpan
+  -> Environment
+  -> ModuleName
+  -> Expr
+  -> Check Expr
 checkExhaustiveExpr ss env mn = onExpr'
   where
   (_, onExpr', _) = everywhereOnValuesM pure onExpr pure
 
-  onExpr :: Expr -> m Expr
+  onExpr :: Expr -> Check Expr
   onExpr e = case e of
     Case es cas ->
       checkExhaustive ss env mn (length es) cas e

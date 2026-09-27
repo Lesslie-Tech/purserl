@@ -69,6 +69,7 @@ subsumes ty1 ty2 =
     subsumes' SElaborate ty1 ty2
 
 -- | Check that one type subsumes another
+{-# SPECIALIZE subsumes' :: ModeSing mode -> SourceType -> SourceType -> Check (Coercion mode) #-}
 subsumes'
   :: (MonadError MultipleErrors m, MonadState CheckState m)
   => ModeSing mode

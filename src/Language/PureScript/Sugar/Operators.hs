@@ -17,18 +17,18 @@ import Prelude
 
 import Language.PureScript.AST
 import Language.PureScript.Crash (internalError)
-import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage, errorMessage', parU, rethrow, rethrowWithPosition)
+import Language.PureScript.Errors (SimpleErrorMessage(..), addHint, errorMessage, errorMessage', parU, rethrow, rethrowWithPosition)
 import Language.PureScript.Externs (ExternsFile(..), ExternsFixity(..), ExternsTypeFixity(..))
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), Name(..), OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), freshIdent')
 import Language.PureScript.Sugar.Operators.Binders (matchBinderOperators)
 import Language.PureScript.Sugar.Operators.Expr (matchExprOperators)
 import Language.PureScript.Sugar.Operators.Types (matchTypeOperators)
+import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Traversals (defS, sndM)
 import Language.PureScript.Types (Constraint(..), SourceType, Type(..), everywhereOnTypesTopDownM, overConstraintArgs)
 
 import Control.Monad (unless, (<=<))
-import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.Supply.Class (MonadSupply)
+import Control.Monad.Error.Class (throwError)
 
 import Data.Either (partitionEithers)
 import Data.Foldable (for_, traverse_)
@@ -67,12 +67,9 @@ type TypeFixityRecord = FixityRecord (OpName 'TypeOpName) (ProperName 'TypeName)
 -- This pass requires name desugaring and export elaboration to have run first.
 --
 rebracket
-  :: forall m
-   . MonadError MultipleErrors m
-  => MonadSupply m
-  => [ExternsFile]
+  :: [ExternsFile]
   -> Module
-  -> m Module
+  -> DesugarM Module
 rebracket =
   rebracketFiltered CalledByCompile (const True)
 
@@ -84,14 +81,11 @@ rebracket =
 -- operators in value declarations.
 --
 rebracketFiltered
-  :: forall m
-   . MonadError MultipleErrors m
-  => MonadSupply m
-  => RebracketCaller
+  :: RebracketCaller
   -> (Declaration -> Bool)
   -> [ExternsFile]
   -> Module
-  -> m Module
+  -> DesugarM Module
 rebracketFiltered !caller pred_ externs m = do
   let (valueFixities, typeFixities) =
         partitionEithers
@@ -115,7 +109,7 @@ rebracketFiltered !caller pred_ externs m = do
     :: Ord op
     => (op -> SimpleErrorMessage)
     -> [FixityRecord op alias]
-    -> m ()
+    -> DesugarM ()
   ensureNoDuplicates' toError =
     ensureNoDuplicates toError . map (\(i, pos, _, _) -> (i, pos))
 
@@ -131,7 +125,7 @@ rebracketFiltered !caller pred_ externs m = do
     :: M.Map (Qualified (OpName 'ValueOpName)) (Qualified (Either Ident (ProperName 'ConstructorName)))
     -> M.Map (Qualified (OpName 'TypeOpName)) (Qualified (ProperName 'TypeName))
     -> Module
-    -> m Module
+    -> DesugarM Module
   renameAliasedOperators valueAliased typeAliased (Module ss coms mn ds exts) =
     Module ss coms mn <$> mapM (usingPredicate pred_ f') ds <*> pure exts
     where
@@ -146,7 +140,7 @@ rebracketFiltered !caller pred_ externs m = do
         defS
         defS
 
-    goExpr :: SourceSpan -> Expr -> m (SourceSpan, Expr)
+    goExpr :: SourceSpan -> Expr -> DesugarM (SourceSpan, Expr)
     goExpr _ e@(PositionedValue pos _ _) = return (pos, e)
     goExpr _ (Op pos op) =
       (pos,) <$> case op `M.lookup` valueAliased of
@@ -158,7 +152,7 @@ rebracketFiltered !caller pred_ externs m = do
           throwError . errorMessage' pos . UnknownName $ fmap ValOpName op
     goExpr pos other = return (pos, other)
 
-    goBinder :: SourceSpan -> Binder -> m (SourceSpan, Binder)
+    goBinder :: SourceSpan -> Binder -> DesugarM (SourceSpan, Binder)
     goBinder _ b@(PositionedBinder pos _ _) = return (pos, b)
     goBinder _ (BinaryNoParensBinder (OpBinder pos op) lhs rhs) =
       case op `M.lookup` valueAliased of
@@ -172,7 +166,7 @@ rebracketFiltered !caller pred_ externs m = do
       internalError "BinaryNoParensBinder has no OpBinder"
     goBinder pos other = return (pos, other)
 
-    goType :: SourceSpan -> SourceType -> m SourceType
+    goType :: SourceSpan -> SourceType -> DesugarM SourceType
     goType pos (TypeOp ann2 op) =
       case op `M.lookup` typeAliased of
         Just alias ->
@@ -195,19 +189,16 @@ data RebracketCaller
   deriving (Eq, Show)
 
 rebracketModule
-  :: forall m
-   . (MonadError MultipleErrors m)
-  => MonadSupply m
-  => RebracketCaller
+  :: RebracketCaller
   -> (Declaration -> Bool)
   -> [[(Qualified (OpName 'ValueOpName), Associativity)]]
   -> [[(Qualified (OpName 'TypeOpName), Associativity)]]
   -> Module
-  -> m Module
+  -> DesugarM Module
 rebracketModule !caller pred_ valueOpTable typeOpTable (Module ss coms mn ds exts) =
   Module ss coms mn <$> f' ds <*> pure exts
   where
-  f' :: [Declaration] -> m [Declaration]
+  f' :: [Declaration] -> DesugarM [Declaration]
   f' =
     fmap (map (\d -> if pred_ d then removeParens d else d)) .
     flip parU (usingPredicate pred_ h)
@@ -221,7 +212,7 @@ rebracketModule !caller pred_ valueOpTable typeOpTable (Module ss coms mn ds ext
   -- when running `purs docs`.
   -- See https://github.com/purescript/purescript/issues/4274#issuecomment-1087730651=
   -- for more info.
-  h :: Declaration -> m Declaration
+  h :: Declaration -> DesugarM Declaration
   h = case caller of
     CalledByDocs -> f
     CalledByCompile -> g <=< f
@@ -240,13 +231,13 @@ rebracketModule !caller pred_ valueOpTable typeOpTable (Module ss coms mn ds ext
 
   (goDecl, goExpr', goBinder') = updateTypes goType
 
-  goType :: SourceSpan -> SourceType -> m SourceType
+  goType :: SourceSpan -> SourceType -> DesugarM SourceType
   goType = flip matchTypeOperators typeOpTable
 
-  wrap :: (a -> m a) -> (SourceSpan, a) -> m (SourceSpan, a)
+  wrap :: (a -> DesugarM a) -> (SourceSpan, a) -> DesugarM (SourceSpan, a)
   wrap go (ss', a) = (ss',) <$> go a
 
-removeBinaryNoParens :: (MonadError MultipleErrors m, MonadSupply m) => Expr -> m Expr
+removeBinaryNoParens :: Expr -> DesugarM Expr
 removeBinaryNoParens u
   | isAnonymousArgument u = case u of
                               PositionedValue p _ _ -> rethrowWithPosition p err
@@ -331,10 +322,10 @@ collectFixities (Module _ _ moduleName ds _) = concatMap collect ds
   collect _ = []
 
 ensureNoDuplicates
-  :: (Ord a, MonadError MultipleErrors m)
+  :: Ord a
   => (a -> SimpleErrorMessage)
   -> [(Qualified a, SourceSpan)]
-  -> m ()
+  -> DesugarM ()
 ensureNoDuplicates toError m = go $ sortOn fst m
   where
   go [] = return ()
@@ -428,10 +419,8 @@ updateTypes goType = (goDecl, goExpr, goBinder)
 -- This pass requires name desugaring and export elaboration to have run first.
 --
 checkFixityExports
-  :: forall m
-   . MonadError MultipleErrors m
-  => Module
-  -> m Module
+  :: Module
+  -> DesugarM Module
 checkFixityExports (Module _ _ _ _ Nothing) =
   internalError "exports should have been elaborated before checkFixityExports"
 checkFixityExports m@(Module ss _ mn ds (Just exps)) =
@@ -440,7 +429,7 @@ checkFixityExports m@(Module ss _ mn ds (Just exps)) =
     $> m
   where
 
-  checkRef :: DeclarationRef -> m ()
+  checkRef :: DeclarationRef -> DesugarM ()
   checkRef dr@(ValueOpRef ss' op) =
     for_ (getValueOpAlias op) $ \case
       Left ident ->

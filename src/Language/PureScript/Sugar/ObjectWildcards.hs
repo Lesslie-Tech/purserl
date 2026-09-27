@@ -6,31 +6,28 @@ module Language.PureScript.Sugar.ObjectWildcards
 import Prelude
 
 import Control.Monad (forM)
-import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.Supply.Class (MonadSupply)
 import Data.Foldable (toList)
 import Data.List (foldl')
 import Data.Maybe (catMaybes)
 import Language.PureScript.AST
 import Language.PureScript.Environment (NameKind(..))
-import Language.PureScript.Errors (MultipleErrors, rethrowWithPosition)
+import Language.PureScript.Errors (rethrowWithPosition)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident, Qualified(..), freshIdent')
 import Language.PureScript.PSString (PSString)
+import Language.PureScript.Sugar.Monad (DesugarM)
 
 
 desugarObjectConstructors
-  :: forall m
-   . (MonadSupply m, MonadError MultipleErrors m)
-  => Module
-  -> m Module
+  :: Module
+  -> DesugarM Module
 desugarObjectConstructors (Module ss coms mn ds exts) = Module ss coms mn <$> mapM desugarDecl ds <*> pure exts
 
-desugarDecl :: forall m. (MonadSupply m, MonadError MultipleErrors m) => Declaration -> m Declaration
+desugarDecl :: Declaration -> DesugarM Declaration
 desugarDecl d = rethrowWithPosition (declSourceSpan d) $ fn d
   where
   (fn, _, _) = everywhereOnValuesTopDownM return desugarExpr return
 
-  desugarExpr :: Expr -> m Expr
+  desugarExpr :: Expr -> DesugarM Expr
   desugarExpr (Literal ss (ObjectLiteral ps)) = wrapLambdaAssoc (Literal ss . ObjectLiteral) ps
   desugarExpr (ObjectUpdateNested obj ps) = transformNestedUpdate obj ps
   desugarExpr (Accessor prop u)
@@ -49,7 +46,7 @@ desugarDecl d = rethrowWithPosition (declSourceSpan d) $ fn d
     return $ foldr (Abs . VarBinder nullSourceSpan) if_ (catMaybes [u', t', f'])
   desugarExpr e = return e
 
-  transformNestedUpdate :: Expr -> PathTree Expr -> m Expr
+  transformNestedUpdate :: Expr -> PathTree Expr -> DesugarM Expr
   transformNestedUpdate obj ps = do
     -- If we don't have an anonymous argument then we need to generate a let wrapper
     -- so that the object expression isn't re-evaluated for each nested update.
@@ -73,17 +70,17 @@ desugarDecl d = rethrowWithPosition (declSourceSpan d) $ fn d
               objectUpdate = ObjectUpdate accessor updates
           in (key, objectUpdate)
 
-  wrapLambda :: forall t. Traversable t => (t Expr -> Expr) -> t Expr -> m Expr
+  wrapLambda :: forall t. Traversable t => (t Expr -> Expr) -> t Expr -> DesugarM Expr
   wrapLambda mkVal ps = do
     args <- traverse processExpr ps
     return $ foldr (Abs . VarBinder nullSourceSpan) (mkVal (snd <$> args)) (catMaybes $ toList (fst <$> args))
     where
-      processExpr :: Expr -> m (Maybe Ident, Expr)
+      processExpr :: Expr -> DesugarM (Maybe Ident, Expr)
       processExpr e = do
         arg <- freshIfAnon e
         return (arg, maybe e argToExpr arg)
 
-  wrapLambdaAssoc :: ([(PSString, Expr)] -> Expr) -> [(PSString, Expr)] -> m Expr
+  wrapLambdaAssoc :: ([(PSString, Expr)] -> Expr) -> [(PSString, Expr)] -> DesugarM Expr
   wrapLambdaAssoc mkVal = wrapLambda (mkVal . runAssocList) . AssocList
 
   peelAnonAccessorChain :: Expr -> Maybe [PSString]
@@ -92,7 +89,7 @@ desugarDecl d = rethrowWithPosition (declSourceSpan d) $ fn d
   peelAnonAccessorChain AnonymousArgument = Just []
   peelAnonAccessorChain _ = Nothing
 
-  freshIfAnon :: Expr -> m (Maybe Ident)
+  freshIfAnon :: Expr -> DesugarM (Maybe Ident)
   freshIfAnon u
     | isAnonymousArgument u = Just <$> freshIdent'
     | otherwise = return Nothing

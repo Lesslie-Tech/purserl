@@ -20,6 +20,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage', rethrow)
 import Language.PureScript.Names (pattern ByNullSourcePos, ModuleName, Name(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), byMaybeModuleName)
 import Language.PureScript.Sugar.Names.Env (Env, Exports(..), ImportProvenance(..), ImportRecord(..), Imports(..), envModuleExports, nullImports)
+import Language.PureScript.Sugar.Monad (DesugarM)
 
 type ImportDef = (SourceSpan, ImportDeclarationType, Maybe ModuleName)
 
@@ -39,12 +40,15 @@ findImports = foldr go M.empty
 -- |
 -- Constructs a set of imports for a module.
 --
+-- NB: concretized to 'DesugarM' -- its sole caller is
+-- "Language.PureScript.Sugar.Names"'s @desugarImports@. It calls the still
+-- polymorphic 'resolveModuleImport' internally, which is fine: that function
+-- is also called directly from @externsEnv@ (dual-site between
+-- @WriterT MultipleErrors Make@ and bare @Make@) and so must stay polymorphic.
 resolveImports
-  :: forall m
-   . MonadError MultipleErrors m
-  => Env
+  :: Env
   -> Module
-  -> m (Module, Imports)
+  -> DesugarM (Module, Imports)
 resolveImports env (Module ss coms currentModule decls exps) =
   rethrow (addHint (ErrorInModule currentModule)) $ do
     let imports = findImports decls

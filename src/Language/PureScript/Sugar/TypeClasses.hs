@@ -12,9 +12,8 @@ import Prelude
 
 import Control.Arrow (first, second)
 import Control.Monad (unless)
-import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.State (MonadState(..), StateT, evalStateT, modify)
-import Control.Monad.Supply.Class (MonadSupply)
+import Control.Monad.Error.Class (throwError)
+import Control.Monad.State (StateT, evalStateT, get, modify)
 import Data.Graph (SCC(..), stronglyConnComp)
 import Data.List (find, partition)
 import Data.List.NonEmpty (nonEmpty)
@@ -33,22 +32,22 @@ import Language.PureScript.Label (Label(..))
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName, Name(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), coerceProperName, freshIdent, qualify, runIdent)
 import Language.PureScript.PSString (mkString)
 import Language.PureScript.Sugar.CaseDeclarations (desugarCases)
+import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.TypeClassDictionaries (superclassName)
 import Language.PureScript.Types
 
 type MemberMap = M.Map (ModuleName, ProperName 'ClassName) TypeClassData
 
-type Desugar = StateT MemberMap
+type Desugar = StateT MemberMap DesugarM
 
 -- |
 -- Add type synonym declarations for type class dictionary types, and value declarations for type class
 -- instance dictionary expressions.
 --
 desugarTypeClasses
-  :: (MonadSupply m, MonadError MultipleErrors m)
-  => [ExternsFile]
+  :: [ExternsFile]
   -> Module
-  -> m Module
+  -> DesugarM Module
 desugarTypeClasses externs = flip evalStateT initialState . desugarModule
   where
   initialState :: MemberMap
@@ -73,9 +72,8 @@ desugarTypeClasses externs = flip evalStateT initialState . desugarModule
   fromExternsDecl _ _ = Nothing
 
 desugarModule
-  :: (MonadSupply m, MonadError MultipleErrors m)
-  => Module
-  -> Desugar m Module
+  :: Module
+  -> Desugar Module
 desugarModule (Module ss coms name decls (Just exps)) = do
   let (classDecls, restDecls) = partition isTypeClassDecl decls
       classVerts = fmap (\d -> (d, classDeclName d, superClassesNames d)) classDecls
@@ -83,11 +81,11 @@ desugarModule (Module ss coms name decls (Just exps)) = do
   (restNewExpss, restDeclss) <- unzip <$> parU restDecls (desugarDecl name exps)
   return $ Module ss coms name (concat restDeclss ++ concat classDeclss) $ Just (exps ++ catMaybes restNewExpss ++ catMaybes classNewExpss)
   where
-  desugarClassDecl :: (MonadSupply m, MonadError MultipleErrors m)
-    => ModuleName
+  desugarClassDecl
+    :: ModuleName
     -> [DeclarationRef]
     -> SCC Declaration
-    -> Desugar m (Maybe DeclarationRef, [Declaration])
+    -> Desugar (Maybe DeclarationRef, [Declaration])
   desugarClassDecl name' exps' (AcyclicSCC d) = desugarDecl name' exps' d
   desugarClassDecl _ _ (CyclicSCC ds')
     | Just ds'' <- nonEmpty ds' = throwError . errorMessage' (declSourceSpan (NEL.head ds'')) $ CycleInTypeClassDeclaration (NEL.map classDeclName ds'')
@@ -197,11 +195,10 @@ desugarModule _ = internalError "Exports should have been elaborated in name des
 --   };
 -}
 desugarDecl
-  :: (MonadSupply m, MonadError MultipleErrors m)
-  => ModuleName
+  :: ModuleName
   -> [DeclarationRef]
   -> Declaration
-  -> Desugar m (Maybe DeclarationRef, [Declaration])
+  -> Desugar (Maybe DeclarationRef, [Declaration])
 desugarDecl mn exps = go
   where
   go d@(TypeClassDeclaration sa name args implies deps members) = do
@@ -232,7 +229,7 @@ desugarDecl mn exps = go
 
   -- Completes the name generation for type class instances that do not have
   -- a unique name defined in source code.
-  desugarInstName :: MonadSupply m => Either Text Ident -> Desugar m Ident
+  desugarInstName :: Either Text Ident -> Desugar Ident
   desugarInstName = either freshIdent pure
 
   expRef :: Ident -> Qualified (ProperName 'ClassName) -> [SourceType] -> Maybe DeclarationRef
@@ -313,16 +310,14 @@ unit :: SourceType
 unit = srcTypeApp tyRecord srcREmpty
 
 typeInstanceDictionaryDeclaration
-  :: forall m
-   . MonadError MultipleErrors m
-  => SourceAnn
+  :: SourceAnn
   -> Ident
   -> ModuleName
   -> [SourceConstraint]
   -> Qualified (ProperName 'ClassName)
   -> [SourceType]
   -> [Declaration]
-  -> Desugar m Declaration
+  -> Desugar Declaration
 typeInstanceDictionaryDeclaration sa@(SourceAnn ss _) name mn deps className tys decls =
   rethrow (addHint (ErrorInInstance className tys)) $ do
   m <- get
@@ -367,7 +362,7 @@ typeInstanceDictionaryDeclaration sa@(SourceAnn ss _) name mn deps className tys
 
   where
 
-  memberToValue :: [(Ident, SourceType)] -> Declaration -> Desugar m Expr
+  memberToValue :: [(Ident, SourceType)] -> Declaration -> Desugar Expr
   memberToValue tys' (ValueDecl (SourceAnn ss' _) ident _ [] [MkUnguarded val]) = do
     _ <- maybe (throwError . errorMessage' ss' $ ExtraneousClassMember ident className) return $ lookup ident tys'
     return val

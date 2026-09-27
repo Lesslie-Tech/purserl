@@ -5,15 +5,10 @@ module Language.PureScript.Sugar (desugar, module S) where
 
 import Control.Category ((>>>))
 import Control.Monad ((>=>))
-import Control.Monad.Error.Class (MonadError)
-import Control.Monad.Supply.Class (MonadSupply)
-import Control.Monad.State.Class (MonadState)
-import Control.Monad.Writer.Class (MonadWriter)
 
 import Language.PureScript.AST (Module)
-import Language.PureScript.Errors (MultipleErrors)
 import Language.PureScript.Externs (ExternsFile)
-import Language.PureScript.Linter.Imports (UsedImports)
+import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Sugar.BindingGroups as S
 import Language.PureScript.Sugar.CaseDeclarations as S
 import Language.PureScript.Sugar.DoNotation as S
@@ -52,13 +47,9 @@ import Language.PureScript.Sugar.TypeDeclarations as S
 --  * Group mutually recursive value and data declarations into binding groups.
 --
 desugar
-  :: MonadSupply m
-  => MonadError MultipleErrors m
-  => MonadWriter MultipleErrors m
-  => MonadState (Env, UsedImports) m
-  => [ExternsFile]
+  :: [ExternsFile]
   -> Module
-  -> m Module
+  -> DesugarM Module
 desugar externs =
   desugarSignedLiterals
     >>> desugarObjectConstructors

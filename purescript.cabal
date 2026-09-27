@@ -281,6 +281,7 @@ library
     Language.PureScript.Linter
     Language.PureScript.Linter.Exhaustive
     Language.PureScript.Linter.Imports
+    Language.PureScript.Linter.UsedImports
     Language.PureScript.Linter.Wildcards
     Language.PureScript.Make
     Language.PureScript.Make.Actions
@@ -303,6 +304,7 @@ library
     Language.PureScript.Sugar.CaseDeclarations
     Language.PureScript.Sugar.DoNotation
     Language.PureScript.Sugar.LetPattern
+    Language.PureScript.Sugar.Monad
     Language.PureScript.Sugar.Names
     Language.PureScript.Sugar.Names.Common
     Language.PureScript.Sugar.Names.Env

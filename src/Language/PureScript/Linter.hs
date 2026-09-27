@@ -17,6 +17,7 @@ import Language.PureScript.AST
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage')
 import Language.PureScript.Linter.Exhaustive as L
 import Language.PureScript.Linter.Imports as L
+import Language.PureScript.Make.Monad (Make)
 import Language.PureScript.Names (Ident(..), Qualified(..), QualifiedBy(..), getIdentName, runIdent)
 import Language.PureScript.Types (Constraint(..), SourceType, Type(..), everythingWithContextOnTypes)
 import Language.PureScript.Constants.Libs qualified as C
@@ -24,7 +25,7 @@ import Language.PureScript.Constants.Libs qualified as C
 -- | Lint the PureScript AST.
 -- |
 -- | Right now, this pass performs a shadowing check and a check for unused bindings.
-lint :: forall m. (MonadWriter MultipleErrors m) => Module -> m ()
+lint :: Module -> Make ()
 lint modl@(Module _ _ mn ds _) = do
   lintUnused modl
   censor (addHint (ErrorInModule mn)) $ mapM_ lintDeclaration ds
@@ -36,7 +37,7 @@ lint modl@(Module _ _ mn ds _) = do
   getDeclIdent :: Declaration -> Maybe Ident
   getDeclIdent = getIdentName <=< declName
 
-  lintDeclaration :: Declaration -> m ()
+  lintDeclaration :: Declaration -> Make ()
   lintDeclaration = tell . f
     where
     (warningsInDecl, _, _, _, _) = everythingWithScope (\_ _ -> mempty) stepE stepB (\_ _ -> mempty) stepDo
@@ -133,7 +134,7 @@ lint modl@(Module _ _ mn ds _) = do
 
 
 
-lintUnused :: forall m. (MonadWriter MultipleErrors m) => Module -> m ()
+lintUnused :: Module -> Make ()
 lintUnused (Module modSS _ mn modDecls exports) =
   censor (addHint (ErrorInModule mn)) $ do
     topVars <- traverse lintDeclaration modDecls
@@ -167,7 +168,7 @@ lintUnused (Module modSS _ mn modDecls exports) =
   getDeclIdent :: Declaration -> Maybe Ident
   getDeclIdent = getIdentName <=< declName
 
-  lintDeclaration :: Declaration -> m (S.Set Ident)
+  lintDeclaration :: Declaration -> Make (S.Set Ident)
   lintDeclaration declToLint = do
     let (vars, errs) = goDecl declToLint
     tell errs

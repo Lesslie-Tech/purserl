@@ -24,14 +24,16 @@ import Language.PureScript.Environment (NameKind(..))
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors(..), SimpleErrorMessage(..), addHint, errorMessage', parU, rethrow, withPosition)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident, Qualified(..), freshIdent', freshIdent)
 import Language.PureScript.TypeChecker.Monad (guardWith)
+import Language.PureScript.Sugar.Monad (DesugarM)
+import Control.Monad.Supply (SupplyT)
+import Language.PureScript.Make.Monad (Make)
 
 -- |
 -- Replace all top-level binders in a module with case expressions.
 --
 desugarCasesModule
-  :: (MonadSupply m, MonadError MultipleErrors m)
-  => Module
-  -> m Module
+  :: Module
+  -> DesugarM Module
 desugarCasesModule (Module ss coms name ds exps) =
   rethrow (addHint (ErrorInModule name)) $
     Module ss coms name
@@ -39,9 +41,8 @@ desugarCasesModule (Module ss coms name ds exps) =
       <*> pure exps
 
 desugarCaseGuards
-  :: forall m. (MonadSupply m, MonadError MultipleErrors m)
-  => [Declaration]
-  -> m [Declaration]
+  :: [Declaration]
+  -> SupplyT Make [Declaration]
 desugarCaseGuards declarations = parU declarations go
   where
     go d =
@@ -278,12 +279,12 @@ desugarGuardedExprs _ v = pure v
 -- |
 -- Validates that case head and binder lengths match.
 --
-validateCases :: forall m. (MonadSupply m, MonadError MultipleErrors m) => [Declaration] -> m [Declaration]
+validateCases :: [Declaration] -> DesugarM [Declaration]
 validateCases = flip parU f
   where
   (f, _, _) = everywhereOnValuesM return validate return
 
-  validate :: Expr -> m Expr
+  validate :: Expr -> DesugarM Expr
   validate c@(Case vs alts) = do
     let l = length vs
         alts' = filter ((l /=) . length . caseAlternativeBinders) alts
@@ -303,12 +304,12 @@ validateCases = flip parU f
     positionedBinder (PositionedBinder p _ _) = Just p
     positionedBinder _ = Nothing
 
-desugarAbs :: forall m. (MonadSupply m, MonadError MultipleErrors m) => [Declaration] -> m [Declaration]
+desugarAbs :: [Declaration] -> DesugarM [Declaration]
 desugarAbs = flip parU f
   where
   (f, _, _) = everywhereOnValuesM return replace return
 
-  replace :: Expr -> m Expr
+  replace :: Expr -> DesugarM Expr
   replace (Abs (stripPositioned -> (VarBinder ss i)) val) =
     pure (Abs (VarBinder ss i) val)
   replace (Abs binder val) = do
@@ -323,6 +324,11 @@ stripPositioned binder = binder
 -- |
 -- Replace all top-level binders with case expressions.
 --
+-- NB: called both from 'desugarCasesModule' at 'DesugarM' and from
+-- "Language.PureScript.Sugar.TypeClasses"'s @desugarDecl@ at
+-- @StateT MemberMap DesugarM@ -- genuinely dual-site, so this (and its
+-- helpers 'toDecls'/'makeCaseDeclaration') must stay polymorphic.
+{-# SPECIALIZE desugarCases :: [Declaration] -> DesugarM [Declaration] #-}
 desugarCases :: forall m. (MonadSupply m, MonadError MultipleErrors m) => [Declaration] -> m [Declaration]
 desugarCases = desugarRest <=< fmap join . flip parU toDecls . groupBy inSameGroup
   where
