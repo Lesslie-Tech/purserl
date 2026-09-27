@@ -77,7 +77,7 @@ Grepping the target project's own already-compiled `output/**/*.erl` first is
 the fastest way to find real, representative call-site shapes (curried vs.
 uncurried, literal-arg cases) to design the rule against.
 
-**Caching gotcha:** `purs`'s incremental cache (`output/cache-db.cbor`) keys
+**Caching gotcha:** `purs`'s incremental cache (`output/cache-db.bin`) keys
 on source-file hashes only, not the compiler binary version. After rebuilding
 `purs`, delete `output/` (both in the scratch project and, at final
 verification time, in the target project) before recompiling — otherwise

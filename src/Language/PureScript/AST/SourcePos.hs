@@ -6,11 +6,9 @@ module Language.PureScript.AST.SourcePos where
 
 import Prelude
 
-import Codec.Serialise (Serialise, encode, decode)
-import Codec.Serialise.Encoding (encodeSimple)
-import Codec.Serialise.Decoding (decodeSimple)
 import Control.DeepSeq (NFData)
 import Data.Aeson ((.=), (.:))
+import Data.Binary (Binary(..))
 import Data.Text (Text)
 import GHC.Generics (Generic)
 import Language.PureScript.Comments (Comment)
@@ -25,36 +23,12 @@ data SourceAnn = SourceAnn {-# UNPACK #-} !SourceSpan ![Comment]
 
 instance Intern SourceAnn
 
--- instance Serialise SourceAnn
-instance Serialise SourceAnn where
-  encode sa = encode ()
-  decode = do
-    () <- decode
-    pure NullSourceAnn
---instance Serialise SourceAnn where
---  encode sa =
---    case sa of
---      SourceAnn NullSourceSpan [] -> encodeSimple 0
---      SourceAnn ss [] -> encodeSimple 1 <> encode ss
---      SourceAnn NullSourceSpan comments -> encodeSimple 2 <> encode comments
---      SourceAnn ss comments -> encodeSimple 3 <> encode ss <> encode comments
---
---  decode = do
---    tag <- decodeSimple
---    case tag of
---      0 ->
---        pure $ SourceAnn NullSourceSpan []
---      1 -> do
---        ss <- decode
---        pure $ SourceAnn ss []
---      2 -> do
---        comments <- decode
---        pure $ SourceAnn NullSourceSpan comments
---      3 -> do
---        ss <- decode
---        comments <- decode
---        pure $ SourceAnn ss comments
-
+-- Positions and comments are deliberately not needed for cache correctness:
+-- keep the actual bytes out of the file rather than encoding then
+-- discarding.
+instance Binary SourceAnn where
+  put _ = pure ()
+  get = pure NullSourceAnn
 
 safst (SourceAnn a _) = a
 sasnd (SourceAnn _ b) = b
@@ -65,16 +39,13 @@ data SourcePos = SourcePos
     -- ^ Line number
   , sourcePosColumn :: {-# UNPACK #-} !Int
     -- ^ Column number
-  } deriving (Show, Eq, Ord, Generic, NFData)--, Serialise)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 instance Intern SourcePos
 
-instance Serialise SourcePos where
-  encode sa = encode ()
-  decode = do
-    () <- decode
-    pure (SourcePos 0 0)
-
+instance Binary SourcePos where
+  put _ = pure ()
+  get = pure (SourcePos 0 0)
 
 displaySourcePosShort :: SourcePos -> Text
 displaySourcePosShort sp =
@@ -97,16 +68,13 @@ data SourceSpan = SourceSpan
     -- ^ Start of the span
   , spanEnd :: {-# UNPACK #-} !SourcePos
     -- ^ End of the span
-  } deriving (Eq, Ord, Generic, NFData)--, Serialise)
+  } deriving (Eq, Ord, Generic, NFData)
 
 instance Intern SourceSpan
 
-instance Serialise SourceSpan where
-  encode sa = encode ()
-  decode = do
-    () <- decode
-    pure NullSourceSpan
-
+instance Binary SourceSpan where
+  put _ = pure ()
+  get = pure NullSourceSpan
 
 instance Show SourceSpan where
   show NullSourceSpan = "s0"

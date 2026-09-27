@@ -7,10 +7,12 @@ module Language.PureScript.Names where
 
 import Prelude
 
-import Codec.Serialise (Serialise)
 import Control.Applicative ((<|>))
 import Control.Monad.Supply.Class (MonadSupply(..))
 import Control.DeepSeq (NFData)
+import Data.Binary (Binary(..))
+import Data.Binary.Get (getWord8)
+import Data.Binary.Put (putWord8)
 import Data.Functor.Contravariant (contramap)
 import Data.Vector qualified as V
 
@@ -35,8 +37,26 @@ data Name
   deriving (Eq, Ord, Show, Generic)
 
 instance NFData Name
-instance Serialise Name
 instance Intern Name
+
+instance Binary Name where
+  put = \case
+    IdentName a -> putWord8 0 >> put a
+    ValOpName a -> putWord8 1 >> put a
+    TyName a -> putWord8 2 >> put a
+    TyOpName a -> putWord8 3 >> put a
+    DctorName a -> putWord8 4 >> put a
+    TyClassName a -> putWord8 5 >> put a
+    ModName a -> putWord8 6 >> put a
+  get = getWord8 >>= \case
+    0 -> IdentName <$> get
+    1 -> ValOpName <$> get
+    2 -> TyName <$> get
+    3 -> TyOpName <$> get
+    4 -> DctorName <$> get
+    5 -> TyClassName <$> get
+    6 -> ModName <$> get
+    n -> fail ("Binary Name: invalid tag " <> show n)
 
 getIdentName :: Name -> Maybe Ident
 getIdentName (IdentName name) = Just name
@@ -75,8 +95,16 @@ data InternalIdentData
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData InternalIdentData
-instance Serialise InternalIdentData
 instance Intern InternalIdentData
+
+instance Binary InternalIdentData where
+  put = \case
+    RuntimeLazyFactory -> putWord8 0
+    Lazy a -> putWord8 1 >> put a
+  get = getWord8 >>= \case
+    0 -> pure RuntimeLazyFactory
+    1 -> Lazy <$> get
+    n -> fail ("Binary InternalIdentData: invalid tag " <> show n)
 
 -- |
 -- Names for value identifiers
@@ -101,8 +129,20 @@ data Ident
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData Ident
-instance Serialise Ident
 instance Intern Ident
+
+instance Binary Ident where
+  put = \case
+    Ident a -> putWord8 0 >> put a
+    GenIdent a b -> putWord8 1 >> put a >> put b
+    UnusedIdent -> putWord8 2
+    InternalIdent a -> putWord8 3 >> put a
+  get = getWord8 >>= \case
+    0 -> Ident <$> get
+    1 -> GenIdent <$> get <*> get
+    2 -> pure UnusedIdent
+    3 -> InternalIdent <$> get
+    n -> fail ("Binary Ident: invalid tag " <> show n)
 
 unusedIdent :: Text
 unusedIdent = "$__unused"
@@ -134,8 +174,11 @@ newtype OpName (a :: OpNameType) = OpName { runOpName :: Text }
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData (OpName a)
-instance Serialise (OpName a)
 instance Intern (OpName a)
+
+instance Binary (OpName a) where
+  put (OpName t) = put t
+  get = OpName <$> get
 
 instance ToJSON (OpName a) where
   toJSON = toJSON . runOpName
@@ -164,8 +207,11 @@ newtype ProperName (a :: ProperNameType) = ProperName { runProperName :: Text }
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData (ProperName a)
-instance Serialise (ProperName a)
 instance Intern (ProperName a)
+
+instance Binary (ProperName a) where
+  put (ProperName t) = put t
+  get = ProperName <$> get
 
 instance ToJSON (ProperName a) where
   toJSON = toJSON . runProperName
@@ -195,10 +241,13 @@ coerceProperName = ProperName . runProperName
 --
 newtype ModuleName = ModuleName Text
   deriving (Show, Eq, Ord, Generic)
-  deriving newtype Serialise
 
 instance NFData ModuleName
 instance Intern ModuleName
+
+instance Binary ModuleName where
+  put (ModuleName t) = put t
+  get = ModuleName <$> get
 
 runModuleName :: ModuleName -> Text
 runModuleName (ModuleName name) = name
@@ -218,8 +267,16 @@ pattern ByNullSourcePos :: QualifiedBy
 pattern ByNullSourcePos = BySourcePos (SourcePos 0 0)
 
 instance NFData QualifiedBy
-instance Serialise QualifiedBy
 instance Intern QualifiedBy
+
+instance Binary QualifiedBy where
+  put = \case
+    BySourcePos a -> putWord8 0 >> put a
+    ByModuleName a -> putWord8 1 >> put a
+  get = getWord8 >>= \case
+    0 -> BySourcePos <$> get
+    1 -> ByModuleName <$> get
+    n -> fail ("Binary QualifiedBy: invalid tag " <> show n)
 
 isBySourcePos :: QualifiedBy -> Bool
 isBySourcePos (BySourcePos _) = True
@@ -240,8 +297,11 @@ data Qualified a = Qualified QualifiedBy a
   deriving (Show, Eq, Ord, Functor, Foldable, Traversable, Generic)
 
 instance NFData a => NFData (Qualified a)
-instance Serialise a => Serialise (Qualified a)
 instance Intern a => Intern (Qualified a)
+
+instance Binary a => Binary (Qualified a) where
+  put (Qualified a b) = put a >> put b
+  get = Qualified <$> get <*> get
 
 showQualified :: (a -> Text) -> Qualified a -> Text
 showQualified f (Qualified (BySourcePos  _) a) = f a

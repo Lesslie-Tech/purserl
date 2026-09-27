@@ -7,12 +7,14 @@ module Language.PureScript.Types where
 import Prelude
 import Protolude (ordNub, fromMaybe)
 
-import Codec.Serialise (Serialise)
 import Control.Applicative ((<|>))
 import Control.Arrow (first, second)
 import Control.DeepSeq (NFData)
 import Control.Lens (Lens', (^.), set)
 import Control.Monad ((<=<), (>=>))
+import Data.Binary (Binary(..))
+import Data.Binary.Get (getWord8)
+import Data.Binary.Put (putWord8)
 import Data.Aeson ((.:), (.:?), (.!=), (.=))
 import Data.Aeson qualified as A
 import Data.Aeson.Types qualified as A
@@ -41,8 +43,11 @@ newtype SkolemScope = SkolemScope { runSkolemScope :: Int }
   deriving (Show, Eq, Ord, A.ToJSON, A.FromJSON, Generic)
 
 instance NFData SkolemScope
-instance Serialise SkolemScope
 instance Intern SkolemScope
+
+instance Binary SkolemScope where
+  put (SkolemScope i) = put i
+  get = SkolemScope <$> get
 
 -- |
 -- Describes how a TypeWildcard should be presented to the user during
@@ -54,8 +59,18 @@ data WildcardData = HoleWildcard Text | UnnamedWildcard | IgnoredWildcard
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData WildcardData
-instance Serialise WildcardData
 instance Intern WildcardData
+
+instance Binary WildcardData where
+  put = \case
+    HoleWildcard a -> putWord8 0 >> put a
+    UnnamedWildcard -> putWord8 1
+    IgnoredWildcard -> putWord8 2
+  get = getWord8 >>= \case
+    0 -> HoleWildcard <$> get
+    1 -> pure UnnamedWildcard
+    2 -> pure IgnoredWildcard
+    n -> fail ("Binary WildcardData: invalid tag " <> show n)
 
 data TypeVarVisibility
   = TypeVarVisible
@@ -63,8 +78,16 @@ data TypeVarVisibility
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData TypeVarVisibility
-instance Serialise TypeVarVisibility
 instance Intern TypeVarVisibility
+
+instance Binary TypeVarVisibility where
+  put = \case
+    TypeVarVisible -> putWord8 0
+    TypeVarInvisible -> putWord8 1
+  get = getWord8 >>= \case
+    0 -> pure TypeVarVisible
+    1 -> pure TypeVarInvisible
+    n -> fail ("Binary TypeVarVisibility: invalid tag " <> show n)
 
 typeVarVisibilityPrefix :: TypeVarVisibility -> Text
 typeVarVisibilityPrefix = \case
@@ -118,8 +141,46 @@ data Type a
   deriving (Show, Generic, Functor, Foldable, Traversable)
 
 instance NFData a => NFData (Type a)
-instance Serialise a => Serialise (Type a)
 instance Intern a => Intern (Type a)
+
+instance Binary a => Binary (Type a) where
+  put = \case
+    TUnknown a b -> putWord8 0 >> put a >> put b
+    TypeVar a b -> putWord8 1 >> put a >> put b
+    TypeLevelString a b -> putWord8 2 >> put a >> put b
+    TypeLevelInt a b -> putWord8 3 >> put a >> put b
+    TypeWildcard a b -> putWord8 4 >> put a >> put b
+    TypeConstructor a b -> putWord8 5 >> put a >> put b
+    TypeOp a b -> putWord8 6 >> put a >> put b
+    TypeApp a b c -> putWord8 7 >> put a >> put b >> put c
+    KindApp a b c -> putWord8 8 >> put a >> put b >> put c
+    ForAll a b c d e f -> putWord8 9 >> put a >> put b >> put c >> put d >> put e >> put f
+    ConstrainedType a b c -> putWord8 10 >> put a >> put b >> put c
+    Skolem a b c d e -> putWord8 11 >> put a >> put b >> put c >> put d >> put e
+    REmpty a -> putWord8 12 >> put a
+    RCons a b c d -> putWord8 13 >> put a >> put b >> put c >> put d
+    KindedType a b c -> putWord8 14 >> put a >> put b >> put c
+    BinaryNoParensType a b c d -> putWord8 15 >> put a >> put b >> put c >> put d
+    ParensInType a b -> putWord8 16 >> put a >> put b
+  get = getWord8 >>= \case
+    0 -> TUnknown <$> get <*> get
+    1 -> TypeVar <$> get <*> get
+    2 -> TypeLevelString <$> get <*> get
+    3 -> TypeLevelInt <$> get <*> get
+    4 -> TypeWildcard <$> get <*> get
+    5 -> TypeConstructor <$> get <*> get
+    6 -> TypeOp <$> get <*> get
+    7 -> TypeApp <$> get <*> get <*> get
+    8 -> KindApp <$> get <*> get <*> get
+    9 -> ForAll <$> get <*> get <*> get <*> get <*> get <*> get
+    10 -> ConstrainedType <$> get <*> get <*> get
+    11 -> Skolem <$> get <*> get <*> get <*> get <*> get
+    12 -> REmpty <$> get
+    13 -> RCons <$> get <*> get <*> get <*> get
+    14 -> KindedType <$> get <*> get <*> get
+    15 -> BinaryNoParensType <$> get <*> get <*> get <*> get
+    16 -> ParensInType <$> get <*> get
+    n -> fail ("Binary (Type a): invalid tag " <> show n)
 
 srcTUnknown :: Int -> SourceType
 srcTUnknown = TUnknown NullSourceAnn
@@ -179,8 +240,11 @@ data ConstraintData
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData ConstraintData
-instance Serialise ConstraintData
 instance Intern ConstraintData
+
+instance Binary ConstraintData where
+  put (PartialConstraintData a b) = put a >> put b
+  get = PartialConstraintData <$> get <*> get
 
 -- | A typeclass constraint
 data Constraint a = Constraint
@@ -197,8 +261,11 @@ data Constraint a = Constraint
   } deriving (Show, Generic, Functor, Foldable, Traversable)
 
 instance NFData a => NFData (Constraint a)
-instance Serialise a => Serialise (Constraint a)
 instance Intern a => Intern (Constraint a)
+
+instance Binary a => Binary (Constraint a) where
+  put (Constraint a b c d e) = put a >> put b >> put c >> put d >> put e
+  get = Constraint <$> get <*> get <*> get <*> get <*> get
 
 srcConstraint :: Qualified (ProperName 'ClassName) -> [SourceType] -> [SourceType] -> Maybe ConstraintData -> SourceConstraint
 srcConstraint = Constraint NullSourceAnn

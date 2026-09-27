@@ -9,8 +9,10 @@ module Language.PureScript.AST.Declarations where
 import Prelude
 import Protolude.Exceptions (hush)
 
-import Codec.Serialise (Serialise)
 import Control.DeepSeq (NFData)
+import Data.Binary (Binary(..))
+import Data.Binary.Get (getWord8)
+import Data.Binary.Put (putWord8)
 import Data.Functor.Identity (Identity(..))
 
 import Data.Aeson.TH (Options(..), SumEncoding(..), defaultOptions, deriveJSON)
@@ -166,9 +168,18 @@ importPrim =
       . addDefaultImport (Qualified ByNullSourcePos primModName)
 
 data NameSource = UserNamed | CompilerNamed
-  deriving (Show, Generic, NFData, Serialise)
+  deriving (Show, Generic, NFData)
 
 instance Intern NameSource
+
+instance Binary NameSource where
+  put = \case
+    UserNamed -> putWord8 0
+    CompilerNamed -> putWord8 1
+  get = getWord8 >>= \case
+    0 -> pure UserNamed
+    1 -> pure CompilerNamed
+    n -> fail ("Binary NameSource: invalid tag " <> show n)
 
 -- |
 -- An item in a list of explicit imports or exports
@@ -207,9 +218,30 @@ data DeclarationRef
   -- elaboration in name desugaring.
   --
   | ReExportRef !SourceSpan !ExportSource !DeclarationRef
-  deriving (Show, Generic, NFData, Serialise)
+  deriving (Show, Generic, NFData)
 
 instance Intern DeclarationRef
+
+instance Binary DeclarationRef where
+  put = \case
+    TypeClassRef a b -> putWord8 0 >> put a >> put b
+    TypeOpRef a b -> putWord8 1 >> put a >> put b
+    TypeRef a b c -> putWord8 2 >> put a >> put b >> put c
+    ValueRef a b -> putWord8 3 >> put a >> put b
+    ValueOpRef a b -> putWord8 4 >> put a >> put b
+    TypeInstanceRef a b c -> putWord8 5 >> put a >> put b >> put c
+    ModuleRef a b -> putWord8 6 >> put a >> put b
+    ReExportRef a b c -> putWord8 7 >> put a >> put b >> put c
+  get = getWord8 >>= \case
+    0 -> TypeClassRef <$> get <*> get
+    1 -> TypeOpRef <$> get <*> get
+    2 -> TypeRef <$> get <*> get <*> get
+    3 -> ValueRef <$> get <*> get
+    4 -> ValueOpRef <$> get <*> get
+    5 -> TypeInstanceRef <$> get <*> get <*> get
+    6 -> ModuleRef <$> get <*> get
+    7 -> ReExportRef <$> get <*> get <*> get
+    n -> fail ("Binary DeclarationRef: invalid tag " <> show n)
 
 instance Eq DeclarationRef where
   (TypeClassRef _ name) == (TypeClassRef _ name') = name == name'
@@ -249,9 +281,13 @@ data ExportSource =
   { exportSourceImportedFrom :: Maybe ModuleName
   , exportSourceDefinedIn :: ModuleName
   }
-  deriving (Eq, Ord, Show, Generic, NFData, Serialise)
+  deriving (Eq, Ord, Show, Generic, NFData)
 
 instance Intern ExportSource
+
+instance Binary ExportSource where
+  put (ExportSource a b) = put a >> put b
+  get = ExportSource <$> get <*> get
 
 declRefSourceSpan :: DeclarationRef -> SourceSpan
 declRefSourceSpan (TypeRef ss _ _) = ss
@@ -313,9 +349,20 @@ data ImportDeclarationType
   -- An import with a list of references to hide: `import M hiding (foo)`
   --
   | Hiding [DeclarationRef]
-  deriving (Eq, Show, Generic, Serialise, NFData)
+  deriving (Eq, Show, Generic, NFData)
 
 instance Intern ImportDeclarationType
+
+instance Binary ImportDeclarationType where
+  put = \case
+    Implicit -> putWord8 0
+    Explicit a -> putWord8 1 >> put a
+    Hiding a -> putWord8 2 >> put a
+  get = getWord8 >>= \case
+    0 -> pure Implicit
+    1 -> Explicit <$> get
+    2 -> Hiding <$> get
+    n -> fail ("Binary ImportDeclarationType: invalid tag " <> show n)
 
 isExplicit :: ImportDeclarationType -> Bool
 isExplicit (Explicit _) = True

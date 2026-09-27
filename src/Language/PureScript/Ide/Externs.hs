@@ -7,8 +7,10 @@ module Language.PureScript.Ide.Externs
 
 import Protolude hiding (to, from, (&))
 
-import Codec.CBOR.Term as Term
 import Control.DeepSeq (force)
+import Control.Exception qualified as Exception
+import Data.Binary qualified as Binary
+import Data.ByteString.Lazy qualified as BSL
 import Control.Lens (preview, view, (&), (^.))
 import "monad-logger" Control.Monad.Logger (MonadLogger, logErrorN)
 import Data.Text qualified as Text
@@ -37,9 +39,17 @@ readExternFile fp = do
       -- forcing now, the dedup never actually runs before the value is
       -- stashed away unevaluated.
       liftIO (evaluate (force (intern externs)))
-    _ ->
-      liftIO (Make.readCborFileIO fp) >>= \case
-        Just (Term.TList (_tag : Term.TString efVersion : _rest)) -> do
+    _ -> do
+      -- The externs file failed to parse as the current version's
+      -- 'ExternsFile' shape, or doesn't exist. `efVersion` is deliberately
+      -- kept as the first field of 'ExternsFile' (see its definition), so we
+      -- can still peek at just that leading 'Text' to give a more helpful
+      -- error message when the rest of the format has changed underneath us.
+      mRawBytes <- liftIO $ either (\(_ :: Exception.SomeException) -> Nothing) Just <$> Exception.try (BSL.readFile fp)
+      case mRawBytes >>= \bytes -> case Binary.decodeOrFail bytes of
+             Right (_, _, v) -> Just (v :: Text)
+             Left _ -> Nothing of
+        Just efVersion -> do
           let errMsg =
                 "Version mismatch for the externs at: "
                 <> toS fp
@@ -47,7 +57,7 @@ readExternFile fp = do
                 <> " Found: " <> efVersion
           logErrorN errMsg
           throwError (GeneralError errMsg)
-        _ ->
+        Nothing ->
           throwError (GeneralError ("Parsing the extern at: " <> toS fp <> " failed"))
     where
       version = Purserl.versionString

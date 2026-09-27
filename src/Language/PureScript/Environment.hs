@@ -5,7 +5,9 @@ import Prelude
 import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Control.Monad (unless)
-import Codec.Serialise (Serialise)
+import Data.Binary (Binary(..))
+import Data.Binary.Get (getWord8)
+import Data.Binary.Put (putWord8)
 import Data.Aeson ((.=), (.:))
 import Data.Aeson qualified as A
 import Data.Foldable (find, fold)
@@ -86,8 +88,11 @@ data FunctionalDependency = FunctionalDependency
   } deriving (Show, Generic, Eq)
 
 instance NFData FunctionalDependency
-instance Serialise FunctionalDependency
 instance Intern FunctionalDependency
+
+instance Binary FunctionalDependency where
+  put (FunctionalDependency a b) = put a >> put b
+  get = FunctionalDependency <$> get <*> get
 
 instance A.FromJSON FunctionalDependency where
   parseJSON = A.withObject "FunctionalDependency" $ \o ->
@@ -238,7 +243,6 @@ data NameVisibility
   deriving (Show, Eq, Generic)
 
 instance NFData NameVisibility
-instance Serialise NameVisibility
 
 -- | A flag for whether a name is for an private or public value - only public values will be
 -- included in a generated externs file.
@@ -253,7 +257,17 @@ data NameKind
   deriving (Show, Eq, Generic)
 
 instance NFData NameKind
-instance Serialise NameKind
+
+instance Binary NameKind where
+  put = \case
+    Private -> putWord8 0
+    Public -> putWord8 1
+    External -> putWord8 2
+  get = getWord8 >>= \case
+    0 -> pure Private
+    1 -> pure Public
+    2 -> pure External
+    n -> fail ("Binary NameKind: invalid tag " <> show n)
 
 -- | The kinds of a type
 data TypeKind
@@ -270,8 +284,22 @@ data TypeKind
   deriving (Show, Eq, Generic)
 
 instance NFData TypeKind
-instance Serialise TypeKind
 instance Intern TypeKind
+
+instance Binary TypeKind where
+  put = \case
+    DataType a b c -> putWord8 0 >> put a >> put b >> put c
+    TypeSynonym -> putWord8 1
+    ExternData a -> putWord8 2 >> put a
+    LocalTypeVariable -> putWord8 3
+    ScopedTypeVar -> putWord8 4
+  get = getWord8 >>= \case
+    0 -> DataType <$> get <*> get <*> get
+    1 -> pure TypeSynonym
+    2 -> ExternData <$> get
+    3 -> pure LocalTypeVariable
+    4 -> pure ScopedTypeVar
+    n -> fail ("Binary TypeKind: invalid tag " <> show n)
 
 -- | The type ('data' or 'newtype') of a data type declaration
 data DataDeclType
@@ -282,8 +310,16 @@ data DataDeclType
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData DataDeclType
-instance Serialise DataDeclType
 instance Intern DataDeclType
+
+instance Binary DataDeclType where
+  put = \case
+    Data -> putWord8 0
+    Newtype -> putWord8 1
+  get = getWord8 >>= \case
+    0 -> pure Data
+    1 -> pure Newtype
+    n -> fail ("Binary DataDeclType: invalid tag " <> show n)
 
 showDataDeclType :: DataDeclType -> Text
 showDataDeclType Data = "data"

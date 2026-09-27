@@ -14,8 +14,8 @@ module Language.PureScript.PSString
 
 import Prelude
 import GHC.Generics (Generic)
-import Codec.Serialise (Serialise)
 import Control.DeepSeq (NFData)
+import Data.Binary (Binary(..))
 import Language.PureScript.Interning (Intern(..))
 import Data.Bits (shiftR, (.&.))
 import Data.Char qualified as Char
@@ -43,8 +43,11 @@ newtype PSString = PSString Text
   deriving (Eq, Ord, Semigroup, Monoid, Generic)
 
 instance NFData PSString
-instance Serialise PSString
 instance Intern PSString
+
+instance Binary PSString where
+  put (PSString t) = put t
+  get = PSString <$> get
 
 instance Show PSString where
   show (PSString t) = show (T.unpack t)

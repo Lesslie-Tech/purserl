@@ -18,12 +18,12 @@
 --
 -- The traversal is derived generically via 'GHC.Generics': every
 -- PureScript-internal type already derives 'Generic' (it's needed for the
--- existing 'Codec.Serialise.Serialise' instances), so `instance Intern Foo`
+-- existing generically-derived 'NFData' instances), so `instance Intern Foo`
 -- is an empty, structurally-derived instance for nearly every compiler type
 -- -- one is declared next to each type's definition, the same way
--- `instance NFData Foo`/`instance Serialise Foo` already are. Only the
--- actual leaf (Text), primitives with no Text inside, and a handful of
--- container shapes need a hand-written case, all of which live here.
+-- `instance NFData Foo` already is. Only the actual leaf (Text), primitives
+-- with no Text inside, and a handful of container shapes need a hand-written
+-- case, all of which live here.
 module Language.PureScript.Interning
   ( Intern(..)
   , GIntern

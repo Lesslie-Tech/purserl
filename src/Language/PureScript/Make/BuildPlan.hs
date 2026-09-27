@@ -22,7 +22,7 @@ module Language.PureScript.Make.BuildPlan
 
 import Prelude
 
-import Codec.Serialise (serialise)
+import Data.Binary qualified as Binary
 import Control.Monad.IO.Class (liftIO)
 import Control.Concurrent.Async.Lifted as A
 import Control.Concurrent.Lifted as C
@@ -211,7 +211,7 @@ markComplete2 ma@MakeActions{..} buildPlan moduleName oldExt result = do
       BuildJobSkipped -> Nothing
       BuildJobSkippedFullCacheHit -> Just NoExternsChange
       BuildJobSucceeded _ newExt -> do
-        case fmap (serialise . efOurCacheShapes) oldExt == Just (serialise $ efOurCacheShapes newExt) of
+        case fmap (Binary.encode . efOurCacheShapes) oldExt == Just (Binary.encode $ efOurCacheShapes newExt) of
           True ->
             Just NoExternsChange
           False ->

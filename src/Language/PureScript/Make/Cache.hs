@@ -10,9 +10,9 @@ module Language.PureScript.Make.Cache
 
 import Prelude
 
-import Codec.Serialise (Serialise(..))
 import Data.Aeson qualified as Aeson
 import Data.Align (align)
+import Data.Binary (Binary(..))
 import Data.ByteString qualified as BS
 import Data.Hashable (hashWithSalt)
 import Data.Map (Map)
@@ -21,7 +21,8 @@ import Data.Maybe (fromMaybe)
 import Data.Monoid (All(..))
 import Data.Set (Set)
 import Data.These (These(..))
-import Data.Time.Clock (UTCTime)
+import Data.Time.Calendar (Day(..))
+import Data.Time.Clock (UTCTime(..), diffTimeToPicoseconds, picosecondsToDiffTime)
 import Data.Traversable (for)
 import System.FilePath qualified as FilePath
 import Control.DeepSeq (NFData)
@@ -40,13 +41,20 @@ import Control.Monad (when)
 newtype ContentHash = ContentHash
   { unContentHash :: (Int, Int) }
   deriving (Show, Eq, Ord, NFData)
-  deriving newtype (Serialise)
+  deriving newtype (Binary)
 
 instance Aeson.ToJSON ContentHash where
   toJSON = Aeson.toJSON . unContentHash
 
 instance Aeson.FromJSON ContentHash where
   parseJSON = fmap ContentHash . Aeson.parseJSON
+
+-- No Binary instance for UTCTime in the boot 'binary' package (it doesn't
+-- depend on 'time'), so this is hand-written to let 'CacheInfo' derive
+-- Binary via its underlying Map.
+instance Binary UTCTime where
+  put t = put (toModifiedJulianDay (utctDay t)) >> put (diffTimeToPicoseconds (utctDayTime t))
+  get = UTCTime . ModifiedJulianDay <$> get <*> (picosecondsToDiffTime <$> get)
 
 hash :: BS.ByteString -> ContentHash
 hash bs = ContentHash (hashWithSalt 0 bs, hashWithSalt 1 bs)
@@ -58,7 +66,7 @@ type CacheDb = Map ModuleName CacheInfo
 newtype CacheInfo = CacheInfo
   { unCacheInfo :: Map FilePath (UTCTime, ContentHash) }
   deriving stock (Show)
-  deriving newtype (Eq, Ord, Semigroup, Monoid, Aeson.FromJSON, Aeson.ToJSON, Serialise)
+  deriving newtype (Eq, Ord, Semigroup, Monoid, Aeson.FromJSON, Aeson.ToJSON, Binary)
 
 -- | Given a module name, and a map containing the associated input files
 -- together with current metadata i.e. timestamps and hashes, check whether the

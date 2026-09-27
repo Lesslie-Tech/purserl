@@ -178,13 +178,14 @@ data MakeActions m = MakeActions
 -- | Given the output directory, determines the location for the
 -- CacheDb file
 --
--- This is CBOR, not JSON, so that reading/writing the whole project's cache
--- database on every build doesn't pay JSON parse/encode costs (it reuses the
--- same 'Serialise' machinery already used for externs files). Old
--- `cache-db.json` files from a previous version are simply never read by
--- this filename and are treated as a cache miss.
+-- This is a hand-written 'Binary' encoding, not JSON, so that
+-- reading/writing the whole project's cache database on every build doesn't
+-- pay JSON parse/encode costs (it reuses the same machinery already used for
+-- externs files). Old `cache-db.json`/`cache-db.cbor` files from a previous
+-- version are simply never read by this filename and are treated as a cache
+-- miss.
 cacheDbFile :: FilePath -> FilePath
-cacheDbFile = (</> "cache-db.cbor")
+cacheDbFile = (</> "cache-db.bin")
 
 readCacheDb'
   :: (MonadIO m, MonadError MultipleErrors m)

@@ -10,10 +10,12 @@ module Language.PureScript.Roles
 
 import Prelude
 
-import Codec.Serialise (Serialise)
 import Control.DeepSeq (NFData)
 import Data.Aeson qualified as A
 import Data.Aeson.TH qualified as A
+import Data.Binary (Binary(..))
+import Data.Binary.Get (getWord8)
+import Data.Binary.Put (putWord8)
 import Data.Text (Text)
 import GHC.Generics (Generic)
 import Language.PureScript.Interning (Intern(..))
@@ -33,8 +35,18 @@ data Role
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData Role
-instance Serialise Role
 instance Intern Role
+
+instance Binary Role where
+  put = \case
+    Nominal -> putWord8 0
+    Representational -> putWord8 1
+    Phantom -> putWord8 2
+  get = getWord8 >>= \case
+    0 -> pure Nominal
+    1 -> pure Representational
+    2 -> pure Phantom
+    n -> fail ("Binary Role: invalid tag " <> show n)
 
 $(A.deriveJSON A.defaultOptions ''Role)
 

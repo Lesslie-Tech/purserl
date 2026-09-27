@@ -6,7 +6,7 @@ module Language.PureScript.AST.Declarations.ChainId
 import Prelude
 import Language.PureScript.AST.SourcePos qualified as Pos
 import Control.DeepSeq (NFData)
-import Codec.Serialise (Serialise)
+import Data.Binary (Binary(..))
 import Data.Text qualified as T
 import GHC.Generics (Generic)
 import Language.PureScript.Interning (Intern(..))
@@ -20,8 +20,11 @@ data ChainId = ChainId {-# UNPACK #-} !T.Text {-# UNPACK #-} !Pos.SourcePos
   deriving (Eq, Ord, Show, Generic)
 
 instance NFData ChainId
-instance Serialise ChainId
 instance Intern ChainId
+
+instance Binary ChainId where
+  put (ChainId a b) = put a >> put b
+  get = ChainId <$> get <*> get
 
 mkChainId :: T.Text -> Pos.SourcePos -> ChainId
 mkChainId fileName startingSourcePos = ChainId fileName startingSourcePos

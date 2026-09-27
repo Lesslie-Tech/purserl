@@ -22,9 +22,10 @@ module Language.PureScript.Externs
 
 import Prelude
 
-import Codec.Serialise (Serialise, serialise, encode, decode)
-import Codec.Serialise.Encoding (encodeString)
-import Codec.Serialise.Decoding (decodeString)
+import Data.Binary (Binary(..))
+import Data.Binary qualified as Binary
+import Data.Binary.Get (getWord8)
+import Data.Binary.Put (putWord8)
 import Control.DeepSeq (NFData)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.List (foldl', find, intercalate)
@@ -49,7 +50,7 @@ import Language.PureScript.Types
 
 import Debug.Trace
 import PrettyPrint
-import Control.Monad.Trans.State.Strict
+import Control.Monad.Trans.State.Strict hiding (get, put)
 import Control.Monad
 import Data.Bifunctor (second)
 import Data.Function ((&))
@@ -70,20 +71,11 @@ import qualified Data.ByteArray.Encoding as BAE
 import System.IO.Unsafe (unsafePerformIO)
 import           System.Environment (lookupEnv)
 
-newtype SerializationFormat a = SerializationFormat a
-  deriving (Show, Eq, Generic, NFData)
-
-instance Serialise a => Serialise (SerializationFormat a)
-instance Monoid a => Monoid (SerializationFormat a) where
-  mempty = SerializationFormat mempty
-instance Semigroup a => Semigroup (SerializationFormat a) where
-  SerializationFormat a <> SerializationFormat b = SerializationFormat (a <> b)
-
 -- | The data which will be serialized to an externs file
 data ExternsFile = ExternsFile
   -- NOTE: Make sure to keep `efVersion` as the first field in this
-  -- record, so the derived Serialise instance produces CBOR that can
-  -- be checked for its version independent of the remaining format
+  -- record, so the hand-written Binary instance's encoding can be checked
+  -- for its version independent of the remaining format
   { efVersion :: Text
   -- ^ The externs version
   , efModuleName :: ModuleName
@@ -106,45 +98,15 @@ data ExternsFile = ExternsFile
   -- ^ Shapes of things in this module
   } deriving (Show, Generic, NFData)
 
-instance Serialise ExternsFile
 instance Intern ExternsFile
---instance Serialise ExternsFile where
---  encode ef =
---    encodeString "efVersion" <> encode (efVersion ef) <>
---    encodeString "efModuleName" <> encode (efModuleName ef) <>
---    encodeString "efExports" <> encode (efExports ef) <>
---    encodeString "efImports" <> encode (efImports ef) <>
---    encodeString "efFixities" <> encode (efFixities ef) <>
---    encodeString "efTypeFixities" <> encode (efTypeFixities ef) <>
---    encodeString "efDeclarations" <> encode (efDeclarations ef) <>
---    encodeString "efSourceSpan" <> encode (efSourceSpan ef) <>
---    encodeString "efUpstreamCacheShapes" <> encode (efUpstreamCacheShapes ef) <>
---    encodeString "efOurCacheShapes" <> encode (efOurCacheShapes ef)
---  decode = do
---     "efVersion" <- decodeString
---     efVersion <- decode
---     "efModuleName" <- decodeString
---     efModuleName <- decode
---     "efExports" <- decodeString
---     efExports <- decode
---     "efImports" <- decodeString
---     efImports <- decode
---     "efFixities" <- decodeString
---     efFixities <- decode
---     "efTypeFixities" <- decodeString
---     efTypeFixities <- decode
---     "efDeclarations" <- decodeString
---     efDeclarations <- decode
---     "efSourceSpan" <- decodeString
---     efSourceSpan <- decode
---     "efUpstreamCacheShapes" <- decodeString
---     efUpstreamCacheShapes <- decode
---     "efOurCacheShapes" <- decodeString
---     efOurCacheShapes <- decode
---     pure (ExternsFile efVersion efModuleName efExports efImports efFixities efTypeFixities efDeclarations efSourceSpan efUpstreamCacheShapes efOurCacheShapes)
+
+instance Binary ExternsFile where
+  put (ExternsFile a b c d e f g h i j) =
+    put a >> put b >> put c >> put d >> put e >> put f >> put g >> put h >> put i >> put j
+  get = ExternsFile <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
 
 instance Eq ExternsFile where
-  a == b = serialise a == serialise b
+  a == b = Binary.encode a == Binary.encode b
 
 -- | A module import in an externs file
 data ExternsImport = ExternsImport
@@ -157,8 +119,11 @@ data ExternsImport = ExternsImport
   , eiImportedAs :: Maybe ModuleName
   } deriving (Show, Generic, NFData)
 
-instance Serialise ExternsImport
 instance Intern ExternsImport
+
+instance Binary ExternsImport where
+  put (ExternsImport a b c) = put a >> put b >> put c
+  get = ExternsImport <$> get <*> get <*> get
 
 -- | A fixity declaration in an externs file
 data ExternsFixity = ExternsFixity
@@ -173,8 +138,11 @@ data ExternsFixity = ExternsFixity
   , efAlias :: Qualified (Either Ident (ProperName 'ConstructorName))
   } deriving (Show, Generic, NFData)
 
-instance Serialise ExternsFixity
 instance Intern ExternsFixity
+
+instance Binary ExternsFixity where
+  put (ExternsFixity a b c d) = put a >> put b >> put c >> put d
+  get = ExternsFixity <$> get <*> get <*> get <*> get
 
 -- | A type fixity declaration in an externs file
 data ExternsTypeFixity = ExternsTypeFixity
@@ -189,8 +157,11 @@ data ExternsTypeFixity = ExternsTypeFixity
   , efTypeAlias :: Qualified (ProperName 'TypeName)
   } deriving (Show, Generic, NFData)
 
-instance Serialise ExternsTypeFixity
 instance Intern ExternsTypeFixity
+
+instance Binary ExternsTypeFixity where
+  put (ExternsTypeFixity a b c d) = put a >> put b >> put c >> put d
+  get = ExternsTypeFixity <$> get <*> get <*> get <*> get
 
 -- | A type or value declaration appearing in an externs file
 data ExternsDeclaration =
@@ -243,8 +214,24 @@ data ExternsDeclaration =
       }
   deriving (Show, Generic, NFData)
 
-instance Serialise ExternsDeclaration
 instance Intern ExternsDeclaration
+
+instance Binary ExternsDeclaration where
+  put = \case
+    EDType a b c -> putWord8 0 >> put a >> put b >> put c
+    EDTypeSynonym a b c -> putWord8 1 >> put a >> put b >> put c
+    EDDataConstructor a b c d e -> putWord8 2 >> put a >> put b >> put c >> put d >> put e
+    EDValue a b -> putWord8 3 >> put a >> put b
+    EDClass a b c d e f -> putWord8 4 >> put a >> put b >> put c >> put d >> put e >> put f
+    EDInstance a b c d e f g h i j -> putWord8 5 >> put a >> put b >> put c >> put d >> put e >> put f >> put g >> put h >> put i >> put j
+  get = getWord8 >>= \case
+    0 -> EDType <$> get <*> get <*> get
+    1 -> EDTypeSynonym <$> get <*> get <*> get
+    2 -> EDDataConstructor <$> get <*> get <*> get <*> get <*> get
+    3 -> EDValue <$> get <*> get
+    4 -> EDClass <$> get <*> get <*> get <*> get <*> get <*> get
+    5 -> EDInstance <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
+    n -> fail ("Binary ExternsDeclaration: invalid tag " <> show n)
 
 -- | Check whether the version in an externs file matches the currently running
 -- version.
@@ -311,9 +298,18 @@ data CSDataDeclarationWithCtors =
     }
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSDataDeclarationTypeOnly
-instance Serialise CSDataConstructorDeclaration
-instance Serialise CSDataDeclarationWithCtors
+
+instance Binary CSDataDeclarationTypeOnly where
+  put (CSDataDeclarationTypeOnly a b c d e) = put a >> put b >> put c >> put d >> put e
+  get = CSDataDeclarationTypeOnly <$> get <*> get <*> get <*> get <*> get
+
+instance Binary CSDataConstructorDeclaration where
+  put (CSDataConstructorDeclaration a b) = put a >> put b
+  get = CSDataConstructorDeclaration <$> get <*> get
+
+instance Binary CSDataDeclarationWithCtors where
+  put (CSDataDeclarationWithCtors a b) = put a >> put b
+  get = CSDataDeclarationWithCtors <$> get <*> get
 
   -- |
   -- A type synonym declaration (name, arguments, type)
@@ -321,28 +317,40 @@ instance Serialise CSDataDeclarationWithCtors
 data CSTypeSynonymDeclaration = CSTypeSynonymDeclaration (ProperName 'TypeName) [(Text, Maybe (Type ()))] (Type ()) ToCSDB (Maybe CSKindDeclaration)
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSTypeSynonymDeclaration
+
+instance Binary CSTypeSynonymDeclaration where
+  put (CSTypeSynonymDeclaration a b c d e) = put a >> put b >> put c >> put d >> put e
+  get = CSTypeSynonymDeclaration <$> get <*> get <*> get <*> get <*> get
   -- |
   -- A kind signature declaration
   --
 data CSKindDeclaration = CSKindDeclaration (Type ())
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSKindDeclaration
+
+instance Binary CSKindDeclaration where
+  put (CSKindDeclaration a) = put a
+  get = CSKindDeclaration <$> get
   -- |
   -- A role declaration (name, roles)
   --
 data CSRoleDeclaration = CSRoleDeclaration [Role]
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSRoleDeclaration
+
+instance Binary CSRoleDeclaration where
+  put (CSRoleDeclaration a) = put a
+  get = CSRoleDeclaration <$> get
   -- |
   -- A value declaration (name, top-level binders, optional guard, value)
   --
 data CSValueDeclaration = CSValueDeclaration NameKind Int (Type ()) ToCSDB
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSValueDeclaration
+
+instance Binary CSValueDeclaration where
+  put (CSValueDeclaration a b c d) = put a >> put b >> put c >> put d
+  get = CSValueDeclaration <$> get <*> get <*> get <*> get
 
   -- |
   -- A foreign import declaration (name, type)
@@ -350,41 +358,62 @@ instance Serialise CSValueDeclaration
 data CSExternDeclaration = CSExternDeclaration ToCSDB
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSExternDeclaration
+
+instance Binary CSExternDeclaration where
+  put (CSExternDeclaration a) = put a
+  get = CSExternDeclaration <$> get
   -- |
   -- A data type foreign import (name, kind)
   --
 data CSExternDataDeclaration = CSExternDataDeclaration ToCSDB
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSExternDataDeclaration
+
+instance Binary CSExternDataDeclaration where
+  put (CSExternDataDeclaration a) = put a
+  get = CSExternDataDeclaration <$> get
   -- |
   -- A fixity declaration
   --
 data CSOpFixity = CSOpFixity Fixity (Qualified Ident)
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSOpFixity
+
+instance Binary CSOpFixity where
+  put (CSOpFixity a b) = put a >> put b
+  get = CSOpFixity <$> get <*> get
 data CSCtorFixity = CSCtorFixity Fixity (Qualified (ProperName 'ConstructorName))
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSCtorFixity
+
+instance Binary CSCtorFixity where
+  put (CSCtorFixity a b) = put a >> put b
+  get = CSCtorFixity <$> get <*> get
 data CSTyOpFixity = CSTyOpFixity Fixity (Qualified (ProperName 'TypeName))
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSTyOpFixity
+
+instance Binary CSTyOpFixity where
+  put (CSTyOpFixity a b) = put a >> put b
+  get = CSTyOpFixity <$> get <*> get
   -- |
   -- A type class declaration (name, argument, implies, member declarations)
   --
 data CSTypeClassDeclaration = CSTypeClassDeclaration [(Text, Maybe (Type ()))] ([Constraint ()], ToCSDB) [FunctionalDependency] [CSTypeDeclaration]
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSTypeClassDeclaration
+
+instance Binary CSTypeClassDeclaration where
+  put (CSTypeClassDeclaration a b c d) = put a >> put b >> put c >> put d
+  get = CSTypeClassDeclaration <$> get <*> get <*> get <*> get
 
 data CSTypeDeclaration = CSTypeDeclaration Ident (Type ()) ToCSDB
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSTypeDeclaration
+
+instance Binary CSTypeDeclaration where
+  put (CSTypeDeclaration a b c) = put a >> put b >> put c
+  get = CSTypeDeclaration <$> get <*> get <*> get
   -- |
   -- A type instance declaration (instance chain, chain index, name,
   -- dependencies, class name, instance types, member declarations)
@@ -395,7 +424,10 @@ instance Serialise CSTypeDeclaration
 data CSTypeInstanceDeclaration = CSTypeInstanceDeclaration (ChainId, Integer) ToCSDB (Qualified (ProperName 'ClassName)) ToCSDB (CSTypeInstanceBody, ToCSDB)
   deriving (Show, Generic, Eq, NFData)
 
-instance Serialise CSTypeInstanceDeclaration
+
+instance Binary CSTypeInstanceDeclaration where
+  put (CSTypeInstanceDeclaration a b c d e) = put a >> put b >> put c >> put d >> put e
+  get = CSTypeInstanceDeclaration <$> get <*> get <*> get <*> get <*> get
 
 data CSTypeInstanceBody
   = CSDerivedInstance
@@ -403,7 +435,17 @@ data CSTypeInstanceBody
   | CSExplicitInstance
   deriving (Show, Eq, Generic, NFData)
 
-instance Serialise CSTypeInstanceBody
+
+instance Binary CSTypeInstanceBody where
+  put = \case
+    CSDerivedInstance -> putWord8 0
+    CSNewtypeInstance -> putWord8 1
+    CSExplicitInstance -> putWord8 2
+  get = getWord8 >>= \case
+    0 -> pure CSDerivedInstance
+    1 -> pure CSNewtypeInstance
+    2 -> pure CSExplicitInstance
+    n -> fail ("Binary CSTypeInstanceBody: invalid tag " <> show n)
 
 data ToCSDB
   = ToCSDB (M.Map ModuleName ToCSDBInner)
@@ -412,7 +454,10 @@ data ToCSDB
 runToCSDB :: ToCSDB -> M.Map ModuleName ToCSDBInner
 runToCSDB (ToCSDB a) = a
 
-instance Serialise ToCSDB
+
+instance Binary ToCSDB where
+  put (ToCSDB a) = put a
+  get = ToCSDB <$> get
 
 instance Semigroup ToCSDB where
   ToCSDB a <> ToCSDB b = ToCSDB (M.unionWith (<>) a b)
@@ -437,8 +482,11 @@ data ToCSDBInner
 newtype RunIdent = RunIdent T.Text
   deriving (Show, Eq, Ord, Generic, NFData)
 
-instance Serialise RunIdent
 instance Intern RunIdent
+
+instance Binary RunIdent where
+  put (RunIdent a) = put a
+  get = RunIdent <$> get
 
 toRunIdent ident =
   -- TODO[drathier]: this makes me sad, what's going on here? Somehow (Ident "a") and (GenIdent (Just "a") 42) result in the same variable name in source. Why isn't the second one "$a42", like when using runIdent?
@@ -449,7 +497,10 @@ toRunIdent ident =
 
 -- TODO[drathier]: the type class instance decls have the same name; do they all overwrite each other in the cache? Do I need to qualify them, or skip them?
 
-instance Serialise ToCSDBInner
+
+instance Binary ToCSDBInner where
+  put (ToCSDBInner a1 a2 a3 a4 a5 a6) = put a1 >> put a2 >> put a3 >> put a4 >> put a5 >> put a6
+  get = ToCSDBInner <$> get <*> get <*> get <*> get <*> get <*> get
 
 instance Semigroup ToCSDBInner where
   ToCSDBInner a1 a2 a3 a4 a5 a6 <> ToCSDBInner b1 b2 b3 b4 b5 b6 = ToCSDBInner (a1 <> b1) (a2 <> b2) (a3 <> b3) (a4 <> b4) (a5 <> b5) (a6 <> b6)
@@ -981,19 +1032,19 @@ instance Monoid DB where
 dbToOpaque :: DB -> DBOpaque
 dbToOpaque (DB a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
   DBOpaque
-  (a1 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a2 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
+  (a1 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a2 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
   a3
-  (a4 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a5 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a6 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a7 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a8 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a9 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a10 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a11 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  (a12 & M.map (\v -> v & serialise & cacheShapeHashFromByteString))
-  a13 -- & serialise & cacheShapeHashFromByteString)
+  (a4 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a5 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a6 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a7 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a8 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a9 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a10 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a11 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a12 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  a13 -- & Binary.encode & cacheShapeHashFromByteString)
 
 data DBOpaque
   = DBOpaque
@@ -1040,7 +1091,11 @@ instance Show DBOpaque where
       ])
     <> "}"
 
-instance Serialise DBOpaque
+
+instance Binary DBOpaque where
+  put (DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
+    put a1 >> put a2 >> put a3 >> put a4 >> put a5 >> put a6 >> put a7 >> put a8 >> put a9 >> put a10 >> put a11 >> put a12 >> put a13
+  get = DBOpaque <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
 
 instance Semigroup DBOpaque where
   DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 <> DBOpaque b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 = DBOpaque (a1 <> b1) (a2 <> b2) (a3 <> b3) (a4 <> b4) (a5 <> b5) (a6 <> b6) (a7 <> b7) (a8 <> b8) (a9 <> b9) (a10 <> b10) (a11 <> b11) (a12 <> b12) (a13 <> b13)
@@ -1064,8 +1119,11 @@ newtype CacheShapeHash = CacheShapeHash BS8.ByteString
   deriving (Semigroup, Monoid) via BS8.ByteString
 
 
-instance Serialise CacheShapeHash
 instance Intern CacheShapeHash where intern = id
+
+instance Binary CacheShapeHash where
+  put (CacheShapeHash a) = put a
+  get = CacheShapeHash <$> get
 
 dbOpaqueIsctExports :: Show meta => meta -> M.Map ModuleName DBOpaque -> ExportSummary -> DBOpaque -> DBOpaque
 dbOpaqueIsctExports meta upstreamDBs (ExportSummary valueName typeName typeOpName typeClass typeClassInstance valueOpName reExportedRefs) (DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
@@ -1335,9 +1393,14 @@ data ExportSummary =
     , _refOpName :: M.Map (OpName 'ValueOpName) ()
     -- [drathier]: re-exports of whole modules are desugared to one-by-one export refs, so we don't have to handle them here
     , _reExportRef :: M.Map ModuleName ExportSummary
-    } deriving (Show, Eq, Ord, Generic, NFData, Serialise)
+    } deriving (Show, Eq, Ord, Generic, NFData)
 
 instance Intern ExportSummary
+
+instance Binary ExportSummary where
+  put (ExportSummary a1 a2 a3 a4 a5 a6 a7) =
+    put a1 >> put a2 >> put a3 >> put a4 >> put a5 >> put a6 >> put a7
+  get = ExportSummary <$> get <*> get <*> get <*> get <*> get <*> get <*> get
 
 instance Monoid ExportSummary where
   mempty = ExportSummary mempty mempty mempty mempty mempty mempty mempty
@@ -1691,7 +1754,7 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
   lookupRenamedIdent = flip (join M.findWithDefault) renamedIdents
 
 externsFileName :: FilePath
-externsFileName = "externs.cbor"
+externsFileName = "externs.bin"
 
 moduIsPrim :: ModuleName -> Bool
 moduIsPrim (ModuleName n) = "Prim" `T.isPrefixOf` n

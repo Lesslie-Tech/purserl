@@ -230,7 +230,7 @@ rebuildModuleWithIndex ma exEnv externs m@(Module _ _ moduleName _ _) moduleInde
   rebuildModuleCodegen ma moduleName checkResult
   pure (mcrExterns checkResult)
 
--- | Compiles in "make" mode, compiling each module separately to a @.js@ file and an @externs.cbor@ file.
+-- | Compiles in "make" mode, compiling each module separately to a @.erl@ file and an @externs.bin@ file.
 --
 -- If timestamps or hashes have not changed, existing externs files can be used to provide upstream modules' types without
 -- having to typecheck those modules again.
