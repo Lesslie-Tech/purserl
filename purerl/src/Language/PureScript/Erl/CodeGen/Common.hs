@@ -167,40 +167,36 @@ runIdent' = \case
 -- Checks whether an identifier name is reserved in Erlang.
 --
 nameIsErlReserved :: Text -> Bool
-nameIsErlReserved name =
-  name `elem` erlAnyReserved
-
-erlAnyReserved :: [Text]
-erlAnyReserved = [
-  "after",
-  "and",
-  "andalso",
-  "band",
-  "begin",
-  "bnot",
-  "bor",
-  "bsl",
-  "bsr",
-  "bxor",
-  "case",
-  "catch",
-  "cond",
-  "div",
-  "end",
-  "fun",
-  "if",
-  "let",
-  "maybe",
-  "not",
-  "of",
-  "or",
-  "orelse",
-  "receive",
-  "rem",
-  "try",
-  "when",
-  "xor"
-  ]
+nameIsErlReserved  = \case
+  "after" -> True
+  "and" -> True
+  "andalso" -> True
+  "band" -> True
+  "begin" -> True
+  "bnot" -> True
+  "bor" -> True
+  "bsl" -> True
+  "bsr" -> True
+  "bxor" -> True
+  "case" -> True
+  "catch" -> True
+  "cond" -> True
+  "div" -> True
+  "end" -> True
+  "fun" -> True
+  "if" -> True
+  "let" -> True
+  "maybe" -> True
+  "not" -> True
+  "of" -> True
+  "or" -> True
+  "orelse" -> True
+  "receive" -> True
+  "rem" -> True
+  "try" -> True
+  "when" -> True
+  "xor" -> True
+  _ -> False
 
 
 freshNameErl' :: (MonadSupply m) => T.Text -> m T.Text
