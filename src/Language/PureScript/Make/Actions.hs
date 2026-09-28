@@ -33,7 +33,7 @@ import Language.PureScript.CoreFn qualified as CF
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), errorMessage, errorMessage')
 import Language.PureScript.Externs (ExternsFile, externsFileName)
--- import Language.PureScript.Make.Monad (Make, copyFile, getTimestamp, getTimestampMaybe, hashFile, makeIO, readExternsFile, readJSONFile, readTextFile, writeCborFile, writeJSONFile, writeTextFile)
+-- import Language.PureScript.Make.Monad (Make, copyFile, getTimestamp, getTimestampMaybe, hashFile, makeIO, readExternsFile, readJSONFile, readTextFile, writeBinaryFile, writeJSONFile, writeTextFile)
 import Language.PureScript.Make.Monad
 import Language.PureScript.Make.Cache (CacheDb, ContentHash, normaliseForCache)
 import Language.PureScript.Names (ModuleName, runModuleName)
@@ -192,7 +192,7 @@ readCacheDb'
   -- ^ The path to the output directory
   -> Make CacheDb
 readCacheDb' outputDir =
-  fromMaybe mempty <$> readCborFile (cacheDbFile outputDir)
+  fromMaybe mempty <$> readBinaryFile (cacheDbFile outputDir)
 
 writeCacheDb'
   :: FilePath
@@ -201,7 +201,7 @@ writeCacheDb'
   -- ^ The CacheDb to be written
   -> Make ()
 writeCacheDb' outputDir cacheDb =
-  makeIO ("write Cbor file: " <> T.pack (cacheDbFile outputDir)) (writeCborFileIO (cacheDbFile outputDir) cacheDb)
+  makeIO ("write Binary file: " <> T.pack (cacheDbFile outputDir)) (writeBinaryFileIO (cacheDbFile outputDir) cacheDb)
 
 -- | A set of make actions that read and write modules from the given directory.
 buildMakeActions
@@ -327,7 +327,7 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
   codegen :: Environment -> CF.Module CF.Ann -> ExternsFile -> SupplyT Make ()
   codegen environment m exts = do
     let mn = CF.moduleName m
-    lift $ writeCborFile mExternsMemCache (outputFilename mn externsFileName) exts
+    lift $ writeBinaryFile mExternsMemCache (outputFilename mn externsFileName) exts
     codegenTargets <- lift $ asks optionsCodegenTargets
 
     -- ### Purerl

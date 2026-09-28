@@ -7,13 +7,13 @@ module Language.PureScript.Make.Monad
   , getTimestampMaybe
   , touchTimestampMaybe
   , readTextFile
-  , readCborFile
-  , readCborFileIO
+  , readBinaryFile
+  , readBinaryFileIO
   , readExternsFile
   , hashFile
   , writeTextFile
-  , writeCborFile
-  , writeCborFileIO
+  , writeBinaryFile
+  , writeBinaryFileIO
   , copyFile
   --
   , ExternsMemCache
@@ -107,18 +107,18 @@ readTextFile path =
 -- | Read a Binary encoded file in the 'Make' monad, returning
 -- 'Nothing' if the file does not exist or could not be parsed. Errors
 -- are captured using the 'MonadError' instance.
-readCborFile :: Binary a => FilePath -> Make (Maybe a)
-readCborFile path =
-  makeIO ("read Binary file: " <> Text.pack path) (readCborFileIO path)
+readBinaryFile :: Binary a => FilePath -> Make (Maybe a)
+readBinaryFile path =
+  makeIO ("read Binary file: " <> Text.pack path) (readBinaryFileIO path)
 
-readCborFileIO :: Binary a => FilePath -> IO (Maybe a)
-readCborFileIO path = do
+readBinaryFileIO :: Binary a => FilePath -> IO (Maybe a)
+readBinaryFileIO path = do
   mBytes <- catchDoesNotExist (BSL.readFile path)
   case mBytes of
     Nothing -> pure Nothing
     Just bytes -> case Binary.decodeOrFail bytes of
       Left _ -> do
-        putStrLn ("### corrupt-cbor:" <> path)
+        putStrLn ("### corrupt-binary:" <> path)
         pure Nothing
       Right (_, _, a) -> pure (Just a)
 
@@ -177,7 +177,7 @@ readExternsFileImplFromBytes :: FilePath -> BS.ByteString -> Make (Maybe Externs
 readExternsFileImplFromBytes path bytes = do
   mexterns <- case Binary.decodeOrFail (BSL.fromStrict bytes) of
     Left _ -> do
-      liftIO $ putStrLn ("### corrupt-cbor:" <> path)
+      liftIO $ putStrLn ("### corrupt-binary:" <> path)
       pure Nothing
     Right (_, _, externs) ->
       pure (Just externs)
@@ -238,20 +238,20 @@ writeTextFile path text = makeIO ("write file: " <> Text.pack path) $ do
     _ ->
       liftIO (putStrLn ("### erl-diff:" <> path))
 
-writeCborFile :: Maybe ExternsMemCache -> FilePath -> ExternsFile -> Make ()
-writeCborFile mmemCacheRef path value = do
-  -- caching liftIO $ putStrLn ("writeCborFile: " <> path)
+writeBinaryFile :: Maybe ExternsMemCache -> FilePath -> ExternsFile -> Make ()
+writeBinaryFile mmemCacheRef path value = do
+  -- caching liftIO $ putStrLn ("writeBinaryFile: " <> path)
   -- Hash the bytes we already serialised in memory instead of writing the
   -- file and then reading it back from disk just to hash it.
-  newHash <- makeIO ("write Cbor file: " <> Text.pack path) $ do
+  newHash <- makeIO ("write Binary file: " <> Text.pack path) $ do
     createParentDirectory path
     let contents = Binary.encode value
     BSL.writeFile path contents
     pure (hash (BSL.toStrict contents))
   maybeWriteExternsToMemCache mmemCacheRef path (Just newHash) (Just value)
 
-writeCborFileIO :: Binary a => FilePath -> a -> IO ()
-writeCborFileIO path value = do
+writeBinaryFileIO :: Binary a => FilePath -> a -> IO ()
+writeBinaryFileIO path value = do
   createParentDirectory path
   let contents = Binary.encode value
   BSL.writeFile path contents

@@ -27,7 +27,7 @@ readExternFile
   => FilePath
   -> m P.ExternsFile
 readExternFile fp = do
-  externsFile <- liftIO (Make.readCborFileIO fp)
+  externsFile <- liftIO (Make.readBinaryFileIO fp)
   case externsFile of
     Just externs | version == P.efVersion externs ->
       -- Canonicalize repeated Text content (module/identifier/label names
