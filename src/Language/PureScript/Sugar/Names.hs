@@ -16,7 +16,6 @@ import Control.Arrow (first, second, (&&&))
 import Control.Monad (foldM, when, (>=>))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Lazy (MonadState, StateT(..), gets, modify)
-import Control.Monad.Writer (MonadWriter(..))
 
 import Data.List.NonEmpty qualified as NEL
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -32,6 +31,7 @@ import Language.PureScript.Names (pattern ByNullSourcePos, Ident, OpName, OpName
 import Language.PureScript.Sugar.Names.Env (Env, Exports(..), ImportProvenance(..), ImportRecord(..), Imports(..), checkImportConflicts, nullImports, primEnv)
 import Language.PureScript.Sugar.Names.Exports (findExportable, resolveExports)
 import Language.PureScript.Sugar.Names.Imports (resolveImports, resolveModuleImport)
+import Language.PureScript.Sugar.Names.Resolve (ResolveM, runResolveM)
 import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Traversals (defS, sndM)
 import Language.PureScript.Types (Constraint(..), SourceConstraint, SourceType, Type(..), everywhereOnTypesM)
@@ -46,10 +46,10 @@ desugarImports = updateEnv >=> renameInModule'
   where
   updateEnv :: Module -> DesugarM Module
   updateEnv m@(Module ss _ mn _ refs) = do
-    members <- findExportable m
+    members <- runResolveM $ findExportable m
     env' <- gets $ M.insert mn (ss, nullImports, members) . fst
-    (m', imps) <- resolveImports env' m
-    exps <- maybe (return members) (resolveExports env' ss mn imps members) refs
+    (m', imps) <- runResolveM $ resolveImports env' m
+    exps <- maybe (return members) (runResolveM . resolveExports env' ss mn imps members) refs
     modify . first $ M.insert mn (ss, imps, exps)
     return m'
 
@@ -64,11 +64,9 @@ desugarImports = updateEnv >=> renameInModule'
 
 -- | Create an environment from a collection of externs files
 externsEnv
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => Env
+  :: Env
   -> ExternsFile
-  -> m Env
+  -> ResolveM Env
 externsEnv env ExternsFile{..} = do
   let members = Exports{..}
       env' = M.insert efModuleName (efSourceSpan, nullImports, members) env
@@ -418,7 +416,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
       -- re-exports. If there are multiple options for the name to resolve to
       -- in scope, we throw an error.
       (Just options, _) -> do
-        (mnNew, mnOrig) <- checkImportConflicts pos mn toName options
+        (mnNew, mnOrig) <- runResolveM $ checkImportConflicts pos mn toName options
         modify $ \usedImports ->
           M.insertWith (++) mnNew [fmap toName qname] usedImports
         return $ Qualified (ByModuleName mnOrig) name

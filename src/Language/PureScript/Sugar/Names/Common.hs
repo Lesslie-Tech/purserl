@@ -12,16 +12,16 @@ import Data.Maybe (mapMaybe)
 import Language.PureScript.AST (DeclarationRef(..), SourceSpan)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage, errorMessage, warnWithPosition)
 import Language.PureScript.Names (Name(..))
+import Language.PureScript.Sugar.Names.Resolve (ResolveM)
 
 -- |
 -- Warns about duplicate values in a list of declaration refs.
 --
 warnDuplicateRefs
-  :: MonadWriter MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> (Name -> SimpleErrorMessage)
   -> [DeclarationRef]
-  -> m ()
+  -> ResolveM ()
 warnDuplicateRefs pos toError refs = do
   let withoutCtors = deleteCtors `map` refs
       dupeRefs = mapMaybe (refToName pos) $ removeUnique withoutCtors

@@ -27,6 +27,7 @@ import Language.PureScript.Linter.UsedImports (UsedImports)
 import Language.PureScript.Make.Monad (Make)
 import Language.PureScript.Names
 import Language.PureScript.Sugar.Names.Common (warnDuplicateRefs)
+import Language.PureScript.Sugar.Names.Resolve (runResolveM)
 import Language.PureScript.Sugar.Names.Env (Env, Exports(..), ImportRecord(..), Imports(..), envModuleExports, nullImports)
 import Language.PureScript.Sugar.Names.Imports (ImportDef, findImports)
 import Language.PureScript.Constants.Prim qualified as C
@@ -97,7 +98,7 @@ lintImports (Module _ _ mn mdecls (Just mexports)) env usedImps = do
       tell . errorMessage' pos $ DuplicateSelectiveImport mnq
 
     for_ (imps \\ (warned ++ duplicates)) $ \(pos, typ, _) ->
-      warnDuplicateRefs pos DuplicateImportRef $ case typ of
+      runResolveM . warnDuplicateRefs pos DuplicateImportRef $ case typ of
         Explicit refs -> refs
         Hiding refs -> refs
         _ -> []

@@ -20,7 +20,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage', rethrow)
 import Language.PureScript.Names (pattern ByNullSourcePos, ModuleName, Name(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), byMaybeModuleName)
 import Language.PureScript.Sugar.Names.Env (Env, Exports(..), ImportProvenance(..), ImportRecord(..), Imports(..), envModuleExports, nullImports)
-import Language.PureScript.Sugar.Monad (DesugarM)
+import Language.PureScript.Sugar.Names.Resolve (ResolveM)
 
 type ImportDef = (SourceSpan, ImportDeclarationType, Maybe ModuleName)
 
@@ -40,15 +40,10 @@ findImports = foldr go M.empty
 -- |
 -- Constructs a set of imports for a module.
 --
--- NB: concretized to 'DesugarM' -- its sole caller is
--- "Language.PureScript.Sugar.Names"'s @desugarImports@. It calls the still
--- polymorphic 'resolveModuleImport' internally, which is fine: that function
--- is also called directly from @externsEnv@ (dual-site between
--- @WriterT MultipleErrors Make@ and bare @Make@) and so must stay polymorphic.
 resolveImports
   :: Env
   -> Module
-  -> DesugarM (Module, Imports)
+  -> ResolveM (Module, Imports)
 resolveImports env (Module ss coms currentModule decls exps) =
   rethrow (addHint (ErrorInModule currentModule)) $ do
     let imports = findImports decls
@@ -59,17 +54,15 @@ resolveImports env (Module ss coms currentModule decls exps) =
 
 -- | Constructs a set of imports for a single module import.
 resolveModuleImport
-  :: forall m
-   . MonadError MultipleErrors m
-  => Env
+  :: Env
   -> Imports
   -> (ModuleName, [(SourceSpan, Maybe ImportDeclarationType, Maybe ModuleName)])
-  -> m Imports
+  -> ResolveM Imports
 resolveModuleImport env ie (mn, imps) = foldM go ie imps
   where
   go :: Imports
      -> (SourceSpan, Maybe ImportDeclarationType, Maybe ModuleName)
-     -> m Imports
+     -> ResolveM Imports
   go ie' (ss, typ, impQual) = do
     modExports <-
       maybe
@@ -87,19 +80,17 @@ resolveModuleImport env ie (mn, imps) = foldM go ie imps
 -- Extends the local environment for a module by resolving an import of another module.
 --
 resolveImport
-  :: forall m
-   . MonadError MultipleErrors m
-  => ModuleName
+  :: ModuleName
   -> Exports
   -> Imports
   -> Maybe ModuleName
   -> SourceSpan
   -> Maybe ImportDeclarationType
-  -> m Imports
+  -> ResolveM Imports
 resolveImport importModule exps imps impQual = resolveByType
   where
 
-  resolveByType :: SourceSpan -> Maybe ImportDeclarationType -> m Imports
+  resolveByType :: SourceSpan -> Maybe ImportDeclarationType -> ResolveM Imports
   resolveByType ss Nothing =
     importAll ss (importRef Local)
   resolveByType ss (Just Implicit) =
@@ -110,7 +101,7 @@ resolveImport importModule exps imps impQual = resolveByType
     checkRefs True refs >> importAll ss (importNonHidden refs)
 
   -- Check that a 'DeclarationRef' refers to an importable symbol
-  checkRefs :: Bool -> [DeclarationRef] -> m ()
+  checkRefs :: Bool -> [DeclarationRef] -> ResolveM ()
   checkRefs isHiding = traverse_ check
     where
     check (ValueRef ss name) =
@@ -136,7 +127,7 @@ resolveImport importModule exps imps impQual = resolveByType
     -> (a -> Name)
     -> M.Map a b
     -> a
-    -> m ()
+    -> ResolveM ()
   checkImportExists ss toName exports item
     = when (item `M.notMember` exports)
     . throwError . errorMessage' ss
@@ -149,13 +140,13 @@ resolveImport importModule exps imps impQual = resolveByType
     -> ProperName 'TypeName
     -> [ProperName 'ConstructorName]
     -> ProperName 'ConstructorName
-    -> m ()
+    -> ResolveM ()
   checkDctorExists ss tcon exports dctor
     = unless (dctor `elem` exports)
     . throwError . errorMessage' ss
     $ UnknownImportDataConstructor importModule tcon dctor
 
-  importNonHidden :: [DeclarationRef] -> Imports -> DeclarationRef -> m Imports
+  importNonHidden :: [DeclarationRef] -> Imports -> DeclarationRef -> ResolveM Imports
   importNonHidden hidden m ref | isHidden ref = return m
                                | otherwise = importRef FromImplicit m ref
     where
@@ -171,7 +162,7 @@ resolveImport importModule exps imps impQual = resolveByType
     checkTypeRef _ acc _ = acc
 
   -- Import all symbols
-  importAll :: SourceSpan -> (Imports -> DeclarationRef -> m Imports) -> m Imports
+  importAll :: SourceSpan -> (Imports -> DeclarationRef -> ResolveM Imports) -> ResolveM Imports
   importAll ss importer =
     foldM (\m (name, (dctors, _)) -> importer m (TypeRef ss name (Just dctors))) imps (M.toList (exportedTypes exps))
       >>= flip (foldM (\m (name, _) -> importer m (TypeOpRef ss name))) (M.toList (exportedTypeOps exps))
@@ -179,7 +170,7 @@ resolveImport importModule exps imps impQual = resolveByType
       >>= flip (foldM (\m (name, _) -> importer m (ValueOpRef ss name))) (M.toList (exportedValueOps exps))
       >>= flip (foldM (\m (name, _) -> importer m (TypeClassRef ss name))) (M.toList (exportedTypeClasses exps))
 
-  importRef :: ImportProvenance -> Imports -> DeclarationRef -> m Imports
+  importRef :: ImportProvenance -> Imports -> DeclarationRef -> ResolveM Imports
   importRef prov imp (ValueRef ss name) = do
     let values' = updateImports (importedValues imp) (exportedValues exps) id name ss prov
     return $ imp { importedValues = values' }

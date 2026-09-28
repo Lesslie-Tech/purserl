@@ -38,6 +38,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), errorMessage, errorMessage')
 import Language.PureScript.Names (Ident, ModuleName, Name(..), OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), coerceProperName, disqualify, getQual)
+import Language.PureScript.Sugar.Names.Resolve (ResolveM)
 
 -- |
 -- The details for an import: the name of the thing that is being imported
@@ -289,14 +290,13 @@ data ExportMode = Internal | ReExport
 -- error if a conflict occurs.
 --
 exportType
-  :: MonadError MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> ExportMode
   -> Exports
   -> ProperName 'TypeName
   -> [ProperName 'ConstructorName]
   -> ExportSource
-  -> m Exports
+  -> ResolveM Exports
 exportType ss exportMode exps name dctors src = do
   let exTypes = exportedTypes exps
       exClasses = exportedTypeClasses exps
@@ -340,12 +340,11 @@ exportType ss exportMode exps name dctors src = do
 -- conflict occurs.
 --
 exportTypeOp
-  :: MonadError MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> Exports
   -> OpName 'TypeOpName
   -> ExportSource
-  -> m Exports
+  -> ResolveM Exports
 exportTypeOp ss exps op src = do
   typeOps <- addExport ss TyOpName op src (exportedTypeOps exps)
   return $ exps { exportedTypeOps = typeOps }
@@ -354,13 +353,12 @@ exportTypeOp ss exps op src = do
 -- Safely adds a class to some exports, returning an error if a conflict occurs.
 --
 exportTypeClass
-  :: MonadError MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> ExportMode
   -> Exports
   -> ProperName 'ClassName
   -> ExportSource
-  -> m Exports
+  -> ResolveM Exports
 exportTypeClass ss exportMode exps name src = do
   let exTypes = exportedTypes exps
   when (exportMode == Internal) $ do
@@ -375,12 +373,11 @@ exportTypeClass ss exportMode exps name src = do
 -- Safely adds a value to some exports, returning an error if a conflict occurs.
 --
 exportValue
-  :: MonadError MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> Exports
   -> Ident
   -> ExportSource
-  -> m Exports
+  -> ResolveM Exports
 exportValue ss exps name src = do
   values <- addExport ss IdentName name src (exportedValues exps)
   return $ exps { exportedValues = values }
@@ -390,12 +387,11 @@ exportValue ss exps name src = do
 -- conflict occurs.
 --
 exportValueOp
-  :: MonadError MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> Exports
   -> OpName 'ValueOpName
   -> ExportSource
-  -> m Exports
+  -> ResolveM Exports
 exportValueOp ss exps op src = do
   valueOps <- addExport ss ValOpName op src (exportedValueOps exps)
   return $ exps { exportedValueOps = valueOps }
@@ -405,13 +401,13 @@ exportValueOp ss exps op src = do
 -- case an error is returned.
 --
 addExport
-  :: (MonadError MultipleErrors m, Ord a)
+  :: Ord a
   => SourceSpan
   -> (a -> Name)
   -> a
   -> ExportSource
   -> M.Map a ExportSource
-  -> m (M.Map a ExportSource)
+  -> ResolveM (M.Map a ExportSource)
 addExport ss toName name src exports =
   case M.lookup name exports of
     Just src' ->
@@ -429,10 +425,9 @@ addExport ss toName name src exports =
 -- Raises an error for when there is more than one definition for something.
 --
 throwDeclConflict
-  :: MonadError MultipleErrors m
-  => Name
+  :: Name
   -> Name
-  -> m a
+  -> ResolveM a
 throwDeclConflict new existing =
   throwError . errorMessage $ DeclConflict new existing
 
@@ -440,12 +435,11 @@ throwDeclConflict new existing =
 -- Raises an error for when there are conflicting names in the exports.
 --
 throwExportConflict
-  :: MonadError MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> ModuleName
   -> ModuleName
   -> Name
-  -> m a
+  -> ResolveM a
 throwExportConflict ss new existing name =
   throwExportConflict' ss new existing name name
 
@@ -454,13 +448,12 @@ throwExportConflict ss new existing name =
 -- different categories of names. E.g. class and type names conflicting.
 --
 throwExportConflict'
-  :: MonadError MultipleErrors m
-  => SourceSpan
+  :: SourceSpan
   -> ModuleName
   -> ModuleName
   -> Name
   -> Name
-  -> m a
+  -> ResolveM a
 throwExportConflict' ss new existing newName existingName =
   throwError . errorMessage' ss $
     ExportConflict (Qualified (ByModuleName new) newName) (Qualified (ByModuleName existing) existingName)
@@ -470,13 +463,12 @@ throwExportConflict' ss new existing newName existingName =
 -- scope.
 --
 checkImportConflicts
-  :: forall m a
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => SourceSpan
+  :: forall a
+   . SourceSpan
   -> ModuleName
   -> (a -> Name)
   -> [ImportRecord a]
-  -> m (ModuleName, ModuleName)
+  -> ResolveM (ModuleName, ModuleName)
 checkImportConflicts ss currentModule toName xs =
   let
     byOrig = sortOn importSourceModule xs

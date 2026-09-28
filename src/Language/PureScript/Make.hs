@@ -23,7 +23,7 @@ import Control.Monad.Supply (evalSupplyT, runSupply, runSupplyT)
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.Trans.State.Strict (runStateT)
 import Control.Monad.Writer.Class (MonadWriter(..), censor)
-import Control.Monad.Writer.Strict (runWriterT, lift)
+import Control.Monad.Writer.Strict (lift)
 import Data.Function (on)
 import Data.Foldable (fold, for_)
 import Data.List (foldl', sortOn)
@@ -44,6 +44,7 @@ import Language.PureScript.ModuleDependencies (DependencyDepth(..), moduleSignat
 import Language.PureScript.Names (ModuleName, isBuiltinModuleName, runModuleName)
 import Language.PureScript.Renamer (renameInModule)
 import Language.PureScript.Sugar (Env, collapseBindingGroups, createBindingGroups, desugar, desugarCaseGuards, externsEnv, primEnv)
+import Language.PureScript.Sugar.Names.Resolve (runResolveM)
 import Language.PureScript.TypeChecker (CheckState(..), emptyCheckState, typeCheckModule)
 import Language.PureScript.Make.BuildPlan (BuildJobResult(..), BuildPlan(..))
 import Language.PureScript.Make.BuildPlan qualified as BuildPlan
@@ -74,7 +75,7 @@ rebuildModule
   -> Module
   -> Make ExternsFile
 rebuildModule actions externs m = do
-  env <- fmap fst . runWriterT $ foldM externsEnv primEnv externs
+  env <- censor (const mempty) $ foldM (\e ext -> runResolveM (externsEnv e ext)) primEnv externs
   rebuildModule' actions env externs m
 
 rebuildModule'
@@ -496,7 +497,7 @@ make ma@MakeActions{..} ms = do
           go :: Env -> ModuleName -> Make Env
           go e dep = case M.lookup dep results of
             Just (_, exts)
-              | not (M.member dep e) -> externsEnv e exts
+              | not (M.member dep e) -> runResolveM (externsEnv e exts)
             _ -> return e
         foldM go env deps
       env <- C.readMVar (bpEnv buildPlan)

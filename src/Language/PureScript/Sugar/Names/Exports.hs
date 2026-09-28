@@ -21,21 +21,16 @@ import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHi
 import Language.PureScript.Names (Ident, ModuleName, Name(..), OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), disqualifyFor, isQualifiedWith, isUnqualified)
 import Language.PureScript.Sugar.Names.Env (Env, ExportMode(..), Exports(..), ImportRecord(..), Imports(..), checkImportConflicts, envModuleExports, exportType, exportTypeClass, exportTypeOp, exportValue, exportValueOp, nullExports)
 import Language.PureScript.Sugar.Names.Common (warnDuplicateRefs)
-import Language.PureScript.Sugar.Monad (DesugarM)
+import Language.PureScript.Sugar.Names.Resolve (ResolveM)
 
 -- |
 -- Finds all exportable members of a module, disregarding any explicit exports.
 --
--- NB: concretized to 'DesugarM' since its sole caller is
--- "Language.PureScript.Sugar.Names"'s @desugarImports@. Contrast with
--- 'resolveExports'/'filterModule' below, which are also called from
--- @externsEnv@ (itself dual-site between @WriterT MultipleErrors Make@ and
--- bare @Make@ in "Language.PureScript.Make") and so must stay polymorphic.
-findExportable :: Module -> DesugarM Exports
+findExportable :: Module -> ResolveM Exports
 findExportable (Module _ _ mn ds _) =
   rethrow (addHint (ErrorInModule mn)) $ foldM updateExports' nullExports ds
   where
-  updateExports' :: Exports -> Declaration -> DesugarM Exports
+  updateExports' :: Exports -> Declaration -> ResolveM Exports
   updateExports' exps decl = rethrowWithPosition (declSourceSpan decl) $ updateExports exps decl
 
   source =
@@ -44,7 +39,7 @@ findExportable (Module _ _ mn ds _) =
     , exportSourceImportedFrom = Nothing
     }
 
-  updateExports :: Exports -> Declaration -> DesugarM Exports
+  updateExports :: Exports -> Declaration -> ResolveM Exports
   updateExports exps (TypeClassDeclaration (SourceAnn ss _) tcn _ _ _ ds') = do
     exps' <- rethrowWithPosition ss $ exportTypeClass ss Internal exps tcn source
     foldM go exps' ds'
@@ -72,15 +67,13 @@ findExportable (Module _ _ mn ds _) =
 -- exported and elaborating re-exports of other modules.
 --
 resolveExports
-  :: forall m
-   . (MonadError MultipleErrors m, MonadWriter MultipleErrors m)
-  => Env
+  :: Env
   -> SourceSpan
   -> ModuleName
   -> Imports
   -> Exports
   -> [DeclarationRef]
-  -> m Exports
+  -> ResolveM Exports
 resolveExports env ss mn imps exps refs =
   warnAndRethrow (addHint (ErrorInModule mn)) $ do
     filtered <- filterModule mn exps refs
@@ -93,7 +86,7 @@ resolveExports env ss mn imps exps refs =
   -- Takes the current module's imports, the accumulated list of exports, and a
   -- `DeclarationRef` for an explicit export. When the ref refers to another
   -- module, export anything from the imports that matches for that module.
-  elaborateModuleExports :: Exports -> DeclarationRef -> m Exports
+  elaborateModuleExports :: Exports -> DeclarationRef -> ResolveM Exports
   elaborateModuleExports result (ModuleRef _ name) | name == mn = do
     let types' = exportedTypes result `M.union` exportedTypes exps
     let typeOps' = exportedTypeOps result `M.union` exportedTypeOps exps
@@ -132,7 +125,7 @@ resolveExports env ss mn imps exps refs =
     -> ModuleName
     -> (a -> Name)
     -> M.Map (Qualified a) [ImportRecord a]
-    -> m [Qualified a]
+    -> ResolveM [Qualified a]
   extract ss' useQual name toName = fmap (map (importName . head . snd)) . go . M.toList
     where
     go = filterM $ \(name', options) -> do
@@ -231,12 +224,10 @@ resolveExports env ss mn imps exps refs =
 -- based on a list of export declaration references.
 --
 filterModule
-  :: forall m
-   . MonadError MultipleErrors m
-  => ModuleName
+  :: ModuleName
   -> Exports
   -> [DeclarationRef]
-  -> m Exports
+  -> ResolveM Exports
 filterModule mn exps refs = do
   types <- foldM filterTypes M.empty (combineTypeRefs refs)
   typeOps <- foldM (filterExport TyOpName getTypeOpRef exportedTypeOps) M.empty refs
@@ -268,7 +259,7 @@ filterModule mn exps refs = do
   filterTypes
     :: M.Map (ProperName 'TypeName) ([ProperName 'ConstructorName], ExportSource)
     -> DeclarationRef
-    -> m (M.Map (ProperName 'TypeName) ([ProperName 'ConstructorName], ExportSource))
+    -> ResolveM (M.Map (ProperName 'TypeName) ([ProperName 'ConstructorName], ExportSource))
   filterTypes result (TypeRef ss name expDcons) =
     case name `M.lookup` exportedTypes exps of
       Nothing -> throwError . errorMessage' ss . UnknownExport $ TyName name
@@ -284,7 +275,7 @@ filterModule mn exps refs = do
       :: ProperName 'TypeName
       -> [ProperName 'ConstructorName]
       -> ProperName 'ConstructorName
-      -> m ()
+      -> ResolveM ()
     checkDcon tcon dcons dcon =
       unless (dcon `elem` dcons) .
         throwError . errorMessage' ss $ UnknownExportDataConstructor tcon dcon
@@ -297,7 +288,7 @@ filterModule mn exps refs = do
     -> (Exports -> M.Map a ExportSource)
     -> M.Map a ExportSource
     -> DeclarationRef
-    -> m (M.Map a ExportSource)
+    -> ResolveM (M.Map a ExportSource)
   filterExport toName get fromExps result ref
     | Just name <- get ref =
         case name `M.lookup` fromExps exps of
