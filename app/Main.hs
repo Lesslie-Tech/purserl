@@ -6,6 +6,7 @@ import Command.Compile qualified as Compile
 import Command.Graph qualified as Graph
 import Command.Hierarchy qualified as Hierarchy
 import Command.Ide qualified as Ide
+import Command.Prune qualified as Prune
 import Control.Monad (join)
 import Data.Foldable (fold)
 import Options.Applicative qualified as Opts
@@ -66,4 +67,7 @@ main = do
         , Opts.command "ide"
             (Opts.info Ide.command
               (Opts.progDesc "Start or query an IDE server process"))
+        , Opts.command "prune"
+            (Opts.info Prune.command
+              (Opts.progDesc "Remove module(s) from the cache database"))
         ]

@@ -392,6 +392,7 @@ executable purs
     Command.Graph
     Command.Hierarchy
     Command.Ide
+    Command.Prune
     SharedCLI
     Version
     Paths_purescript
