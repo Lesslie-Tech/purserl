@@ -113,10 +113,14 @@ readBinaryFile path =
 
 readBinaryFileIO :: Binary a => FilePath -> IO (Maybe a)
 readBinaryFileIO path = do
-  mBytes <- catchDoesNotExist (BSL.readFile path)
+  -- Read strictly (not BSL.readFile) so the file handle is closed before
+  -- returning; a lazy read can leave the handle open (until the lazily-read
+  -- ByteString is fully forced or GC'd), which then makes a subsequent
+  -- write to the same path in the same process fail with "resource busy".
+  mBytes <- catchDoesNotExist (BS.readFile path)
   case mBytes of
     Nothing -> pure Nothing
-    Just bytes -> case Binary.decodeOrFail bytes of
+    Just bytes -> case Binary.decodeOrFail (BSL.fromStrict bytes) of
       Left _ -> do
         putStrLn ("### corrupt-binary:" <> path)
         pure Nothing
