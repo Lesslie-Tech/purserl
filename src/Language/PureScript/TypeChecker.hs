@@ -12,7 +12,7 @@ import Protolude (headMay, maybeToLeft, ordNub)
 
 import Control.Lens ((^..), _2)
 import Control.Monad (when, unless, void, forM, zipWithM_)
-import Control.Monad.Error.Class (MonadError(..))
+import Control.Monad.Error.Class (MonadError(..), liftEither)
 import Control.Monad.State.Class (MonadState(..), modify, gets)
 import Control.Monad.Supply.Class (MonadSupply)
 import Control.Monad.Writer.Class (MonadWriter, tell)
@@ -245,7 +245,7 @@ typeCheckAll moduleName = traverse go
   go :: Declaration -> Check Declaration
   go (DataDeclaration sa@(SourceAnn ss _) dtype name args dctors) = do
     warnAndRethrow (addHint (ErrorInTypeConstructor name) . addHint (positionedError ss)) $ do
-      when (dtype == Newtype) $ void $ checkNewtype name dctors
+      when (dtype == Newtype) $ void $ liftEither $ checkNewtype name dctors
       checkDuplicateTypeArguments $ map fst args
       (dataCtors, ctorKind) <- kindOfData moduleName (sa, name, args, dctors)
       let args' = args `withKinds` ctorKind
@@ -275,7 +275,7 @@ typeCheckAll moduleName = traverse go
         forM dataDeclsWithKinds $ \(_, name, args, dataCtors, _) ->
           (name, args,) <$> traverse (replaceTypeSynonymsInDataConstructor . fst) dataCtors
       for_ dataDeclsWithKinds $ \(dtype, name, args', dataCtors, ctorKind) -> do
-        when (dtype == Newtype) $ void $ checkNewtype name (map fst dataCtors)
+        when (dtype == Newtype) $ void $ liftEither $ checkNewtype name (map fst dataCtors)
         checkDuplicateTypeArguments $ map fst args'
         let args'' = args' `withRoles` inferRoles' name args'
         addDataType moduleName dtype name args'' dataCtors ctorKind
@@ -569,11 +569,9 @@ typeCheckAll moduleName = traverse go
 -- data constructor declaration and the single field, as a 'proof' that the
 -- newtype was indeed a valid newtype.
 checkNewtype
-  :: forall m
-   . MonadError MultipleErrors m
-  => ProperName 'TypeName
+  :: ProperName 'TypeName
   -> [DataConstructorDeclaration]
-  -> m (DataConstructorDeclaration, (Ident, SourceType))
+  -> Either MultipleErrors (DataConstructorDeclaration, (Ident, SourceType))
 checkNewtype _ [decl@(DataConstructorDeclaration _ _ [field])] = return (decl, field)
 checkNewtype name _ = throwError . errorMessage $ InvalidNewtype name
 

@@ -73,7 +73,7 @@ rebuildFile file actualFile codegenTargets runOpenBuild = do
   let filePathMap = M.singleton moduleName (Left P.RebuildAlways)
   let pureRebuild = fp == "" || not ("/Ctx.purs" `isInfixOf` fp) -- [drathier]: intellij-idea appears to use temp files instead of raw source inputs, if I guessed the file format correctly?
   let modulePath = if pureRebuild then fp' else file
-  foreigns <- P.inferForeignModules (M.singleton moduleName (Right modulePath))
+  foreigns <- liftIO $ P.inferForeignModules (M.singleton moduleName (Right modulePath))
   let makeEnv = P.buildMakeActions outputDirectory filePathMap foreigns False Nothing
         & (if pureRebuild then enableForeignCheck foreigns codegenTargets . shushCodegen else identity)
         & shushProgress
@@ -200,12 +200,11 @@ sortExterns
   -> ModuleMap P.ExternsFile
   -> m [P.ExternsFile]
 sortExterns m ex = do
-  sorted' <- runExceptT
-           . P.sortModules P.Transitive P.moduleSignature
-           . (:) m
-           . map mkShallowModule
-           . M.elems
-           . M.delete (P.getModuleName m) $ ex
+  let sorted' = P.sortModules P.Transitive P.moduleSignature
+              . (:) m
+              . map mkShallowModule
+              . M.elems
+              . M.delete (P.getModuleName m) $ ex
   case sorted' of
     Left err ->
       throwError (RebuildError [] err)

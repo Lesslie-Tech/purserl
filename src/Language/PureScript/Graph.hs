@@ -8,6 +8,7 @@ import Data.Aeson.KeyMap qualified as Json.Map
 import Data.Map qualified as Map
 
 import Control.Monad (forM)
+import Control.Monad.Error.Class (liftEither)
 import Data.Aeson ((.=))
 import Data.Foldable (foldl')
 import Data.Map (Map)
@@ -31,9 +32,9 @@ graph :: [FilePath] -> IO (Either MultipleErrors Json.Value, MultipleErrors)
 graph input = do
   moduleFiles <- readInput input
   Make.runMake Options.defaultOptions $ do
-    ms <- CST.parseModulesFromFiles id moduleFiles
+    ms <- liftEither $ CST.parseModulesFromFiles id moduleFiles
     let parsedModuleSig = Dependencies.moduleSignature . CST.resPartial
-    (_sorted, moduleGraph) <- Dependencies.sortModules Dependencies.Direct (parsedModuleSig . snd) ms
+    (_sorted, moduleGraph) <- liftEither $ Dependencies.sortModules Dependencies.Direct (parsedModuleSig . snd) ms
     let pathMap = Map.fromList $
           map (\(p, m) -> (Dependencies.sigModuleName (parsedModuleSig m), p)) ms
     pure (moduleGraphToJSON pathMap moduleGraph)

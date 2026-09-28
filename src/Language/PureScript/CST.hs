@@ -39,11 +39,10 @@ pureResult :: a -> PartialResult a
 pureResult a = PartialResult a ([], pure a)
 
 parseModulesFromFiles
-  :: forall m k
-   . MonadError E.MultipleErrors m
-  => (k -> FilePath)
+  :: forall k
+   . (k -> FilePath)
   -> [(k, Text)]
-  -> m [(k, PartialResult AST.Module)]
+  -> Either E.MultipleErrors [(k, PartialResult AST.Module)]
 parseModulesFromFiles toFilePath input =
   flip E.parU (handleParserError toFilePath)
     . inParallel
@@ -51,11 +50,10 @@ parseModulesFromFiles toFilePath input =
     $ \(k, a) -> (k, parseModuleFromFile (toFilePath k) a)
 
 parseFromFiles
-  :: forall m k
-   . MonadError E.MultipleErrors m
-  => (k -> FilePath)
+  :: forall k
+   . (k -> FilePath)
   -> [(k, Text)]
-  -> m [(k, ([ParserWarning], AST.Module))]
+  -> Either E.MultipleErrors [(k, ([ParserWarning], AST.Module))]
 parseFromFiles toFilePath input =
   flip E.parU (handleParserError toFilePath)
     . inParallel
@@ -69,20 +67,18 @@ parseFromFile :: FilePath -> Text -> ([ParserWarning], Either (NE.NonEmpty Parse
 parseFromFile fp content = fmap (convertModule (T.pack fp)) <$> parse content
 
 handleParserError
-  :: forall m k a
-   . MonadError E.MultipleErrors m
-  => (k -> FilePath)
+  :: forall k a
+   . (k -> FilePath)
   -> (k, Either (NE.NonEmpty ParserError) a)
-  -> m (k, a)
+  -> Either E.MultipleErrors (k, a)
 handleParserError toFilePath (k, res) =
   (k,) <$> unwrapParserError (toFilePath k) res
 
 unwrapParserError
-  :: forall m a
-   . MonadError E.MultipleErrors m
-  => FilePath
+  :: forall a
+   . FilePath
   -> Either (NE.NonEmpty ParserError) a
-  -> m a
+  -> Either E.MultipleErrors a
 unwrapParserError fp =
   either (throwError . toMultipleErrors fp) pure
 

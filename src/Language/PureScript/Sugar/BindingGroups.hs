@@ -12,7 +12,7 @@ import Prelude
 import Protolude (ordNub, swap)
 
 import Control.Monad ((<=<), guard)
-import Control.Monad.Error.Class (MonadError(..))
+import Control.Monad.Error.Class (MonadError(..), liftEither)
 
 import Data.Graph (SCC(..), stronglyConnComp, stronglyConnCompR)
 import Data.List (intersect, (\\))
@@ -41,33 +41,31 @@ data VertexType
 -- |
 -- Replace all sets of mutually-recursive declarations in a module with binding groups
 --
--- NB: concretized to 'DesugarM' -- its sole caller is "Language.PureScript.Sugar"'s
--- @desugar@ pipeline. It calls the still-polymorphic 'createBindingGroups' internally,
--- which is fine: that function is also called bare (outside any StateT/SupplyT wrapper)
--- from "Language.PureScript.Make", so it must stay polymorphic.
+-- NB: 'createBindingGroups' is concretized to 'Either MultipleErrors' below
+-- (not 'DesugarM') because it's also called bare, outside any StateT/SupplyT
+-- wrapper, from "Language.PureScript.Make" -- bridged into each ambient
+-- monad with 'liftEither' at both call sites.
 createBindingGroupsModule
   :: Module
   -> DesugarM Module
 createBindingGroupsModule (Module ss coms name ds exps) =
-  Module ss coms name <$> createBindingGroups name ds <*> pure exps
+  Module ss coms name <$> liftEither (createBindingGroups name ds) <*> pure exps
 
 createBindingGroups
-  :: forall m
-   . (MonadError MultipleErrors m)
-  => ModuleName
+  :: ModuleName
   -> [Declaration]
-  -> m [Declaration]
+  -> Either MultipleErrors [Declaration]
 createBindingGroups moduleName = mapM f <=< handleDecls
 
   where
   (f, _, _) = everywhereOnValuesTopDownM return handleExprs return
 
-  handleExprs :: Expr -> m Expr
+  handleExprs :: Expr -> Either MultipleErrors Expr
   handleExprs (Let w ds val) = (\ds' -> Let w ds' val) <$> handleDecls ds
   handleExprs other = return other
 
   -- Replace all sets of mutually-recursive declarations with binding groups
-  handleDecls :: [Declaration] -> m [Declaration]
+  handleDecls :: [Declaration] -> Either MultipleErrors [Declaration]
   handleDecls ds = do
     let values = mapMaybe (fmap (fmap extractGuardedExpr) . getValueDeclaration) ds
         kindDecls = (,VertexKindSignature) <$> filter isKindDecl ds
@@ -233,11 +231,9 @@ declTypeName _ = internalError "Expected DataDeclaration"
 --
 --
 toBindingGroup
-  :: forall m
-   . (MonadError MultipleErrors m)
-   => ModuleName
-   -> SCC (ValueDeclarationData Expr)
-   -> m Declaration
+  :: ModuleName
+  -> SCC (ValueDeclarationData Expr)
+  -> Either MultipleErrors Declaration
 toBindingGroup _ (AcyclicSCC d) = return (mkDeclaration d)
 toBindingGroup moduleName (CyclicSCC ds') = do
   -- Once we have a mutually-recursive group of declarations, we need to sort
@@ -257,7 +253,7 @@ toBindingGroup moduleName (CyclicSCC ds') = do
   valueVerts :: [(ValueDeclarationData Expr, Ident, [Ident])]
   valueVerts = fmap (\d -> (d, valdeclIdent d, usedImmediateIdents moduleName (mkDeclaration d) `intersect` idents)) ds'
 
-  toBinding :: SCC (ValueDeclarationData Expr) -> m ((SourceAnn, Ident), NameKind, Expr)
+  toBinding :: SCC (ValueDeclarationData Expr) -> Either MultipleErrors ((SourceAnn, Ident), NameKind, Expr)
   toBinding (AcyclicSCC d) = return $ fromValueDecl d
   toBinding (CyclicSCC ds) = throwError $ foldMap cycleError ds
 
@@ -265,10 +261,9 @@ toBindingGroup moduleName (CyclicSCC ds') = do
   cycleError (ValueDeclarationData (SourceAnn ss _) n _ _ _) = errorMessage' ss $ CycleInDeclaration n
 
 toDataBindingGroup
-  :: MonadError MultipleErrors m
-  => Ord a
+  :: Ord a
   => SCC (Declaration, (ProperName 'TypeName, a), [(ProperName 'TypeName, a)])
-  -> m Declaration
+  -> Either MultipleErrors Declaration
 toDataBindingGroup (AcyclicSCC (d, _, _)) = return d
 toDataBindingGroup (CyclicSCC ds')
   | Just kds@((ss, _):|_) <- nonEmpty $ concatMap (kindDecl . getDecl) ds' = throwError . errorMessage' ss . CycleInKindDeclaration $ fmap snd kds

@@ -4,6 +4,8 @@ import Prelude
 
 import Control.Applicative (Alternative(..))
 import Control.Monad (when)
+import Control.Monad.Error.Class (liftEither)
+import Control.Monad.IO.Class (liftIO)
 import Data.Aeson qualified as A
 import Data.Bool (bool)
 import Data.ByteString.Lazy.UTF8 qualified as LBU8
@@ -130,9 +132,9 @@ compileImpl PSCMakeOptions{..} externsMemCache = do
     exitFailure
   moduleFiles <- readUTF8FilesT input
   (makeErrors, makeWarnings) <- runMake pscmOpts $ do
-    ms <- CST.parseModulesFromFiles id moduleFiles
+    ms <- liftEither $ CST.parseModulesFromFiles id moduleFiles
     let filePathMap = M.fromList $ map (\(fp, pm) -> (P.getModuleName $ CST.resPartial pm, Right fp)) ms
-    foreigns <- inferForeignModules filePathMap
+    foreigns <- liftIO $ inferForeignModules filePathMap
 
     -- [drathier]: for devs refusing to run with swap enabled
     let shouldMemCache = not $

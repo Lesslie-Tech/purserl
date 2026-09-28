@@ -10,6 +10,7 @@ import Language.PureScript.CST qualified as CST
 
 import Control.Monad (guard, void)
 import Control.Exception (tryJust)
+import Control.Monad.Error.Class (liftEither)
 import Control.Monad.IO.Class (liftIO)
 import Control.Concurrent.MVar (readMVar, newMVar, modifyMVar_)
 import Data.Time.Calendar (fromGregorian)
@@ -562,9 +563,9 @@ compileWithOptions opts input = do
   recompiled <- newMVar Set.empty
   moduleFiles <- readUTF8FilesT input
   (makeResult, _) <- P.runMake opts $ do
-    ms <- CST.parseModulesFromFiles id moduleFiles
+    ms <- liftEither $ CST.parseModulesFromFiles id moduleFiles
     let filePathMap = M.fromList $ map (\(fp, pm) -> (P.getModuleName $ CST.resPartial pm, Right fp)) ms
-    foreigns <- P.inferForeignModules filePathMap
+    foreigns <- liftIO $ P.inferForeignModules filePathMap
     let makeActions =
           (P.buildMakeActions modulesDir filePathMap foreigns True Nothing)
             { P.progress = \case

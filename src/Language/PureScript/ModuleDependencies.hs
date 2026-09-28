@@ -38,12 +38,11 @@ data DependencyDepth = Direct | Transitive
 --
 -- Reports an error if the module graph contains a cycle.
 sortModules
-  :: forall m a
-   . MonadError MultipleErrors m
-  => DependencyDepth
+  :: forall a
+   . DependencyDepth
   -> (a -> ModuleSignature)
   -> [a]
-  -> m ([a], ModuleGraph)
+  -> Either MultipleErrors ([a], ModuleGraph)
 sortModules dependencyDepth toSig ms = do
     let
       ms' = (\m -> (m, toSig m)) <$> ms
@@ -60,7 +59,7 @@ sortModules dependencyDepth toSig ms = do
                          return (mn, filter (/= mn) (map toKey deps))
     return (fst <$> ms'', moduleGraph)
   where
-    toGraphNode :: S.Set ModuleName -> (a, ModuleSignature) -> m ((a, ModuleSignature), ModuleName, [ModuleName])
+    toGraphNode :: S.Set ModuleName -> (a, ModuleSignature) -> Either MultipleErrors ((a, ModuleSignature), ModuleName, [ModuleName])
     toGraphNode mns m@(_, ModuleSignature _ mn deps) = do
       void . parU deps $ \(dep, pos) ->
         when (dep `notElem` C.primModules && S.notMember dep mns) .
@@ -78,7 +77,7 @@ usedModules (ImportDeclaration (SourceAnn ss _) mn _ _) = pure (mn, ss)
 usedModules _ = Nothing
 
 -- | Convert a strongly connected component of the module graph to a module
-toModule :: MonadError MultipleErrors m => [((a, ModuleSignature), ModuleName, [ModuleName])] -> SCC (a, ModuleSignature) -> m (a, ModuleSignature)
+toModule :: [((a, ModuleSignature), ModuleName, [ModuleName])] -> SCC (a, ModuleSignature) -> Either MultipleErrors (a, ModuleSignature)
 toModule _ (AcyclicSCC m) = return m
 toModule verts (CyclicSCC ms) =
   case nonEmpty ms of

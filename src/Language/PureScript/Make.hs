@@ -17,7 +17,7 @@ import Control.DeepSeq (force)
 import Control.Exception.Lifted (onException, bracket_, evaluate)
 import Control.Monad (foldM, unless, when, (<=<))
 import Control.Monad.Base (MonadBase(liftBase))
-import Control.Monad.Error.Class (MonadError(..))
+import Control.Monad.Error.Class (MonadError(..), liftEither)
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Supply (evalSupplyT, runSupply, runSupplyT)
 import Control.Monad.Trans.Control (MonadBaseControl(..))
@@ -171,7 +171,7 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
   progress $ CompileMeta ("### CS.doneDesugarCaseGuards4[" <> runModuleName moduleName <> "] " <> diffTime st5 end5)
 
   st6 <- realTime
-  regrouped <- createBindingGroups moduleName . collapseBindingGroups $ deguarded
+  regrouped <- liftEither . createBindingGroups moduleName . collapseBindingGroups $ deguarded
   end6 <- realTime
 
   progress $ CompileMeta ("### CS.doneCreateBindingGroups5[" <> runModuleName moduleName <> "] " <> diffTime st6 end6)
@@ -247,7 +247,7 @@ make ma@MakeActions{..} ms = do
   progress $ CompileMeta ("### CS.doneReadCacheDb8 " <> diffTime st1 end1)
 
   st2 <- realTime
-  (sorted, graph) <- sortModules Transitive (moduleSignature . CST.resPartial) ms
+  (sorted, graph) <- liftEither $ sortModules Transitive (moduleSignature . CST.resPartial) ms
   end2 <- realTime
   progress $ CompileMeta ("### CS.doneSortModules9 " <> diffTime st2 end2)
 
@@ -486,7 +486,7 @@ make ma@MakeActions{..} ms = do
     phaseAResult <- flip catchError (return . Left) $ do
       let pwarnings' = CST.toMultipleWarnings fp pwarnings
       tell pwarnings'
-      m <- CST.unwrapParserError fp mres
+      m <- liftEither $ CST.unwrapParserError fp mres
       -- We need to wait for dependencies to be built, before checking if the current
       -- module should be rebuilt, so the first thing to do is to wait on the
       -- MVars for the module's dependencies.
@@ -556,14 +556,12 @@ make ma@MakeActions{..} ms = do
 -- | Infer the foreign module file for a module by looking for a matching
 -- Erlang foreign file next to the source file.
 inferForeignModules
-  :: forall m
-   . MonadIO m
-  => M.Map ModuleName (Either RebuildPolicy FilePath)
-  -> m (M.Map ModuleName FilePath)
+  :: M.Map ModuleName (Either RebuildPolicy FilePath)
+  -> IO (M.Map ModuleName FilePath)
 inferForeignModules =
     fmap (M.mapMaybe id) . traverse inferForeignModule
   where
-    inferForeignModule :: Either RebuildPolicy FilePath -> m (Maybe FilePath)
+    inferForeignModule :: Either RebuildPolicy FilePath -> IO (Maybe FilePath)
     inferForeignModule (Left _) = return Nothing
     inferForeignModule (Right path) = Erl.Build.inferForeignModule' path
 

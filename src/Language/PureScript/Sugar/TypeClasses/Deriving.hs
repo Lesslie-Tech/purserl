@@ -4,7 +4,7 @@ module Language.PureScript.Sugar.TypeClasses.Deriving (deriveInstances) where
 import Prelude
 import Protolude (note)
 
-import Control.Monad.Error.Class (throwError)
+import Control.Monad.Error.Class (throwError, liftEither)
 import Data.List (foldl', find, unzip5)
 import Language.PureScript.AST (Binder(..), CaseAlternative(..), DataConstructorDeclaration(..), Declaration(..), Expr(..), pattern MkUnguarded, Module(..), SourceSpan(..), TypeInstanceBody(..), pattern ValueDecl, SourceAnn(..))
 import Language.PureScript.AST.Utils (UnwrappedTypeConstructor(..), lamCase, unguarded, unwrapTypeConstructor)
@@ -181,7 +181,7 @@ deriveNewtype tyCon tyConArgs =
     DataDeclaration (SourceAnn ss' _) Data name _ _ ->
       throwError . errorMessage' ss' $ CannotDeriveNewtypeForData name
     DataDeclaration _ Newtype name args dctors -> do
-      (_, (_, ty)) <- checkNewtype name dctors
+      (_, (_, ty)) <- liftEither $ checkNewtype name dctors
       let subst = zipWith ((,) . fst) args tyConArgs
       return ([], replaceAllTypeVars subst ty)
     _ -> internalError "deriveNewtype: expected DataDeclaration"
