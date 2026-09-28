@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE MagicHash #-}
 -- |
 -- Data types for types
 --
@@ -24,6 +25,7 @@ import Data.List (sortOn)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
+import GHC.Exts (reallyUnsafePtrEquality#, isTrue#)
 import GHC.Generics (Generic)
 
 import Language.PureScript.AST.SourcePos (pattern NullSourceAnn, SourceAnn(..), SourceSpan)
@@ -287,6 +289,71 @@ overConstraintArgsAll f c =
   (\a b -> c { constraintKindArgs = a, constraintArgs = b })
     <$> f (constraintKindArgs c)
     <*> f (constraintArgs c)
+
+-- | Pointer-equality check, used purely as a performance heuristic by the
+-- sharing-preserving traversals below: a positive result *guarantees* the
+-- two values are the same heap object (so it's always safe to reuse
+-- whichever one you already have instead of a freshly rebuilt copy); a
+-- negative result only means "couldn't tell", never "definitely different".
+-- Both arguments are forced to WHNF first -- comparing an unevaluated
+-- thunk's address against an evaluated value's address would spuriously
+-- report inequality even when they'd reduce to the same object.
+ptrEq :: a -> a -> Bool
+ptrEq !x !y = isTrue# (reallyUnsafePtrEquality# x y)
+
+-- | Like @fmap@ over a @Maybe (Type a)@, but reuses the original @Maybe@
+-- (not just its payload) when the mapped payload comes back unchanged, so
+-- an unaffected @Just t@ survives traversal as the same heap object rather
+-- than a freshly-allocated one.
+mapMaybeTypeShared :: (Type a -> Type a) -> Maybe (Type a) -> Maybe (Type a)
+mapMaybeTypeShared _ Nothing = Nothing
+mapMaybeTypeShared f m@(Just x) =
+  let !x' = f x
+  in if ptrEq x' x then m else Just x'
+
+-- | Like @map@ over a @[Type a]@, but reuses the original list (spine and
+-- all) when every element comes back unchanged.
+mapListTypeShared :: (Type a -> Type a) -> [Type a] -> [Type a]
+mapListTypeShared _ [] = []
+mapListTypeShared f xs0@(x : xs) =
+  let !x' = f x
+      !xs' = mapListTypeShared f xs
+  in if ptrEq x' x && ptrEq xs' xs then xs0 else x' : xs'
+
+-- | Sharing-preserving analogue of 'mapConstraintArgsAll': reuses the
+-- original 'Constraint' when neither argument list changed.
+mapConstraintArgsAllShared :: ([Type a] -> [Type a]) -> Constraint a -> Constraint a
+mapConstraintArgsAllShared f c =
+  let !kindArgs' = f (constraintKindArgs c)
+      !args' = f (constraintArgs c)
+  in if ptrEq kindArgs' (constraintKindArgs c) && ptrEq args' (constraintArgs c)
+       then c
+       else c { constraintKindArgs = kindArgs', constraintArgs = args' }
+
+-- | Monadic analogue of 'mapMaybeTypeShared'.
+mapMaybeTypeSharedM :: Monad m => (Type a -> m (Type a)) -> Maybe (Type a) -> m (Maybe (Type a))
+mapMaybeTypeSharedM _ Nothing = pure Nothing
+mapMaybeTypeSharedM f m@(Just x) = do
+  !x' <- f x
+  pure $! if ptrEq x' x then m else Just x'
+
+-- | Monadic analogue of 'mapListTypeShared'.
+mapListTypeSharedM :: Monad m => (Type a -> m (Type a)) -> [Type a] -> m [Type a]
+mapListTypeSharedM _ [] = pure []
+mapListTypeSharedM f xs0@(x : xs) = do
+  !x' <- f x
+  !xs' <- mapListTypeSharedM f xs
+  pure $! if ptrEq x' x && ptrEq xs' xs then xs0 else x' : xs'
+
+-- | Monadic analogue of 'mapConstraintArgsAllShared'.
+overConstraintArgsAllShared :: Monad m => ([Type a] -> m [Type a]) -> Constraint a -> m (Constraint a)
+overConstraintArgsAllShared f c = do
+  !kindArgs' <- f (constraintKindArgs c)
+  !args' <- f (constraintArgs c)
+  pure $!
+    if ptrEq kindArgs' (constraintKindArgs c) && ptrEq args' (constraintArgs c)
+      then c
+      else c { constraintKindArgs = kindArgs', constraintArgs = args' }
 
 constraintDataToJSON :: ConstraintData -> A.Value
 constraintDataToJSON (PartialConstraintData bs trunc) =
@@ -764,92 +831,168 @@ srcInstanceType ss vars className tys
   $ srcTypeConstructor $ coerceProperName <$> className
 
 
+-- | Bottom-up rewrite of a 'Type', applying @f@ at every node.
+--
+-- This is sharing-preserving: when @f@ leaves a node unchanged and none of
+-- its children were rebuilt either, the *original* node is returned rather
+-- than a freshly-allocated (but structurally identical) copy. This matters
+-- because @f@ is very often something like a unification substitution that
+-- only ever rewrites a handful of leaves (e.g. 'TUnknown's) -- without this,
+-- every substitution pass reallocates the entire spine of every type it
+-- touches, and repeated substitution of the same large, mostly-unaffected
+-- type (e.g. a big record row threaded through many binds of a do-block)
+-- turns what should be cheap, shareable work into work that is repeated in
+-- full, and unshareable, at every occurrence.
 everywhereOnTypes :: (Type a -> Type a) -> Type a -> Type a
 everywhereOnTypes f = go where
-  go (TypeApp ann t1 t2) =
+  go t@(TypeApp ann t1 t2) =
     let !t1' = go t1
         !t2' = go t2
-    in f (TypeApp ann t1' t2')
-  go (KindApp ann t1 t2) =
+        !rebuilt
+          | ptrEq t1' t1 && ptrEq t2' t2 = t
+          | otherwise = TypeApp ann t1' t2'
+    in applyShared rebuilt
+  go t@(KindApp ann t1 t2) =
     let !t1' = go t1
         !t2' = go t2
-    in f (KindApp ann t1' t2')
-  go (ForAll ann vis arg mbK ty sco) =
-    let !mbK' = fmap go mbK
+        !rebuilt
+          | ptrEq t1' t1 && ptrEq t2' t2 = t
+          | otherwise = KindApp ann t1' t2'
+    in applyShared rebuilt
+  go t@(ForAll ann vis arg mbK ty sco) =
+    let !mbK' = mapMaybeTypeShared go mbK
         !ty' = go ty
-    in f (ForAll ann vis arg mbK' ty' sco)
-  go (ConstrainedType ann c ty) =
-    let !c' = mapConstraintArgsAll (map go) c
+        !rebuilt
+          | ptrEq mbK' mbK && ptrEq ty' ty = t
+          | otherwise = ForAll ann vis arg mbK' ty' sco
+    in applyShared rebuilt
+  go t@(ConstrainedType ann c ty) =
+    let !c' = mapConstraintArgsAllShared (mapListTypeShared go) c
         !ty' = go ty
-    in f (ConstrainedType ann c' ty')
-  go (Skolem ann name mbK i sc) =
-    let !mbK' = fmap go mbK
-    in f (Skolem ann name mbK' i sc)
-  go (RCons ann name ty rest) =
+        !rebuilt
+          | ptrEq c' c && ptrEq ty' ty = t
+          | otherwise = ConstrainedType ann c' ty'
+    in applyShared rebuilt
+  go t@(Skolem ann name mbK i sc) =
+    let !mbK' = mapMaybeTypeShared go mbK
+        !rebuilt
+          | ptrEq mbK' mbK = t
+          | otherwise = Skolem ann name mbK' i sc
+    in applyShared rebuilt
+  go t@(RCons ann name ty rest) =
     let !ty' = go ty
         !rest' = go rest
-    in f (RCons ann name ty' rest')
-  go (KindedType ann ty k) =
+        !rebuilt
+          | ptrEq ty' ty && ptrEq rest' rest = t
+          | otherwise = RCons ann name ty' rest'
+    in applyShared rebuilt
+  go t@(KindedType ann ty k) =
     let !ty' = go ty
         !k' = go k
-    in f (KindedType ann ty' k')
-  go (BinaryNoParensType ann t1 t2 t3) =
+        !rebuilt
+          | ptrEq ty' ty && ptrEq k' k = t
+          | otherwise = KindedType ann ty' k'
+    in applyShared rebuilt
+  go t@(BinaryNoParensType ann t1 t2 t3) =
     let !t1' = go t1
         !t2' = go t2
         !t3' = go t3
-    in f (BinaryNoParensType ann t1' t2' t3')
-  go (ParensInType ann t) =
-    let !t' = go t
-    in f (ParensInType ann t')
-  go other = f other
+        !rebuilt
+          | ptrEq t1' t1 && ptrEq t2' t2 && ptrEq t3' t3 = t
+          | otherwise = BinaryNoParensType ann t1' t2' t3'
+    in applyShared rebuilt
+  go t@(ParensInType ann t1) =
+    let !t1' = go t1
+        !rebuilt
+          | ptrEq t1' t1 = t
+          | otherwise = ParensInType ann t1'
+    in applyShared rebuilt
+  go other = applyShared other
 
+  applyShared t =
+    let !new = f t
+    in if ptrEq t new then t else new
+
+-- | Monadic analogue of 'everywhereOnTypes' -- see its docs for why this is
+-- sharing-preserving and why that matters.
 everywhereOnTypesM :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
 everywhereOnTypesM f = go where
-  go (TypeApp ann t1 t2) = do
+  go t@(TypeApp ann t1 t2) = do
     !t1' <- go t1
     !t2' <- go t2
-    f (TypeApp ann t1' t2')
+    let !rebuilt
+          | ptrEq t1' t1 && ptrEq t2' t2 = t
+          | otherwise = TypeApp ann t1' t2'
+    applyShared rebuilt
 
-  go (KindApp ann t1 t2) = do
+  go t@(KindApp ann t1 t2) = do
     !t1' <- go t1
     !t2' <- go t2
-    f (KindApp ann t1' t2')
+    let !rebuilt
+          | ptrEq t1' t1 && ptrEq t2' t2 = t
+          | otherwise = KindApp ann t1' t2'
+    applyShared rebuilt
 
-  go (ForAll ann vis arg mbK ty sco) = do
-    !mbK' <- traverse go mbK
+  go t@(ForAll ann vis arg mbK ty sco) = do
+    !mbK' <- mapMaybeTypeSharedM go mbK
     !ty' <- go ty
-    f (ForAll ann vis arg mbK' ty' sco)
+    let !rebuilt
+          | ptrEq mbK' mbK && ptrEq ty' ty = t
+          | otherwise = ForAll ann vis arg mbK' ty' sco
+    applyShared rebuilt
 
-  go (ConstrainedType ann c ty) = do
-    !c' <- overConstraintArgsAll (mapM go) c
+  go t@(ConstrainedType ann c ty) = do
+    !c' <- overConstraintArgsAllShared (mapListTypeSharedM go) c
     !ty' <- go ty
-    f (ConstrainedType ann c' ty')
+    let !rebuilt
+          | ptrEq c' c && ptrEq ty' ty = t
+          | otherwise = ConstrainedType ann c' ty'
+    applyShared rebuilt
 
-  go (Skolem ann name mbK i sc) = do
-    !mbK' <- traverse go mbK
-    f (Skolem ann name mbK' i sc)
+  go t@(Skolem ann name mbK i sc) = do
+    !mbK' <- mapMaybeTypeSharedM go mbK
+    let !rebuilt
+          | ptrEq mbK' mbK = t
+          | otherwise = Skolem ann name mbK' i sc
+    applyShared rebuilt
 
-  go (RCons ann name ty rest) = do
+  go t@(RCons ann name ty rest) = do
     !ty' <- go ty
     !rest' <- go rest
-    f (RCons ann name ty' rest')
+    let !rebuilt
+          | ptrEq ty' ty && ptrEq rest' rest = t
+          | otherwise = RCons ann name ty' rest'
+    applyShared rebuilt
 
-  go (KindedType ann ty k) = do
+  go t@(KindedType ann ty k) = do
     !ty' <- go ty
     !k' <- go k
-    f (KindedType ann ty' k')
+    let !rebuilt
+          | ptrEq ty' ty && ptrEq k' k = t
+          | otherwise = KindedType ann ty' k'
+    applyShared rebuilt
 
-  go (BinaryNoParensType ann t1 t2 t3) = do
+  go t@(BinaryNoParensType ann t1 t2 t3) = do
     !t1' <- go t1
     !t2' <- go t2
     !t3' <- go t3
-    f (BinaryNoParensType ann t1' t2' t3')
+    let !rebuilt
+          | ptrEq t1' t1 && ptrEq t2' t2 && ptrEq t3' t3 = t
+          | otherwise = BinaryNoParensType ann t1' t2' t3'
+    applyShared rebuilt
 
-  go (ParensInType ann t) = do
-    !t' <- go t
-    f (ParensInType ann t')
+  go t@(ParensInType ann t1) = do
+    !t1' <- go t1
+    let !rebuilt
+          | ptrEq t1' t1 = t
+          | otherwise = ParensInType ann t1'
+    applyShared rebuilt
 
-  go other = f other
+  go other = applyShared other
+
+  applyShared t = do
+    !new <- f t
+    pure $! if ptrEq t new then t else new
 
 
 everywhereOnTypesTopDownM :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
