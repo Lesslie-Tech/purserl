@@ -7,7 +7,6 @@
 --
 module Language.PureScript.Externs
   ( ExternsFile(..)
-  , ExternsImport(..)
   , ExternsFixity(..)
   , ExternsTypeFixity(..)
   , ExternsDeclaration(..)
@@ -87,8 +86,6 @@ data ExternsFile = ExternsFile
   -- ^ Module name
   , efExports :: [DeclarationRef]
   -- ^ List of module exports
-  , efImports :: [ExternsImport]
-  -- ^ List of module imports
   , efFixities :: [ExternsFixity]
   -- ^ List of operators and their fixities
   , efTypeFixities :: [ExternsTypeFixity]
@@ -106,29 +103,12 @@ data ExternsFile = ExternsFile
 instance Intern ExternsFile
 
 instance Binary ExternsFile where
-  put (ExternsFile a b c d e f g h i j) =
-    put a >> put b >> put c >> put d >> put e >> put f >> put g >> put h >> put i >> put j
-  get = ExternsFile <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
+  put (ExternsFile a b c d e f g h i) =
+    put a >> put b >> put c >> put d >> put e >> put f >> put g >> put h >> put i
+  get = ExternsFile <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
 
 instance Eq ExternsFile where
   a == b = Binary.encode a == Binary.encode b
-
--- | A module import in an externs file
-data ExternsImport = ExternsImport
-  {
-  -- | The imported module
-    eiModule :: ModuleName
-  -- | The import type: regular, qualified or hiding
-  , eiImportType :: ImportDeclarationType
-  -- | The imported-as name, for qualified imports
-  , eiImportedAs :: Maybe ModuleName
-  } deriving (Show, Generic, NFData)
-
-instance Intern ExternsImport
-
-instance Binary ExternsImport where
-  put (ExternsImport a b c) = put a >> put b >> put c
-  get = ExternsImport <$> get <*> get <*> get
 
 -- | A fixity declaration in an externs file
 data ExternsFixity = ExternsFixity
@@ -1659,7 +1639,6 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
         & M.fromList
   in
   let exportedThings = findExportedThings exports in
-  -- let safeImports = findQualifiedImportedModules mn efImports upstreamDBs in
   let findDepsRes = if not shouldCache then [] else findDeps mn env decls in
   let dbDeps = foldl (<>) (mempty { _exports = exportedThings }) (snd <$> findDepsRes) in
   let csdbDeps = flip execState mempty $ runReaderT (toCS dbDeps) (newTypeRefsMemo dbDeps) in
@@ -1801,7 +1780,6 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
   efVersion       = Purserl.versionString
   efModuleName    = mn
   efExports       = map renameRef exports
-  efImports       = mapMaybe importDecl decls
   efFixities      = mapMaybe fixityDecl decls
   efTypeFixities  = mapMaybe typeFixityDecl decls
   efDeclarations  = concatMap toExternsDeclaration exports
@@ -1816,10 +1794,6 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
   typeFixityDecl (TypeFixityDeclaration _ (Fixity assoc prec) name op) =
     fmap (const (ExternsTypeFixity assoc prec op name)) (find ((== Just op) . getTypeOpRef) exports)
   typeFixityDecl _ = Nothing
-
-  importDecl :: Declaration -> Maybe ExternsImport
-  importDecl (ImportDeclaration _ m mt qmn) = Just (ExternsImport m mt qmn)
-  importDecl _ = Nothing
 
   toExternsDeclaration :: DeclarationRef -> [ExternsDeclaration]
   toExternsDeclaration (TypeRef _ pn dctors) =

@@ -13,7 +13,7 @@ import Prelude
 import Protolude (sortOn, swap, foldl')
 
 import Control.Arrow (first, second, (&&&))
-import Control.Monad (foldM, when, (>=>))
+import Control.Monad (when, (>=>))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Lazy (MonadState, StateT(..), gets, modify)
 
@@ -25,12 +25,12 @@ import Data.Set qualified as S
 import Language.PureScript.AST
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage, errorMessage'', nonEmpty, parU, warnAndRethrow, warnAndRethrowWithPosition)
-import Language.PureScript.Externs (ExternsDeclaration(..), ExternsFile(..), ExternsImport(..))
+import Language.PureScript.Externs (ExternsDeclaration(..), ExternsFile(..))
 import Language.PureScript.Linter.Imports (Name(..), UsedImports)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident, OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..))
 import Language.PureScript.Sugar.Names.Env (Env, Exports(..), ImportProvenance(..), ImportRecord(..), Imports(..), checkImportConflicts, nullImports, primEnv)
 import Language.PureScript.Sugar.Names.Exports (findExportable, resolveExports)
-import Language.PureScript.Sugar.Names.Imports (resolveImports, resolveModuleImport)
+import Language.PureScript.Sugar.Names.Imports (resolveImports)
 import Language.PureScript.Sugar.Names.Resolve (ResolveM, runResolveM)
 import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Traversals (defS, sndM)
@@ -67,14 +67,20 @@ externsEnv
   :: Env
   -> ExternsFile
   -> ResolveM Env
-externsEnv env ExternsFile{..} = do
-  let members = Exports{..}
-      env' = M.insert efModuleName (efSourceSpan, nullImports, members) env
-      fromEFImport (ExternsImport mn mt qmn) = (mn, [(efSourceSpan, Just mt, qmn)])
-  imps <- foldM (resolveModuleImport env') nullImports (map fromEFImport efImports)
-  exps <- resolveExports env' efSourceSpan efModuleName imps members efExports
-  return $ M.insert efModuleName (efSourceSpan, imps, exps) env
+externsEnv env ExternsFile{..} =
+  -- `efExports` is already fully elaborated -- re-exported names are baked
+  -- in as `ReExportRef`s carrying their own `ExportSource` provenance -- so
+  -- `members` is already the complete, correct answer (local declarations
+  -- and re-exports alike) without needing to resolve anything against this
+  -- or any other module's `env` entry. This is what makes folding externs
+  -- files into `Env` order-independent: unlike `updateEnv` (which processes
+  -- a freshly-parsed module's raw, unelaborated export list and genuinely
+  -- needs the full import/re-export resolution machinery), a reloaded
+  -- ExternsFile has nothing left to resolve.
+  pure $ M.insert efModuleName (efSourceSpan, nullImports, members) env
   where
+
+  members = Exports{..}
 
   -- An ExportSource for declarations local to the module which the given
   -- ExternsFile corresponds to.
@@ -91,6 +97,7 @@ externsEnv env ExternsFile{..} = do
       forTyCon :: ExternsDeclaration -> Maybe (ProperName 'ConstructorName)
       forTyCon (EDDataConstructor pn _ tNm _ _) | tNm == tyCon = Just pn
       forTyCon _ = Nothing
+    toExportedType (ReExportRef _ src (TypeRef _ tyCon dctors)) = Just (tyCon, (fromMaybe [] dctors, src))
     toExportedType _ = Nothing
 
   exportedTypeOps :: M.Map (OpName 'TypeOpName) ExportSource
@@ -105,9 +112,14 @@ externsEnv env ExternsFile{..} = do
   exportedValueOps :: M.Map (OpName 'ValueOpName) ExportSource
   exportedValueOps = exportedRefs getValueOpRef
 
+  -- Re-exported refs are wrapped in `ReExportRef`, carrying the original
+  -- module's `ExportSource` directly; everything else was declared locally.
   exportedRefs :: Ord a => (DeclarationRef -> Maybe a) -> M.Map a ExportSource
   exportedRefs f =
-    M.fromList $ (, localExportSource) <$> mapMaybe f efExports
+    M.fromList $ mapMaybe extract efExports
+    where
+    extract (ReExportRef _ src ref) = (, src) <$> f ref
+    extract ref = (, localExportSource) <$> f ref
 
 -- |
 -- Make all exports for a module explicit. This may still affect modules that

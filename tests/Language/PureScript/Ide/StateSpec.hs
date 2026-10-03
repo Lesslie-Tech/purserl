@@ -44,8 +44,6 @@ ef = P.ExternsFile
     (mn "InstanceModule")
   -- , efExports =
     mempty
-  -- , efImports =
-    mempty
   -- , efFixities =
     mempty
   -- , efTypeFixities =

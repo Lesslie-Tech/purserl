@@ -445,6 +445,33 @@ spec = do
     --   writeFileWithTimestamp moduleCPath timestampD (moduleCContent <> "\n")
     --   compile modulePaths `shouldReturn` moduleNames ["B", "C"]
 
+    it "asdf resolves a name re-exported via `module X` after the re-exporting module is reloaded purely from cached externs" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          moduleCPath = sourcesDir </> "C.purs"
+          modulePaths = [moduleAPath, moduleBPath, moduleCPath]
+          moduleAContent = "module A where\nfoo :: Int\nfoo = 42\n"
+          moduleBContent = "module B (module A) where\nimport A\n"
+          moduleCContent1 = "module C where\nimport B\nbar :: Int\nbar = foo\n"
+          moduleCContent2 = "module C where\nimport B\nbar :: Int\nbar = foo\nbaz :: Int\nbaz = foo\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      writeFileWithTimestamp moduleCPath timestampC moduleCContent1
+      compile modulePaths `shouldReturn` moduleNames ["A", "B", "C"]
+
+      -- no changes when rebuilding
+      compile modulePaths `shouldReturn` moduleNames []
+
+      -- only C changes; A and B are reloaded from their cached externs (via
+      -- `externsEnv`) rather than recompiled from source, so `foo` must
+      -- still resolve correctly through B's `module A` re-export
+      writeFileWithTimestamp moduleCPath timestampD moduleCContent2
+      compile modulePaths `shouldReturn` moduleNames ["C"]
+
+      -- no changes when rebuilding
+      compile modulePaths `shouldReturn` moduleNames []
+
     it "asdf changing an unexported declaration doesn't trigger downstream recompiles" $ do
       -- first, type class without type arguments
       let moduleAPath = sourcesDir </> "A.purs"
