@@ -324,7 +324,11 @@ entails SolverOptions{..} constraint context hints =
                 modify (combineContexts newContext)
                 -- Mark this constraint for generalization
                 tell (mempty, [(ident, context, unsolved)])
-                return (Var nullSourceSpan qident)
+                -- An empty-class dict's value is never actually inspected (every use
+                -- of it collapses to `undefined`, same as the Solved case above), so
+                -- mark it Unused too -- this lets CoreFn desugaring drop the binder
+                -- for it entirely instead of generalizing a never-read parameter.
+                return (if typeClassIsEmpty then Unused (Var nullSourceSpan qident) else Var nullSourceSpan qident)
               Deferred ->
                 -- Constraint was deferred, just return the dictionary unchanged,
                 -- with no unsolved constraints. Hopefully, we can solve this later.

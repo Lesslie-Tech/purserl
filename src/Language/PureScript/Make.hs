@@ -4,6 +4,8 @@ module Language.PureScript.Make
   -- * Make API
   rebuildModule
   , rebuildModule'
+  , rebuildModuleTypecheck
+  , ModuleCheckResult(..)
   , make
   , inferForeignModules
   , module Monad

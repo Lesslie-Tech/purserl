@@ -27,7 +27,7 @@ import Prelude
 import Protolude (ordNub, fold, atMay)
 
 import Control.Arrow (first, second, (***))
-import Control.Monad (forM, forM_, guard, replicateM, unless, when, zipWithM, (<=<))
+import Control.Monad (filterM, forM, forM_, guard, replicateM, unless, when, zipWithM, (<=<))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Class (MonadState(..), gets)
 import Control.Monad.Supply.Class (MonadSupply)
@@ -174,7 +174,13 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
 
       -- Check skolem variables did not escape their scope
       skolemEscapeCheck val'
-      return ((sai, (foldr (Abs . VarBinder nullSourceSpan . (\(x, _, _) -> x)) val' unsolved, generalized)), unsolved)
+      -- An empty-class dict parameter is never read inside the body (every
+      -- reference to it collapses to `undefined`, see Entailment's Unused
+      -- handling), so it doesn't need to be bound here at all. The type
+      -- still gets the full constraint list below (`constrain`), just the
+      -- value-level parameter is dropped for these.
+      unsolvedForAbs <- filterM (\(_, _, con) -> not . typeClassIsEmpty <$> lookupTypeClass (constraintClass con)) unsolved
+      return ((sai, (foldr (Abs . VarBinder nullSourceSpan . (\(x, _, _) -> x)) val' unsolvedForAbs, generalized)), unsolved)
 
     -- Show warnings here, since types in wildcards might have been solved during
     -- instance resolution (by functional dependencies).
@@ -765,8 +771,16 @@ check' val t@(ConstrainedType _ con@(Constraint _ cls@(Qualified _ (ProperName c
   dictName <- if typeClassIsEmpty then pure UnusedIdent else freshIdent ("dict" <> className)
   -- NOTE[drathier]: this ByNullSourcePos seems to be the SourcePos used for type class instance dicts passed into functions. If we change it from Null, some other place in the compiler stops recognizing this as a type class dict, and suddently type checking fails with a " No type class instance was found for `Data.Functor.Functor m3`". Sigh. So I can't fix this bug then; it's a load bearing bug.
   dicts <- newDictionaries [] (Qualified ByNullSourcePos dictName) con
+  -- We still register the (unused) dict in scope above, unconditionally --
+  -- nested calls within the body that also need this empty class still need
+  -- to resolve it against *something* ambient during entailment. But the
+  -- dict's value is never actually read (every reference to it collapses to
+  -- `undefined`), so for an empty class we don't bind a parameter for it at
+  -- all, rather than binding one under an ignored name.
   val' <- withBindingGroupVisible $ withTypeClassDictionaries dicts $ check val ty
-  return $ TypedValue' True (Abs (VarBinder nullSourceSpan dictName) (tvToExpr val')) t
+  return $ if typeClassIsEmpty
+    then TypedValue' True (tvToExpr val') t
+    else TypedValue' True (Abs (VarBinder nullSourceSpan dictName) (tvToExpr val')) t
 check' val u@(TUnknown _ _) = do
   val'@(TypedValue' _ _ ty) <- infer val
   -- Don't unify an unknown with an inferred polytype

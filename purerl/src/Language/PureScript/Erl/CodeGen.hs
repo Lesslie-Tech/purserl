@@ -47,7 +47,8 @@ import Language.PureScript.CoreFn
     ssAnn,
   )
 import Language.PureScript.Environment as E
-  ( Environment (names, typeSynonyms, types),
+  ( Environment (names, typeClasses, typeSynonyms, types),
+    TypeClassData (typeClassIsEmpty),
     tyFunction,
   )
 import Language.PureScript.Erl.CodeGen.AST as AST
@@ -84,7 +85,8 @@ import Language.PureScript.Names
 import Language.PureScript.Options (Options)
 import Language.PureScript.Traversals (sndM)
 import Language.PureScript.Types
-  ( SourceType,
+  ( Constraint (constraintClass),
+    SourceType,
     Type (..),
   )
 import Prelude.Compat
@@ -163,7 +165,14 @@ isFullySaturatedForeignCall mn actualForeignArities var args = case var of
 data FnArity = EffFnXArity Int | FnXArity Int | Arity (Int, Int)
   deriving (Eq, Show)
 
-
+-- A typeclass with zero function members (and only empty-member superclasses)
+-- never gets a real dictionary argument anymore -- the type checker omits it
+-- entirely (see Entailment's Unused handling and CoreFn.Desugar's dropping of
+-- App-to-Unused). Arity computed from the type signature has to skip these
+-- constraints too, to stay consistent with CoreFn's actual (reduced) shape.
+isEmptyClassConstraint :: E.Environment -> Constraint a -> Bool
+isEmptyClassConstraint env con =
+  maybe False typeClassIsEmpty $ M.lookup (constraintClass con) (E.typeClasses env)
 
 data CodegenEnvironment = CodegenEnvironment E.Environment (M.Map (Qualified Ident) FnArity)
 
@@ -176,7 +185,7 @@ buildCodegenEnvironment env = CodegenEnvironment env explicitArities
         t' = fromRight t $ replaceAllTypeSynonyms' (E.typeSynonyms env) (E.types env) t
 
         go n = \case
-          ConstrainedType _ _ ty -> go (n + 1) ty
+          ConstrainedType _ con ty -> go (if isEmptyClassConstraint env con then n else n + 1) ty
           ForAll _ _ _ _ ty _ -> go n ty
           other -> (n, go' other)
         go' = \case

@@ -108,6 +108,12 @@ moduleToCoreFn env (A.Module modSS coms mn decls (Just exps)) =
     Abs (ss, com, Nothing) name (exprToCoreFn ss [] Nothing v)
   exprToCoreFn _ _ _ (A.Abs _ _) =
     internalError "Abs with Binder argument was not desugared before exprToCoreFn mn"
+  -- An empty-class dict argument's value is never actually read (see
+  -- Entailment's Unused handling), so drop the application entirely instead
+  -- of applying to a synthesized `undefined` -- this reduces the compiled
+  -- function's real arity rather than just making the dict value trivial.
+  exprToCoreFn ss com _ (A.App v1 (A.Unused _)) =
+    exprToCoreFn ss com Nothing v1
   exprToCoreFn ss com _ (A.App v1 v2) =
     App (ss, com, (isDictCtor v1 || isSynthetic v2) `orEmpty` IsSyntheticApp) v1' v2'
     where
