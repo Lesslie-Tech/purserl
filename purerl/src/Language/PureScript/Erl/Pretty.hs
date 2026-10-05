@@ -207,12 +207,22 @@ renderBinRight ind op r
   | rank r < binOpRank op = render ind r
   | otherwise = "(" <> render ind r <> ")"
 
+-- | Render `e` as a bit-syntax segment value inside a `<<...>>` literal.
+-- Erlang's bin_element grammar only accepts an expr_max there, a stricter
+-- rule than ordinary operand nesting: a bare function call is rejected even
+-- though it's an unambiguous operand anywhere else (hand-verified against
+-- erlc: `<<maps:get(k, M)/binary>>` is a syntax error,
+-- `<<(maps:get(k, M))/binary>>` is accepted). Always wrapping here is always
+-- correct, just occasionally one pair of parens more than strictly needed.
+renderBinSegmentValue :: Int -> Erl -> Builder
+renderBinSegmentValue ind e = "(" <> render ind e <> ")"
+
 renderBinary :: Int -> BinaryOperator -> Erl -> Erl -> Builder
 renderBinary ind op l r =
   let lft = renderBinLeft ind op l
       rgt = renderBinRight ind op r
   in case op of
-       BinaryConcat -> "<< <<" <> lft <> "/binary>>/binary, <<" <> rgt <> "/binary>> /binary>>"
+       BinaryConcat -> "<< <<" <> renderBinSegmentValue ind l <> "/binary>>/binary, <<" <> renderBinSegmentValue ind r <> "/binary>> /binary>>"
        ArrayConcat -> "(data_semigroup@foreign:concatArray(" <> lft <> "," <> rgt <> "))"
        FRemainder -> "(math@foreign:remainder(" <> lft <> "," <> rgt <> "))"
        _ -> "(" <> lft <> " " <> binOpText op <> " " <> rgt <> ")"
@@ -233,7 +243,7 @@ renderCallee ind val
   | otherwise = "(" <> render ind val <> ")"
 
 renderApp :: Int -> Erl -> [Erl] -> Builder
-renderApp ind val args = "(" <> renderCallee ind val <> "(" <> commaSep ind args <> "))"
+renderApp ind val args = renderCallee ind val <> "(" <> commaSep ind args <> ")"
 
 --------------------------------------------------------------------------------
 -- Main render
@@ -265,15 +275,15 @@ render ind = go
 
   go (EMapLiteral elts) =
     let ci = sp (ind + 2)
-    in "#{" <> mintercalate (",\n" <> ci) (map (\(k, e) -> B.fromText (runAtom k) <> "=>" <> go e) elts) <> "}"
+    in "#{" <> mintercalate (",\n" <> ci) (map (\(k, e) -> B.fromText (runAtom k) <> " => " <> go e) elts) <> "}"
 
   go (EMapPattern elts) =
-    "#{" <> mintercalate ", " (map (\(k, e) -> B.fromText (runAtom k) <> ":=" <> go e) elts) <> "}"
+    "#{" <> mintercalate ", " (map (\(k, e) -> B.fromText (runAtom k) <> " := " <> go e) elts) <> "}"
 
   go (EMapUpdate e elts) =
     "(" <> go e <> ")" <> "#{" <> mintercalate ", " (map (\(k, ee) -> B.fromText (runAtom k) <> "=>" <> go ee) elts) <> "}"
 
-  go (EArrayLiteral es) = "(array:from_list([" <> commaSep ind es <> "]))"
+  go (EArrayLiteral es) = "array:from_list([" <> commaSep ind es <> "])"
 
   go (EListLiteral es) = "[" <> commaSep ind es <> "]"
 
@@ -325,7 +335,7 @@ render ind = go
     "case " <> go e <> " of\n" <> mintercalate ";\n" (map prettyPrintBinder binders) <> "\n" <> sp ind <> "end"
     where
       prettyPrintBinder (EBinder eb, e') =
-        sp (ind + 2) <> "(" <> render (ind + 2) eb <> ") ->\n"
+        sp (ind + 2) <> render (ind + 2) eb <> " ->\n"
         <> sp (ind + 4) <> render (ind + 4) e'
 
   go (EAttribute name text) = case (decodeString name, decodeString text) of
