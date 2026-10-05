@@ -258,7 +258,7 @@ make ma@MakeActions{..} ms = do
   (buildPlan, newCacheDb) <- BuildPlan.construct2 ma cacheDb (sorted, graph)
   end3 <- realTime
   progress $ CompileMeta ("### CS.doneConstructBuildPlan10 " <> diffTime st3 end3)
-  progress $ CompileMeta "### CS.goFork11"
+  stFork <- realTime
 
   capabilities <- getNumCapabilities
   let concurrency = max 1 capabilities
@@ -372,6 +372,9 @@ make ma@MakeActions{..} ms = do
       -- collectResults).
       `onException` BuildPlan.markCompleteImmediate ma buildPlan (getModuleName . CST.resPartial $ m) Nothing (BuildJobFailed mempty)
 
+  endFork <- realTime
+  progress $ CompileMeta ("### CS.doneFork11 " <> diffTime stFork endFork)
+
   -- progress $ CompileMeta (T.pack $ show ("-- DR.5", "all solo modules done, pre collection"))
   externs <- traverse tryReadMVar $ M.elems $ BuildPlan.bpExterns buildPlan
   -- progress $ CompileMeta (T.pack $ show ("-- DR.5", "all solo modules done, counts", length (filter ((==) Nothing) externs), "/", length externs, "unchanged"))
@@ -476,7 +479,7 @@ make ma@MakeActions{..} ms = do
 
   buildModule :: QSem -> BuildPlan -> ModuleName -> Int -> Maybe ExternsFile -> M.Map ModuleName (MultipleErrors, ExternsFile) -> RecompileReason -> FilePath -> [CST.ParserWarning] -> Either (NEL.NonEmpty CST.ParserError) Module -> [ModuleName] -> Make ()
   buildModule lock buildPlan moduleName cnt oldExts results recompileReason fp pwarnings mres deps = do
-    progress $ CompileMeta ("### CS.goParse12[" <> runModuleName moduleName <> "]")
+    stParse <- realTime
 
     -- Phase A: parse, then typecheck through ffiCodegen -- i.e. everything
     -- needed to know this module's ExternsFile. Published via
@@ -513,6 +516,8 @@ make ma@MakeActions{..} ms = do
       -- so it can be picked up by another waiting module instead of being
       -- held for the whole of our codegen too.
       (checkResult, warningsA) <- bracket_ (C.waitQSem lock) (C.signalQSem lock) $ do
+          endParse <- realTime
+          progress $ CompileMeta ("### CS.doneParse12[" <> runModuleName moduleName <> "] " <> diffTime stParse endParse)
           -- Eventlog markers for profiling; see debug/eventlog.js
           liftBase $ traceMarkerIO $ T.unpack (runModuleName moduleName) <> " typecheck start"
           (checkResult, warningsA) <- listen $
