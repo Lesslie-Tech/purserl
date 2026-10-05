@@ -88,10 +88,9 @@ spec = context "Empty class dictionary elision" $ do
           , "useEmpty x = x"
           , "inferredUser x = useEmpty x"
           ]
-    compileAndFindBind Nothing src "inferredUser" $ \expr ->
-      case expr of
-        Abs _ _ (App _ _ _) -> pure ()
-        other -> expectationFailure $ "Expected a 1-argument function (Abs _ _ (App _ _ _)), got: " <> show other
+    compileAndFindBind Nothing src "inferredUser" $ \case
+      Abs _ _ (App _ _ _) -> pure ()
+      other -> expectationFailure $ "Expected a 1-argument function (Abs _ _ (App _ _ _)), got: " <> show other
 
   -- Regression test matching the exact shape that broke `Partial.Unsafe`'s
   -- `_unsafePartial` FFI in pay-backend: an *anonymous* value (here, a
@@ -113,7 +112,6 @@ spec = context "Empty class dictionary elision" $ do
           , "useIt = discharge (\\y -> y)"
           ]
         ffiContent = "'dischargeImpl'(X) -> X.\n"
-    compileAndFindBind (Just ffiContent) src "useIt" $ \expr ->
-      case expr of
-        App _ _ (Abs _ _ (Var _ _)) -> pure ()
-        other -> expectationFailure $ "Expected the lambda argument to stay a 1-argument function (App _ _ (Abs _ _ (Var _ _))), got: " <> show other
+    compileAndFindBind (Just ffiContent) src "useIt" $ \case
+      App _ _ (Abs _ _ (Var _ _)) -> pure ()
+      other -> expectationFailure $ "Expected the lambda argument to stay a 1-argument function (App _ _ (Abs _ _ (Var _ _))), got: " <> show other

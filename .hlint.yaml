@@ -12,6 +12,11 @@
 # happy inlines into it via LINE pragmas, to hand-written style expectations.
 - ignore: {within: "Language.PureScript.CST.Parser"}
 
+# These modules' pattern synonym names deliberately mirror fully-qualified
+# PureScript identifiers (e.g. M_Prim_Ordering for Prim.Ordering), not Haskell
+# naming convention -- the underscores are the point, not a style slip.
+- ignore: {name: "Use camelCase", within: ["Language.PureScript.Constants.Libs", "Language.PureScript.Constants.Prim"]}
+
 # Warnings currently triggered by your code
 - ignore: {name: "Redundant do"}
 - ignore: {name: "Use newtype instead of data"}
