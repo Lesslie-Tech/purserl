@@ -475,9 +475,17 @@ inlineCommonFnsM _expander =
       [ inlineNonClassFunction3 ("maybe@ps", "maybe") $ \x f -> inlineMaybe x (\z -> EApp RegularApp f [z]),
         inlineNonClassFunction3 ("maybe@ps", "maybe'") $ \fx f -> inlineMaybe (applyUnit fx) (\z -> EApp RegularApp f [z]),
         inlineNonClassFunction ("maybe@ps", "withDefault") $ \x -> inlineMaybe x id,
+        inlineNonClassFunction ("maybe@ps", "map") $ \f ->
+          inlineMaybe
+            (ETupleLiteral [EAtomLiteral (Atom Nothing "nothing")])
+            (\z -> ETupleLiteral [EAtomLiteral (Atom Nothing "just"), EApp RegularApp f [z]]),
         inlineNonClassFunction3 ("either@ps", "either") $ \l r -> inlineEither (\z -> EApp RegularApp l [z]) (\z -> EApp RegularApp r [z]),
         inlineNonClassFunction ("either@ps", "fromLeft") $ \r -> inlineEither id (const r),
-        inlineNonClassFunction ("either@ps", "fromRight") $ \l -> inlineEither (const l) id
+        inlineNonClassFunction ("either@ps", "fromRight") $ \l -> inlineEither (const l) id,
+        inlineNonClassFunction ("either@ps", "map") $ \f ->
+          inlineEither
+            (\l -> ETupleLiteral [EAtomLiteral (Atom Nothing "left"), l])
+            (\r -> ETupleLiteral [EAtomLiteral (Atom Nothing "right"), EApp RegularApp f [r]])
       ]
   where
     applyUnit (EFun1 _ x e)
@@ -538,8 +546,16 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         inlineNonClassUnaryFunction ("list@ps", "reverse") $ \x -> EApp RegularApp erlangListsReverse [x],
         inlineNonClassUnaryFunction ("list@ps", "concat") $ \x -> EApp RegularApp erlangListsAppend1 [x],
         inlineNonClassUnaryFunction ("list@ps", "unsafeHead") $ \x -> EApp RegularApp erlangHd [x],
+        inlineNonClassFunction ("list@ps", "map") $ \f xs -> EApp RegularApp erlangListsMap [f, xs],
         inlineArrayFromList,
         inlineNonClassUnaryFunction ("array@ps", "size") $ \x -> EApp RegularApp erlangArraySize [x],
+        -- `Array.map`/`Array.mapWithIndex`'s own FFI already wraps `F` in an
+        -- adapter closure to match `array:map/2`'s (Index, Elem) -> Elem shape;
+        -- build that same adapter inline instead of calling through the FFI hop.
+        inlineNonClassFunction ("array@ps", "map") $ \f arr ->
+          EApp RegularApp erlangArrayMap [EFunN Nothing ["_", "_X@arrMap"] (EApp RegularApp f [EVar "_X@arrMap"]), arr],
+        inlineNonClassFunction ("array@ps", "mapWithIndex") $ \f arr ->
+          EApp RegularApp erlangArrayMap [EFunN Nothing ["_I@arrMap", "_X@arrMap"] (EApp RegularApp (EApp RegularApp f [EVar "_I@arrMap"]) [EVar "_X@arrMap"]), arr],
         inlineNonClassUnaryFunction ("map@ps", "isEmpty") $ \x -> EBinary EqualTo (EMapLiteral []) x,
         inlineNonClassUnaryFunction ("map@ps", "isNotEmpty") $ \x -> EBinary NotEqualTo (EMapLiteral []) x,
         inlineNonClassFunction ("map@ps", "member") $ \k m -> EApp RegularApp erlangMapsIsKey [k, m],
@@ -547,10 +563,22 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         inlineNonClassUnaryFunction ("map@ps", "keys") $ \m -> EApp RegularApp erlangMapsKeys [m],
         inlineNonClassUnaryFunction ("map@ps", "values") $ \m -> EApp RegularApp erlangMapsValues [m],
         inlineNonClassUnaryFunction ("map@ps", "size") $ \m -> EApp RegularApp erlangMapsSize [m],
+        inlineNonClassFunction ("map@ps", "mapWithIndex") $ \f m ->
+          EApp RegularApp erlangMapsMap [EFunN Nothing ["_K@mapMap", "_V@mapMap"] (EApp RegularApp (EApp RegularApp f [EVar "_K@mapMap"]) [EVar "_V@mapMap"]), m],
+        inlineNonClassFunction3 ("map@ps", "insert") $ \k v m -> EApp RegularApp erlangMapsPut [k, v, m],
+        inlineNonClassFunction3 ("map@ps", "unsafeUpdate") $ \k v m -> EApp RegularApp erlangMapsUpdate [k, v, m],
+        -- Note: argument order swap preserved from Map's own FFI -- erlang's
+        -- maps:merge/2 is right-biased, but Map.union is left-biased.
+        inlineNonClassFunction ("map@ps", "union") $ \m1 m2 -> EApp RegularApp erlangMapsMerge [m2, m1],
         inlineArrayToList,
         inlineErlAtom,
         unaryFn (effectModule, edFunctor) functorVoid id,
         inlineNonClassUnaryFunction (EC.unsafeCoerceMod, EC.unsafeCoerce) id,
+        inlineNonClassUnaryFunction (EC.unsafeMod, EC.cast) id,
+        inlineNonClassUnaryFunction (EC.foreignMod, EC.cast) id,
+        inlineNonClassUnaryFunction (EC.foreignMod, EC.unsafeToForeign) id,
+        inlineNonClassUnaryFunction (EC.foreignMod, EC.unsafeFromForeign) id,
+        inlineNonClassUnaryFunction (EC.effectUnsafe, EC.unsafePerformEffect) $ \x -> EApp RegularApp x [],
         inlineNonClassUnaryFunction ("int@ps", "toNumber") $ \x -> EApp RegularApp erlangFloat [x],
         unaryUndefTCFn (EC.safeCoerceMod, EC.coerce) id,
         unaryUndefTCFn (EC.dataNewtype, EC.unwrap) id,
@@ -599,6 +627,14 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         convert :: Erl -> Erl
         convert (EApp _ (EApp _ op' [x]) [y]) | isModFn modFn op' = f x y
         convert (EApp _ op' [x, y]) | isUncurriedFn' modFn op' = f x y
+        convert other = other
+
+    inlineNonClassFunction3 :: (Text, Text) -> (Erl -> Erl -> Erl -> Erl) -> Erl -> Erl
+    inlineNonClassFunction3 modFn f = convert
+      where
+        convert :: Erl -> Erl
+        convert (EApp _ (EApp _ (EApp _ op' [x]) [y]) [z]) | isModFn modFn op' = f x y z
+        convert (EApp _ op' [x, y, z]) | isUncurriedFn' modFn op' = f x y z
         convert other = other
 
     inlineNonClassUnaryFunction :: (Text, Text) -> (Erl -> Erl) -> Erl -> Erl
@@ -978,3 +1014,21 @@ erlangMapsValues = EAtomLiteral (Atom (Just "maps") "values")
 
 erlangMapsSize :: Erl
 erlangMapsSize = EAtomLiteral (Atom (Just "maps") "size")
+
+erlangMapsPut :: Erl
+erlangMapsPut = EAtomLiteral (Atom (Just "maps") "put")
+
+erlangMapsUpdate :: Erl
+erlangMapsUpdate = EAtomLiteral (Atom (Just "maps") "update")
+
+erlangMapsMerge :: Erl
+erlangMapsMerge = EAtomLiteral (Atom (Just "maps") "merge")
+
+erlangMapsMap :: Erl
+erlangMapsMap = EAtomLiteral (Atom (Just "maps") "map")
+
+erlangListsMap :: Erl
+erlangListsMap = EAtomLiteral (Atom (Just "lists") "map")
+
+erlangArrayMap :: Erl
+erlangArrayMap = EAtomLiteral (Atom (Just "array") "map")

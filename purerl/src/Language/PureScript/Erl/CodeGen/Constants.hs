@@ -88,6 +88,17 @@ safeCoerceMod = "safe_coerce@ps"
 dataNewtype :: forall a. (IsString a) => a
 dataNewtype = "data_newtype@ps"
 
+-- Local (non-stdlib) modules
+
+unsafeMod :: forall a. (IsString a) => a
+unsafeMod = "unsafe@ps"
+
+foreignMod :: forall a. (IsString a) => a
+foreignMod = "foreign@ps"
+
+effectUnsafe :: forall a. (IsString a) => a
+effectUnsafe = "effect_unsafe@ps"
+
 -- Value names
 
 atom :: forall a. (IsString a) => a
@@ -107,6 +118,18 @@ max = "max"
 
 unsafeCoerce :: forall a. (IsString a) => a
 unsafeCoerce = "unsafeCoerce"
+
+cast :: forall a. (IsString a) => a
+cast = "cast"
+
+unsafeToForeign :: forall a. (IsString a) => a
+unsafeToForeign = "unsafeToForeign"
+
+unsafeFromForeign :: forall a. (IsString a) => a
+unsafeFromForeign = "unsafeFromForeign"
+
+unsafePerformEffect :: forall a. (IsString a) => a
+unsafePerformEffect = "unsafePerformEffect"
 
 coerce :: forall a. (IsString a) => a
 coerce = "coerce"
