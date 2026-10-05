@@ -268,7 +268,7 @@ translateBacktrace modu foreignIdents binds =
               , Literal ann
                 (ObjectLiteral
                   [ ("?MODULE", erl "?MODULE")
-                  , ("?FILE", erl "erlang:list_to_binary(?FILE)")
+                  , ("?FILE", erl "?FILE")
                   , ("?LINE", erl "?LINE")
                   , ("?FUNCTION_NAME", erl "?FUNCTION_NAME")
                   , ("?FUNCTION_ARITY", erl "?FUNCTION_ARITY")
