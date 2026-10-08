@@ -28,7 +28,7 @@ import Data.Text (Text, uncons, cons, singleton, all, pack, singleton)
 import qualified Data.Text as T
 import Data.Word (Word16)
 import Language.PureScript.Names
-    ( ModuleName(..), Ident (InternalIdent), runIdent, InternalIdentData (RuntimeLazyFactory, Lazy) )
+    ( ModuleName(..), Ident, runIdent )
 import Language.PureScript.PSString
     ( PSString, decodeStringEither, toUTF16CodeUnits )
 import Numeric ( showHex )
@@ -157,11 +157,7 @@ identToVar :: Ident -> Text
 identToVar = toVarName . runIdent'
 
 runIdent' :: Ident -> Text
-runIdent' = \case
-  InternalIdent RuntimeLazyFactory -> "@runtime_lazy"
-  InternalIdent (Lazy name) -> "_@lazy@" <> name
-  -- TODO may be prettier to directly munge these
-  other -> runIdent other
+runIdent' = runIdent
   
 -- |
 -- Checks whether an identifier name is reserved in Erlang.
