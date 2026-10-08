@@ -230,6 +230,42 @@ missingAlternative env mn ca uncovered
   mcases = missingCases env mn uncovered ca
 
 -- |
+-- Turns the final (uncovered, (necessary, redundant)) state of either
+-- `checkExhaustive` or `checkExhaustiveSingle` into warnings/a `Partial`
+-- constraint, exactly as `checkExhaustive` always has. Shared so both
+-- algorithms produce identical diagnostics.
+--
+buildExhaustiveResult
+  :: SourceSpan
+  -> Expr
+  -> ([[Binder]], (Either RedundancyError Bool, [[Binder]]))
+  -> Check Expr
+buildExhaustiveResult ss expr (bss, (rr, bss')) =
+  do unless (null bss') tellRedundant
+     case rr of
+       Left Incomplete -> tellIncomplete
+       _ -> return ()
+     return $ if null bss
+       then expr
+       else addPartialConstraint (second null (splitAt 5 bss)) expr
+  where
+    tellRedundant = tell . errorMessage' ss . uncurry OverlappingPattern . second null . splitAt 5 $ bss'
+    tellIncomplete = tell . errorMessage' ss $ IncompleteExhaustivityCheck
+
+    -- We add a Partial constraint by annotating the expression to have type `Partial => _`.
+    --
+    -- The binder information is provided so that it can be embedded in the constraint,
+    -- and then included in the error message.
+    addPartialConstraint :: ([[Binder]], Bool) -> Expr -> Expr
+    addPartialConstraint (bss2, complete) e =
+      TypedValue True e $
+        srcConstrainedType (srcConstraint C.Partial [] [] (Just constraintData)) $ TypeWildcard NullSourceAnn IgnoredWildcard
+      where
+        constraintData :: ConstraintData
+        constraintData =
+          PartialConstraintData (map (map prettyPrintBinderAtom) bss2) complete
+
+-- |
 -- Main exhaustivity checking function
 -- Starting with the set `uncovered = { _ }` (nothing covered, one `_` for each function argument),
 -- it partitions that set with the new uncovered cases, until it consumes the whole set of clauses.
@@ -243,7 +279,7 @@ checkExhaustive
   -> [CaseAlternative]
   -> Expr
   -> Check Expr
-checkExhaustive ss env mn numArgs cas expr = makeResult . first ordNub $ foldl' step ([initialize numArgs], (pure True, [])) cas
+checkExhaustive ss env mn numArgs cas expr = buildExhaustiveResult ss expr . first ordNub $ foldl' step ([initialize numArgs], (pure True, [])) cas
   where
   step :: ([[Binder]], (Either RedundancyError Bool, [[Binder]])) -> CaseAlternative -> ([[Binder]], (Either RedundancyError Bool, [[Binder]]))
   step (uncovered, (nec, redundant)) ca =
@@ -259,31 +295,170 @@ checkExhaustive ss env mn numArgs cas expr = makeResult . first ordNub $ foldl' 
                  )
        )
 
-  makeResult :: ([[Binder]], (Either RedundancyError Bool, [[Binder]])) -> Check Expr
-  makeResult (bss, (rr, bss')) =
-    do unless (null bss') tellRedundant
-       case rr of
-         Left Incomplete -> tellIncomplete
-         _ -> return ()
-       return $ if null bss
-         then expr
-         else addPartialConstraint (second null (splitAt 5 bss)) expr
-    where
-      tellRedundant = tell . errorMessage' ss . uncurry OverlappingPattern . second null . splitAt 5 $ bss'
-      tellIncomplete = tell . errorMessage' ss $ IncompleteExhaustivityCheck
+-- |
+-- Bucketed state for `checkExhaustiveSingle`: the uncovered set for a
+-- single-scrutinee match, partitioned by the constructor each remaining row
+-- is headed by (so that an alternative matching one constructor never has to
+-- look at, copy, or re-deduplicate any other constructor's rows). Before the
+-- first constructor pattern is seen, the scrutinee hasn't been split into its
+-- constructors yet (`bsExpanded = False`), matching `checkExhaustive`'s
+-- initial `[NullBinder]` state.
+--
+data BucketState = BucketState
+  { bsExpanded :: !Bool
+  , bsBuckets :: !(M.Map (Qualified (ProperName 'ConstructorName)) [Binder])
+  , bsTotalRows :: !Int
+  -- ^ sum of bucket sizes; meaningless while not bsExpanded (the implicit
+  -- single `NullBinder` row is handled specially wherever it matters).
+  }
 
-  -- We add a Partial constraint by annotating the expression to have type `Partial => _`.
-  --
-  -- The binder information is provided so that it can be embedded in the constraint,
-  -- and then included in the error message.
-  addPartialConstraint :: ([[Binder]], Bool) -> Expr -> Expr
-  addPartialConstraint (bss, complete) e =
-    TypedValue True e $
-      srcConstrainedType (srcConstraint C.Partial [] [] (Just constraintData)) $ TypeWildcard NullSourceAnn IgnoredWildcard
-    where
-      constraintData :: ConstraintData
-      constraintData =
-        PartialConstraintData (map (map prettyPrintBinderAtom) bss) complete
+exhaustivenessRowCap :: Int
+exhaustivenessRowCap = 10000
+
+-- |
+-- Fast-path exhaustiveness/redundancy check for a single-scrutinee `case`.
+--
+-- `checkExhaustive`'s general algorithm reprocesses the *entire* remaining
+-- uncovered set against every alternative (via `map (missingAlternative ...)
+-- uncovered` followed by a whole-list `ordNub`), even though a constructor
+-- pattern can only ever affect the single bucket of uncovered rows headed by
+-- that same constructor -- every other row is guaranteed to come back
+-- unchanged (see `missingCasesSingle`'s `ConstructorBinder`/`ConstructorBinder`
+-- `otherwise` case). For n alternatives that makes the general algorithm
+-- O(n^2), which is exactly the shape generated code for a large enum-like sum
+-- type has: one alternative per constructor, optionally followed by a
+-- wildcard (e.g. a `toString`/`fromString` pair over a many-hundred-
+-- constructor SNI/country-code-style type).
+--
+-- This computes the same thing -- using the exact same `missingCasesSingle`/
+-- `getConstructors`/`isExhaustiveGuard` primitives `checkExhaustive` uses, so
+-- any recursion into nested sub-patterns is unchanged -- but bucketed by
+-- constructor, so an alternative only ever touches the one bucket it can
+-- possibly affect. That makes it O(n) overall for the flat-enum shape above,
+-- while remaining exact (not an approximation) for anything else a single-
+-- scrutinee match can contain.
+--
+-- Returns Nothing if any alternative's binder (once `NamedBinder`/
+-- `PositionedBinder`/`TypedBinder` wrappers are stripped) isn't a bare
+-- `ConstructorBinder`/`NullBinder`/`VarBinder` -- e.g. a literal pattern --
+-- in which case the caller should fall back to `checkExhaustive`, which
+-- remains the source of truth for every other shape.
+--
+checkExhaustiveSingle
+  :: SourceSpan
+  -> Environment
+  -> ModuleName
+  -> [CaseAlternative]
+  -> Expr
+  -> Maybe (Check Expr)
+checkExhaustiveSingle ss env mn cas expr = do
+  (finalState, (nec, redundant)) <- foldl' step (Just (initialState, (pure True, []))) cas
+  pure $ buildExhaustiveResult ss expr (finalBss finalState, (nec, ordNub redundant))
+  where
+  initialState :: BucketState
+  initialState = BucketState { bsExpanded = False, bsBuckets = M.empty, bsTotalRows = 0 }
+
+  finalBss :: BucketState -> [[Binder]]
+  finalBss st
+    | bsExpanded st = map (:[]) . concat $ M.elems (bsBuckets st)
+    | otherwise = [[NullBinder]]
+
+  step
+    :: Maybe (BucketState, (Either RedundancyError Bool, [[Binder]]))
+    -> CaseAlternative
+    -> Maybe (BucketState, (Either RedundancyError Bool, [[Binder]]))
+  step acc ca = do
+    (st, (nec, redundant)) <- acc
+    caB <- case caseAlternativeBinders ca of
+      [b] -> Just (stripBinderHead b)
+      _ -> Nothing
+    let exhaustiveGuard = isExhaustiveGuard env mn (caseAlternativeResult ca)
+    (st', cond) <- case caB of
+      NullBinder -> Just (applyWildcard st exhaustiveGuard)
+      VarBinder _ _ -> Just (applyWildcard st exhaustiveGuard)
+      ConstructorBinder _ con _ -> Just (applyConstructor con caB st exhaustiveGuard)
+      _ -> Nothing
+    let (st'', capped) = capRows st'
+        nec' = if capped then Left Incomplete else liftA2 (&&) cond nec
+        redundant' = if and cond then redundant else caseAlternativeBinders ca : redundant
+    pure (st'', (nec', redundant'))
+
+  -- A wildcard/var alternative resolves every remaining row at once: per
+  -- `missingCasesSingle`'s `NullBinder`/`VarBinder`-as-second-argument
+  -- equations, *every* row (whatever shape it is) comes back as `([], Right
+  -- True)` when matched against a wildcard, regardless of the guard. Only
+  -- whether the rows actually get cleared depends on the guard, matching
+  -- `missingAlternative`'s `| otherwise = ([uncovered], snd mcases)`.
+  applyWildcard :: BucketState -> Bool -> (BucketState, Either RedundancyError Bool)
+  applyWildcard st exhaustiveGuard =
+    let priorTotal = if bsExpanded st then bsTotalRows st else 1
+        cond = if priorTotal == 0 then Right False else Right True
+        st' = if exhaustiveGuard then BucketState True M.empty 0 else st
+    in (st', cond)
+
+  applyConstructor
+    :: Qualified (ProperName 'ConstructorName)
+    -> Binder
+    -> BucketState
+    -> Bool
+    -> (BucketState, Either RedundancyError Bool)
+  applyConstructor con caB st exhaustiveGuard
+    | not (bsExpanded st) =
+        let ConstructorBinder ss0 _ _ = caB
+            allSiblings = getConstructors env mn con
+            seedOne (p, argTys) =
+              let candidate = ConstructorBinder ss0 (qualifyName p mn con) (initialize $ length argTys)
+              in (qualifyName p mn con, ordNub . fst $ missingCasesSingle env mn candidate caB)
+            buckets0 = M.fromListWith (++) (map seedOne allSiblings)
+            total0 = sum (map length (M.elems buckets0))
+            cond = Right True -- matches checkExhaustive's hardcoded `return True` for the NullBinder-origin row
+        in if exhaustiveGuard
+             then (BucketState True buckets0 total0, cond)
+             else (st, cond) -- guard not exhaustive: the scrutinee stays un-split, exactly like checkExhaustive's `[uncovered]`
+    | otherwise =
+        let rows = M.findWithDefault [] con (bsBuckets st)
+            (missed, prs) = unzip (map (\b -> missingCasesSingle env mn b caB) rows)
+            cond = or <$> sequenceA prs
+            newRows = ordNub (concat missed)
+        in if exhaustiveGuard
+             then
+               let bsBuckets' = M.insert con newRows (bsBuckets st)
+                   bsTotalRows' = bsTotalRows st - length rows + length newRows
+               in (st { bsBuckets = bsBuckets', bsTotalRows = bsTotalRows' }, cond)
+             else (st, cond)
+
+  -- Safety valve mirroring checkExhaustive's `splitAt 10000`: once the total
+  -- uncovered-row count would exceed the cap, truncate it (so this stays
+  -- bounded even for a sum type with more constructors than the cap) and
+  -- report this step as incomplete, same as the general algorithm does.
+  capRows :: BucketState -> (BucketState, Bool)
+  capRows st
+    | not (bsExpanded st) = (st, False)
+    | bsTotalRows st <= exhaustivenessRowCap = (st, False)
+    | otherwise =
+        let go (acc, n) (k, rs)
+              | n >= exhaustivenessRowCap = (acc, n)
+              | otherwise =
+                  let room = exhaustivenessRowCap - n
+                      rs' = take room rs
+                  in (M.insert k rs' acc, n + length rs')
+            (buckets', total') = foldl' go (M.empty, 0) (M.toList (bsBuckets st))
+        in (st { bsBuckets = buckets', bsTotalRows = total' }, True)
+
+-- |
+-- Strips the wrapper binders (`@`-patterns, source-position annotations,
+-- type annotations) a case alternative's binder may be wearing, to get at its
+-- head shape. Mirrors the stripping `missingCasesSingle` performs
+-- incrementally via its `NamedBinder`/`PositionedBinder`/`TypedBinder`
+-- equations (which only ever strip the alternative-side binder, never the
+-- uncovered-row side -- rows are always already headed by `NullBinder`,
+-- `VarBinder`, `ConstructorBinder`, or `LiteralBinder`).
+--
+stripBinderHead :: Binder -> Binder
+stripBinderHead (PositionedBinder _ _ b) = stripBinderHead b
+stripBinderHead (TypedBinder _ b) = stripBinderHead b
+stripBinderHead (NamedBinder _ _ b) = stripBinderHead b
+stripBinderHead b = b
 
 -- |
 -- Exhaustivity checking
@@ -300,7 +475,11 @@ checkExhaustiveExpr ss env mn = onExpr'
 
   onExpr :: Expr -> Check Expr
   onExpr e = case e of
+    Case [_] cas
+      | Just result <- checkExhaustiveSingle ss env mn cas e ->
+          result
     Case es cas ->
       checkExhaustive ss env mn (length es) cas e
     _ ->
       pure e
+
