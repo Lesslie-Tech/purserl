@@ -827,6 +827,20 @@ check' (Abs binder ret) ty@(TypeApp _ (TypeApp _ t argTy) retTy)
       ret' <- withBindingGroupVisible $ bindLocalVariables [(ss, arg, argTy, Defined)] $ check ret retTy
       return $ TypedValue' True (Abs (VarBinder ss arg) (tvToExpr ret')) ty
   | otherwise = internalError "Binder was not desugared"
+-- A desugared do-block: unify the result with the expected type before checking the
+-- continuation, so a mismatch is reported at the offending statement instead of the first one.
+check' (App (App f@(Var _ (Qualified _ (Ident "bind"))) val) lam@Abs{}) ret = do
+  f'@(TypedValue' _ _ ft) <- infer f
+  (ft1, app1) <- checkFunctionApplication (tvToExpr f') ft val
+  case ft1 of
+    TypeApp _ (TypeApp _ tyFn lamTy) retTy | tyFn == tyFunction -> do
+      elaborate <- subsumes retTy ret
+      lam' <- tvToExpr <$> check lam lamTy
+      return $ TypedValue' True (elaborate (App app1 lam')) ret
+    _ -> do
+      (retTy, app) <- checkFunctionApplication app1 ft1 lam
+      elaborate <- subsumes retTy ret
+      return $ TypedValue' True (elaborate app) ret
 check' (App f arg) ret = do
   f'@(TypedValue' _ _ ft) <- infer f
   (retTy, app) <- checkFunctionApplication (tvToExpr f') ft arg
