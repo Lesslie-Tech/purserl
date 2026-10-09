@@ -153,6 +153,3 @@ tuple = "tuple"
 
 semigroupList :: forall a. (IsString a) => a
 semigroupList = "semigroupList"
-
-discardUnit :: forall a. (IsString a) => a
-discardUnit = "discardUnit"

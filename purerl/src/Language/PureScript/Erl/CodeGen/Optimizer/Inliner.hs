@@ -585,7 +585,6 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         unaryUndefTCFn (EC.dataNewtype, EC.wrap) id,
         binaryUndefTC2Fn (EC.dataNewtype, EC.over) $ \_ x -> x,
         binaryUndefTC2Fn (EC.dataNewtype, EC.over2) $ \_ x -> x,
-        inlineDiscardUnit,
         onNFn expander,
         onTupleN
       ]
@@ -697,17 +696,6 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
 
     isModFn :: (Text, Text) -> Erl -> Bool
     isModFn = isFn
-
-    inlineDiscardUnit :: Erl -> Erl
-    inlineDiscardUnit = go
-      where
-        go eApp@EApp {} = case eApp of
-          (collect 2 . expander -> EApp meta fn [dict1, dict2])
-            | isDict (EC.controlBind, EC.discardUnit) dict1 && isFn (EC.controlBind, snd C.P_discard) fn ->
-              EApp meta controlBindBind [dict2]
-          _ -> eApp
-        go other = other
-        controlBindBind = EAtomLiteral (Atom (Just EC.controlBind) C.S_bind)
 
 binaryOps :: (Erl -> Erl) -> Erl -> Erl
 binaryOps expander = \case

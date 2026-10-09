@@ -30,20 +30,15 @@ pattern I_bindArray = Qualified (ByModuleName (ModuleName "Control.Bind")) (Iden
 pattern I_bind :: Qualified Ident
 pattern I_bind = Qualified (ByModuleName (ModuleName "Control.Bind")) (Ident "bind")
 
-pattern I_discard :: Qualified Ident
-pattern I_discard = Qualified (ByModuleName (ModuleName "Control.Bind")) (Ident "discard")
-
 pattern S_bind :: forall a. (Eq a, IsString a) => a
 pattern S_bind = "bind"
 
 pattern Discard :: Qualified (ProperName 'ClassName)
 pattern Discard = Qualified (ByModuleName (ModuleName "Control.Bind")) (ProperName "Discard")
 
-pattern S_discard :: forall a. (Eq a, IsString a) => a
-pattern S_discard = "discard"
-
-pattern P_discard :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_discard = (ModuleName "Control.Bind", "discard")
+-- Data.Unit
+pattern Unit :: Qualified (ProperName 'TypeName)
+pattern Unit = Qualified (ByModuleName (ModuleName "Data.Unit")) (ProperName "Unit")
 
 -- Control.Category
 pattern I_identity :: Qualified Ident
@@ -513,9 +508,6 @@ pattern I_eMap = Qualified (ByModuleName (ModuleName "E")) (Ident "map")
 
 pattern I_eBind :: Qualified Ident
 pattern I_eBind = Qualified (ByModuleName (ModuleName "E")) (Ident "bind")
-
-pattern I_eDiscard :: Qualified Ident
-pattern I_eDiscard = Qualified (ByModuleName (ModuleName "E")) (Ident "discard")
 
 -- Either
 pattern I_functorEither :: Qualified Ident

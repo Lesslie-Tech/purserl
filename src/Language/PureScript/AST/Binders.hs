@@ -64,6 +64,11 @@ data Binder
   -- A binder with a type annotation
   --
   | TypedBinder !SourceType !Binder
+  -- |
+  -- Wildcard binder for a discarded do-notation statement. Matches anything,
+  -- but the typechecker requires the matched value to be of type `Unit`.
+  --
+  | DiscardBinder !SourceSpan
   deriving (Show, Generic, NFData)
 
 -- Manual Eq and Ord instances for `Binder` were added on 2018-03-05. Comparing
@@ -94,6 +99,8 @@ instance Eq Binder where
     comments == comments' && b == b'
   (TypedBinder ty b) == (TypedBinder ty' b') =
     ty == ty' && b == b'
+  DiscardBinder _ == DiscardBinder _ =
+    True
   _ == _ = False
 
 instance Ord Binder where
@@ -130,6 +137,7 @@ instance Ord Binder where
         orderOf NamedBinder{} = 7
         orderOf PositionedBinder{} = 8
         orderOf TypedBinder{} = 9
+        orderOf DiscardBinder{} = 10
 
 -- |
 -- Collect all names introduced in binders in an expression
@@ -156,6 +164,7 @@ binderNamesWithSpans = go []
 
 isIrrefutable :: Binder -> Bool
 isIrrefutable NullBinder = True
+isIrrefutable (DiscardBinder _) = True
 isIrrefutable (VarBinder _ _) = True
 isIrrefutable (PositionedBinder _ _ b) = isIrrefutable b
 isIrrefutable (TypedBinder _ b) = isIrrefutable b

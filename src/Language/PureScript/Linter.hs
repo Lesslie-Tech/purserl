@@ -163,7 +163,7 @@ lintUnused (Module modSS _ mn modDecls exports) =
   thisModuleRef _ = False
 
   rebindable :: S.Set Ident
-  rebindable = S.fromList [ Ident C.S_bind, Ident C.S_discard ]
+  rebindable = S.fromList [ Ident C.S_bind ]
 
   getDeclIdent :: Declaration -> Maybe Ident
   getDeclIdent = getIdentName <=< declName

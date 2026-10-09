@@ -47,6 +47,7 @@ import Data.IntSet qualified as IS
 
 import Language.PureScript.AST
 import Language.PureScript.Crash (internalError)
+import Language.PureScript.Constants.Libs qualified as C
 import Language.PureScript.Environment
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors, SimpleErrorMessage(..), errorMessage, errorMessage', escalateWarningWhen, internalCompilerError, onErrorMessages, onTypesInErrorMessage, parU)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName, Name(..), ProperName(..), ProperNameType(..), Qualified(..), QualifiedBy(..), byMaybeModuleName, coerceProperName, freshIdent)
@@ -445,6 +446,12 @@ infer' (Accessor prop val) = withErrorMessageHint (ErrorCheckingAccessor val pro
   typed <- tvToExpr <$> check val (srcTypeApp tyRecord (srcRCons (Label prop) field rest))
   return $ TypedValue' True (Accessor prop typed) field
 infer' (Abs binder ret)
+  | DiscardBinder ss <- binder = do
+      ty <- freshTypeWithKind kindType
+      checkDiscarded ss ty
+      body@(TypedValue' _ _ bodyTy) <- withBindingGroupVisible $ infer' ret
+      (body', bodyTy') <- instantiatePolyTypeWithUnknowns (tvToExpr body) bodyTy
+      return $ TypedValue' True (Abs (VarBinder ss UnusedIdent) body') (function ty bodyTy')
   | VarBinder ss arg <- binder = do
       ty <- freshTypeWithKind kindType
       withBindingGroupVisible $ bindLocalVariables [(ss, arg, ty, Defined)] $ do
@@ -667,6 +674,14 @@ inferBinder _ BinaryNoParensBinder{} =
 inferBinder _ ParensInBinder{} =
   internalError "ParensInBinder should have been desugared before inferBinder"
 
+-- | A statement in a do block whose result is discarded must be of type
+-- `Unit`; otherwise report it as an implicitly discarded result.
+checkDiscarded :: SourceSpan -> SourceType -> Check ()
+checkDiscarded ss ty =
+  unifyTypes ty (srcTypeConstructor C.Unit) `catchError` \_ -> do
+    ty' <- gets (flip substituteType ty . checkSubstitution)
+    throwError . errorMessage' ss $ NoInstanceFound (srcConstraint C.Discard [] [ty'] Nothing) [] NoUnknowns
+
 -- | Returns true if a binder requires its argument type to be a monotype.
 -- | If this is the case, we need to instantiate any polymorphic types before checking binders.
 binderRequiresMonotype :: Binder -> Bool
@@ -802,6 +817,11 @@ check' (Literal ss (ArrayLiteral vals)) t@(TypeApp _ a ty) = do
   array <- Literal ss . ArrayLiteral . map tvToExpr <$> forM vals (`check` ty)
   return $ TypedValue' True array t
 check' (Abs binder ret) ty@(TypeApp _ (TypeApp _ t argTy) retTy)
+  | DiscardBinder ss <- binder = do
+      unifyTypes t tyFunction
+      checkDiscarded ss argTy
+      ret' <- withBindingGroupVisible $ check ret retTy
+      return $ TypedValue' True (Abs (VarBinder ss UnusedIdent) (tvToExpr ret')) ty
   | VarBinder ss arg <- binder = do
       unifyTypes t tyFunction
       ret' <- withBindingGroupVisible $ bindLocalVariables [(ss, arg, argTy, Defined)] $ check ret retTy

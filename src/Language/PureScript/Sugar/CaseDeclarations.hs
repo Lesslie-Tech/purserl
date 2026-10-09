@@ -312,6 +312,7 @@ desugarAbs = flip parU f
   replace :: Expr -> DesugarM Expr
   replace (Abs (stripPositioned -> (VarBinder ss i)) val) =
     pure (Abs (VarBinder ss i) val)
+  replace e@(Abs (stripPositioned -> DiscardBinder _) _) = pure e
   replace (Abs binder val) = do
     ident <- freshIdent'
     return $ Abs (VarBinder nullSourceSpan ident) $ Case [Var nullSourceSpan (Qualified ByNullSourcePos ident)] [CaseAlternative [binder] [MkUnguarded val]]

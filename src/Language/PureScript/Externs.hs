@@ -713,6 +713,7 @@ instance ToCS Binder () where
   toCS binder =
     case binder of
       NullBinder -> pure ()
+      DiscardBinder _ -> pure ()
       LiteralBinder _ literal -> toCS literal
       VarBinder _ _ -> pure ()
       ConstructorBinder _ ctorName binders -> do

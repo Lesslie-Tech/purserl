@@ -10,6 +10,7 @@ import TestAst qualified
 import TestCoreFn qualified
 import TestCst qualified
 import TestEmptyClassDictElision qualified
+import TestDiscard qualified
 import TestHierarchy qualified
 import TestIde qualified
 import TestMake qualified
@@ -31,5 +32,6 @@ main = do
     describe "unify" TestUnify.spec
     describe "corefn" TestCoreFn.spec
     describe "empty class dict elision" TestEmptyClassDictElision.spec
+    describe "discard" TestDiscard.spec
     describe "hierarchy" TestHierarchy.spec
     describe "graph" TestGraph.spec
