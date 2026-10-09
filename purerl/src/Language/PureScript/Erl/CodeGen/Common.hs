@@ -140,8 +140,8 @@ toVarName v = case uncons v of
   Nothing -> v
   where
     replaceChar '.' = "@_"
-    replaceChar '$' = "@dollar"
-    replaceChar '\'' = "@prime"
+    replaceChar '$' = "@"
+    replaceChar '\'' = "@p"
     replaceChar c | not (isLatin1 c) = "@x" <> hex 4 c
     replaceChar x = singleton x
 
