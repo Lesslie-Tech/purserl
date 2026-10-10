@@ -13,7 +13,7 @@ import Prelude
 import Control.Arrow (first, second)
 import Control.Monad (unless)
 import Control.Monad.Error.Class (throwError)
-import Control.Monad.State (StateT, evalStateT, get, modify)
+import Control.Monad.State (StateT, evalStateT, get, modify, lift)
 import Data.Graph (SCC(..), stronglyConnComp)
 import Data.List (find, partition)
 import Data.List.NonEmpty (nonEmpty)
@@ -216,7 +216,7 @@ desugarDecl mn exps = go
         | className == C.Coercible ->
           throwError . errorMessage' (safst sa) $ InvalidCoercibleInstanceDeclaration tys
         | otherwise -> do
-          desugared <- desugarCases members
+          desugared <- lift (desugarCases members)
           typeInstanceDictionaryDeclaration sa name' mn deps className tys desugared
       Left dict ->
         let

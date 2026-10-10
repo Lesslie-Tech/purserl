@@ -3,6 +3,7 @@ module Language.PureScript.Erl.CodeGen.Optimizer.Common where
 import Control.Arrow (second)
 import Control.Monad (when, (<=<))
 import Control.Monad.State (MonadState (..), State, StateT, evalStateT, gets, modify, put, runState)
+import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -129,10 +130,10 @@ replaceIdents unfilteredVars = go
 -- Rename bound vars in preparation for hoisting expression into a parent scope when the expression may bind same variables as a sibling
 -- Super restricted, only renames top level X = e bindings (possibly in a begin/end block) as this is what we generate
 -- For general code would have to go down
-renameBoundVars :: MonadSupply m => Erl -> m Erl
+renameBoundVars :: Erl -> Supply Erl
 renameBoundVars = (`evalStateT` []) . go
   where
-    go :: MonadSupply m => Erl -> StateT [(Text, Erl)] m Erl
+    go :: Erl -> StateT [(Text, Erl)] Supply Erl
     -- TODO[drathier]: this isn't quite general enough; we might EBind without it being an EVarBind.
     go (EVarBind x e) = do
       n <- fresh

@@ -9,7 +9,7 @@ module Language.PureScript.Erl.CodeGen.Optimizer (optimize) where
 
 import Prelude.Compat
 
-import Control.Monad.Supply.Class (MonadSupply)
+import Control.Monad.Supply (Supply)
 
 import Language.PureScript.Erl.CodeGen.AST
     ( everywhereOnErl, Erl(..), pattern EApp, Atom )
@@ -29,7 +29,7 @@ import Data.Function ((&))
 -- |
 -- Apply a series of optimizer passes to simplified Javascript code
 --
-optimize :: MonadSupply m => [(Atom, Int)] -> [Erl] -> m [Erl]
+optimize :: [(Atom, Int)] -> [Erl] -> Supply [Erl]
 -- optimize exports es = pure es
 -- optimize exports es = pure (Inliner.inline es)
 optimize exports es = do 

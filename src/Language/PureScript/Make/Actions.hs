@@ -412,8 +412,8 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
           True -> pure $ unsafePerformIO $ writeFile ("ast/" <> T.unpack (runModuleName mn) <> ".corefn.txt") (T.unpack $ T.replace ",Rec" ",\nRec" $ T.replace ",NonRec" ",\nNonRec" $ T.pack $ show m)
           False -> pure ()
 -}
-      optimized <- optimize exports rawErl
-      checked <- optimize checkedExports checkedRawErl
+      optimized <- SupplyT.liftSupply (optimize exports rawErl)
+      checked <- SupplyT.liftSupply (optimize checkedExports checkedRawErl)
 {-
       !_ <-
         case True of -- runModuleName mn == "Hex" of

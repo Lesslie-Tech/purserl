@@ -53,10 +53,9 @@ desugarCaseGuards declarations = parU declarations go
 -- series of nested case expressions.
 --
 desugarGuardedExprs
-  :: forall m. (MonadSupply m)
-  => SourceSpan
+  :: SourceSpan
   -> Expr
-  -> m Expr
+  -> SupplyT Make Expr
 desugarGuardedExprs ss (Case scrut alternatives)
   | not $ all isTrivialExpr scrut = do
     -- in case the scrutinee is non trivial (e.g. not a Var or Literal)
@@ -138,7 +137,7 @@ desugarGuardedExprs ss (Case scrut alternatives) =
     -- This might look strange but simplifies the algorithm a lot.
     --
     desugarAlternatives :: [CaseAlternative]
-                        -> m [CaseAlternative]
+                        -> SupplyT Make [CaseAlternative]
     desugarAlternatives [] = pure []
 
     -- the trivial case: no guards
@@ -161,7 +160,7 @@ desugarGuardedExprs ss (Case scrut alternatives) =
     desugarGuardedAlternative :: [Binder]
                               -> [GuardedExpr]
                               -> [CaseAlternative]
-                              -> m [CaseAlternative]
+                              -> SupplyT Make [CaseAlternative]
     desugarGuardedAlternative _vb [] rem_alts =
       desugarAlternatives rem_alts
 
@@ -216,7 +215,7 @@ desugarGuardedExprs ss (Case scrut alternatives) =
                         -> [GuardedExpr]
                         -> [CaseAlternative]
                         -> ((Int -> [CaseAlternative]) -> Expr)
-                        -> m Expr
+                        -> SupplyT Make Expr
     desugarAltOutOfLine alt_binder rem_guarded rem_alts mk_body
       | Just rem_case <- mkCaseOfRemainingGuardsAndAlts = do
 
@@ -324,15 +323,10 @@ stripPositioned binder = binder
 -- |
 -- Replace all top-level binders with case expressions.
 --
--- NB: called both from 'desugarCasesModule' at 'DesugarM' and from
--- "Language.PureScript.Sugar.TypeClasses"'s @desugarDecl@ at
--- @StateT MemberMap DesugarM@ -- genuinely dual-site, so this (and its
--- helpers 'toDecls'/'makeCaseDeclaration') must stay polymorphic.
-{-# SPECIALIZE desugarCases :: [Declaration] -> DesugarM [Declaration] #-}
-desugarCases :: forall m. (MonadSupply m, MonadError MultipleErrors m) => [Declaration] -> m [Declaration]
+desugarCases :: [Declaration] -> DesugarM [Declaration]
 desugarCases = desugarRest <=< fmap join . flip parU toDecls . groupBy inSameGroup
   where
-    desugarRest :: [Declaration] -> m [Declaration]
+    desugarRest :: [Declaration] -> DesugarM [Declaration]
     desugarRest (TypeInstanceDeclaration sa na cd idx name constraints className tys ds : rest) =
       (:) <$> (TypeInstanceDeclaration sa na cd idx name constraints className tys <$> traverseTypeInstanceBody desugarCases ds) <*> desugarRest rest
     desugarRest (ValueDecl sa name nameKind bs result : rest) =
@@ -349,14 +343,14 @@ inSameGroup :: Declaration -> Declaration -> Bool
 inSameGroup (ValueDeclaration vd1) (ValueDeclaration vd2) = valdeclIdent vd1 == valdeclIdent vd2
 inSameGroup _ _ = False
 
-toDecls :: forall m. (MonadSupply m, MonadError MultipleErrors m) => [Declaration] -> m [Declaration]
+toDecls :: [Declaration] -> DesugarM [Declaration]
 toDecls [ValueDecl sa@(SourceAnn ss _) ident nameKind bs [MkUnguarded val]] | all isIrrefutable bs = do
   args <- mapM fromVarBinder bs
   let body = foldr (Abs . VarBinder ss) val args
   unless (length (ordNub args) == length args) . throwError $ errorMessage' ss (OverlappingArgNames (Just ident))
   return [ValueDecl sa ident nameKind [] [MkUnguarded body]]
   where
-  fromVarBinder :: Binder -> m Ident
+  fromVarBinder :: Binder -> DesugarM Ident
   fromVarBinder NullBinder = freshIdent'
   fromVarBinder (VarBinder _ name) = return name
   fromVarBinder (PositionedBinder _ _ b) = fromVarBinder b
@@ -380,7 +374,7 @@ toTuple :: Declaration -> ([Binder], [GuardedExpr])
 toTuple (ValueDecl _ _ _ bs result) = (bs, result)
 toTuple _ = internalError "Not a value declaration"
 
-makeCaseDeclaration :: forall m. (MonadSupply m) => SourceSpan -> Ident -> [([Binder], [GuardedExpr])] -> m Declaration
+makeCaseDeclaration :: SourceSpan -> Ident -> [([Binder], [GuardedExpr])] -> DesugarM Declaration
 makeCaseDeclaration ss ident alternatives = do
   let namedArgs = map findName . fst <$> alternatives
       argNames = foldl1 resolveNames namedArgs
@@ -407,7 +401,7 @@ makeCaseDeclaration ss ident alternatives = do
   allUnique :: (Ord a) => [a] -> Bool
   allUnique xs = length xs == length (ordNub xs)
 
-  argName :: Maybe (SourceSpan, Ident) -> m (SourceSpan, Ident)
+  argName :: Maybe (SourceSpan, Ident) -> DesugarM (SourceSpan, Ident)
   argName (Just (ss', name)) = return (ss', name)
   argName _ = (nullSourceSpan, ) <$> freshIdent'
 

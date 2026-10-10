@@ -1,6 +1,6 @@
 module Language.PureScript.Erl.CodeGen.CheckedWrapper where
 {-
-import Control.Monad.Supply.Class (MonadSupply)
+import Control.Monad.Supply (Supply)
 import qualified Data.Text as T
 import Language.PureScript (ModuleName)
 import Language.PureScript.Erl.CodeGen.AST
@@ -14,7 +14,7 @@ data Path
   | PathRoot T.Text Int T.Text
   deriving (Show)
 
-typecheckWrapper :: forall m. (Monad m, MonadSupply m) => ModuleName -> Erl -> m [Erl]
+typecheckWrapper :: ModuleName -> Erl -> Supply [Erl]
 typecheckWrapper mn =
   \case
     EFunctionDef (Just (TFun [] _)) _ _ [] _ ->
@@ -51,7 +51,7 @@ typecheckWrapper mn =
             zipArgTypes (argName : rest) (TFun (argT : restT) rhs) = (argName, argT) : zipArgTypes rest (TFun restT rhs)
             zipArgTypes _ _ = error "unexpected arg to zipArgTypes"
 
-            typeArg :: Path -> (Erl, EType) -> m (Maybe [Erl])
+            typeArg :: Path -> (Erl, EType) -> Supply (Maybe [Erl])
             typeArg path (argName, argT) =
               -- fmap (EComment (T.pack $ show argName <> " :: " <> show argT) :) <$>
               case argT of

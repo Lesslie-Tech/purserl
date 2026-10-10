@@ -29,6 +29,10 @@ evalSupplyT n = fmap fst . runSupplyT n
 
 type Supply = SupplyT Identity
 
+-- | Run a pure 'Supply' computation inside any 'SupplyT', threading the counter.
+liftSupply :: Monad m => Supply a -> SupplyT m a
+liftSupply s = SupplyT (StateT (pure . flip runSupply s))
+
 runSupply :: Integer -> Supply a -> (a, Integer)
 runSupply n = runIdentity . runSupplyT n
 

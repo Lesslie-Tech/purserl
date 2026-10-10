@@ -16,6 +16,7 @@ import Control.Monad (foldM, replicateM, unless)
 import Control.Monad.Error.Class (MonadError (..))
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.Supply.Class (MonadSupply (fresh), bumpToNextRoundNumber)
+import Language.PureScript.Erl.Make.Monad (Make)
 import Control.Monad.Writer (MonadWriter (..), WriterT (runWriterT))
 import Data.Either (fromRight)
 import Data.Foldable (find, traverse_, foldl')
@@ -283,13 +284,15 @@ findArities mn decls (CodegenEnvironment _ explicitArities) foreignExports = Ari
 -- |
 -- Generate code in the simplified Erlang intermediate representation for all declarations in a
 -- module.
+type ErlM = P.SupplyT Make
+
+type ErlW = WriterT MultipleErrors ErlM
+
 moduleToErl ::
-  forall m.
-  (Monad m, MonadReader Options m, MonadSupply m, MonadError MultipleErrors m, MonadWriter MultipleErrors m) =>
   CodegenEnvironment ->
   Module Ann ->
   [(T.Text, Int)] ->
-  m ([(Atom, Int)], [Erl], [Erl], [Erl], [(Atom, Int)], [Erl]) -- , Map Atom Int)
+  ErlM ([(Atom, Int)], [Erl], [Erl], [Erl], [(Atom, Int)], [Erl]) -- , Map Atom Int)
 moduleToErl codegenEnv m@(Module _ _ mn _ _ _ _ _ _) foreignExports =
   rethrow (addHint (ErrorInModule mn)) $ do
     (res, warnings) <- runWriterT $ moduleToErl' codegenEnv m foreignExports
@@ -297,12 +300,10 @@ moduleToErl codegenEnv m@(Module _ _ mn _ _ _ _ _ _) foreignExports =
     pure res
 
 moduleToErl' ::
-  forall m.
-  (Monad m, MonadReader Options m, MonadSupply m, MonadError MultipleErrors m, MonadWriter MultipleErrors m) =>
   CodegenEnvironment ->
   Module Ann ->
   [(T.Text, Int)] ->
-  m ([(Atom, Int)], [Erl], [Erl], [Erl], [(Atom, Int)], [Erl]) -- , Map Atom Int)
+  ErlW ([(Atom, Int)], [Erl], [Erl], [Erl], [(Atom, Int)], [Erl]) -- , Map Atom Int)
 moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ declaredExports _ foreigns origDecls) foreignExports =
   do
     res <- traverse (\b ->
@@ -383,7 +384,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
 
 
     -- 're-export' foreign imports in the @ps module - also used for internal calls for non-exported foreign imports
-    reExportForeign :: Ident -> m ([(Atom, Int)], [Erl], Maybe (Ident, EType), ETypeEnv)
+    reExportForeign :: Ident -> ErlW ([(Atom, Int)], [Erl], Maybe (Ident, EType), ETypeEnv)
     reExportForeign ident = do
       let arity = exportArity ident
           fullArity = case M.lookup (Qualified (P.ByModuleName mn) ident) arities of
@@ -412,7 +413,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
     exportArity :: Ident -> Int
     exportArity ident = fromMaybe 0 $ findExport $ runIdent' ident
 
-    checkExport :: Ident -> m ()
+    checkExport :: Ident -> ErlW ()
     checkExport ident =
       case (findExport (runIdent' ident), M.lookup (Qualified (P.ByModuleName mn) ident) explicitArities) of
         -- TODO is it meaningful to check against inferred arities (as we are just now) or only explicit ones
@@ -457,12 +458,12 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
     effFnArity = uncurriedFnArity' EffFnXArity effectUncurried "EffectFn"
     fnArity = uncurriedFnArity' FnXArity dataFunctionUncurried "Fn"
 
-    topBindToErl :: (Bind Ann -> m ([(Atom, Int)], [Erl], ETypeEnv))
+    topBindToErl :: (Bind Ann -> ErlW ([(Atom, Int)], [Erl], ETypeEnv))
     topBindToErl = \case
       NonRec ann ident val -> topNonRecToErl ann ident val
       Rec vals -> concatRes <$> traverse (uncurry . uncurry $ topNonRecToErl) vals
 
-    topNonRecToErl :: Ann -> Ident -> Expr Ann -> m ([(Atom, Int)], [Erl], ETypeEnv)
+    topNonRecToErl :: Ann -> Ident -> Expr Ann -> ErlW ([(Atom, Int)], [Erl], ETypeEnv)
     topNonRecToErl (ss, _, _) ident val = do
       let eann@(_, _, meta') = extractAnn val
           ident' = case meta' of
@@ -472,7 +473,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
       val' <- ensureFreshVars_ val
       generateFunctionOverloads False (Just ss) eann ident ident' val' id
 
-    generateFunctionOverloads :: Bool -> Maybe SourceSpan -> Ann -> Ident -> Atom -> Expr Ann -> (Erl -> Erl) -> m ([(Atom, Int)], [Erl], ETypeEnv)
+    generateFunctionOverloads :: Bool -> Maybe SourceSpan -> Ann -> Ident -> Atom -> Expr Ann -> (Erl -> Erl) -> ErlW ([(Atom, Int)], [Erl], ETypeEnv)
     generateFunctionOverloads isForeign ss eann ident ident' val outerWrapper = do
       -- Always generate the plain curried form, f x y = ... -~~> f() -> fun (X) -> fun (Y) -> ... end end.
       let qident = Qualified (P.ByModuleName mn) ident
@@ -567,7 +568,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
           then (res1, res2, etypeEnv)
           else ([], res2, etypeEnv)
 
-    bindToErl :: Bind Ann -> m (Erl -> Erl)
+    bindToErl :: Bind Ann -> ErlW (Erl -> Erl)
     bindToErl bind =
       case bind of
         NonRec (ss,_,_) ident val -> do
@@ -613,15 +614,15 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
         Atom (Just $ atomModuleName mn' PureScriptModule) (runIdent' ident)
     qualifiedToTypeclassCtor (Qualified (P.BySourcePos  _) ident) = Atom Nothing (runIdent' ident)
 
-    valueToErl :: Expr Ann -> m Erl
+    valueToErl :: Expr Ann -> ErlW Erl
     valueToErl e = valueToErl' Nothing e
 
-    valueToErl' :: Maybe Ident -> Expr Ann -> m Erl
+    valueToErl' :: Maybe Ident -> Expr Ann -> ErlW Erl
     valueToErl' mIdent e =
       let (ss,_,_) =  extractAnn e in
       valueToErl'' ss mIdent e
 
-    valueToErl2 :: SourceSpan -> Maybe Ident -> Expr Ann -> m Erl
+    valueToErl2 :: SourceSpan -> Maybe Ident -> Expr Ann -> ErlW Erl
     valueToErl2 pss mIdent e =
       let
           (ss,_,_) = extractAnn e
@@ -631,7 +632,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
       in
       valueToErl'' ss2 mIdent e
 
-    valueToErl'' :: SourceSpan -> Maybe Ident -> Expr Ann -> m Erl
+    valueToErl'' :: SourceSpan -> Maybe Ident -> Expr Ann -> ErlW Erl
     valueToErl'' ann _ (Literal (pos, _, _) l) =
       rethrowWithPosition pos $ literalToValueErl l
     valueToErl'' ann _ (Var _ (Qualified (P.ByModuleName C.M_Prim) (Ident undef)))
@@ -752,7 +753,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
           caseToErlImpl
             :: [T.Text]
             -> [CaseAlternative Ann]
-            -> StateT DB m Erl
+            -> StateT DB ErlW Erl
           caseToErlImpl values branches = do
             branches2 <- branchesToErl branches
             pure $ ECaseOf (tupleWrap (map EVar values)) branches2
@@ -762,7 +763,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
               [a] -> a
               _ -> ETupleLiteral things
 
-          buildCont :: [CaseAlternative Ann] -> StateT DB m (Maybe T.Text)
+          buildCont :: [CaseAlternative Ann] -> StateT DB ErlW (Maybe T.Text)
           buildCont [] = pure Nothing
           buildCont branches = do
             db <- get
@@ -778,13 +779,13 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                 put ( db { contImpls = (contName, rest) : contImpls db } )
                 pure (Just contName)
 
-          pushArrayCont :: P.Text -> [Binder Ann] -> StateT DB m ()
+          pushArrayCont :: P.Text -> [Binder Ann] -> StateT DB ErlW ()
           pushArrayCont var binders = do
             db <- get
             put (db {arrayConts = (var,binders):arrayConts db})
             pure ()
 
-          popArrayCont :: P.Text -> [Binder Ann] -> StateT DB m (Maybe (T.Text, [Binder Ann]))
+          popArrayCont :: P.Text -> [Binder Ann] -> StateT DB ErlW (Maybe (T.Text, [Binder Ann]))
           popArrayCont var binders = do
             db <- get
             case arrayConts db of
@@ -793,13 +794,13 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                 put (db {arrayConts = rest})
                 pure (Just (var, binders))
 
-          takeArrayConts :: StateT DB m [(T.Text, [Binder Ann])]
+          takeArrayConts :: StateT DB ErlW [(T.Text, [Binder Ann])]
           takeArrayConts = do
             db <- get
             put (db {arrayConts = []})
             pure (arrayConts db)
 
-          branchesToErl :: [CaseAlternative Ann] -> StateT DB m [(EBinder, Erl)]
+          branchesToErl :: [CaseAlternative Ann] -> StateT DB ErlW [(EBinder, Erl)]
           branchesToErl branches =
             case branches of
               [] -> do
@@ -843,7 +844,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                           []
 
 
-          arrayGuardsToErl :: Maybe T.Text -> [(T.Text, [Binder Ann])] -> [(Erl, Erl)]-> StateT DB m Erl
+          arrayGuardsToErl :: Maybe T.Text -> [(T.Text, [Binder Ann])] -> [(Erl, Erl)]-> StateT DB ErlW Erl
           arrayGuardsToErl monGuardFailureCont arrayGuards normalGuards =
             case arrayGuards of
               [] -> guardsToErl monGuardFailureCont normalGuards
@@ -876,7 +877,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                     <> contBranch
                     )
 
-          guardsToErl :: Maybe T.Text -> [(Erl, Erl)] -> StateT DB m Erl
+          guardsToErl :: Maybe T.Text -> [(Erl, Erl)] -> StateT DB ErlW Erl
           guardsToErl Nothing [] = pure $ EVar "Unreachable-drathier-unreachble-empty-guards-without-continuation"
           guardsToErl (Just onGuardFailureCont) [] = pure $ EApp RegularApp (EVar onGuardFailureCont) []
           guardsToErl monGuardFailureCont ((guard, happy):restGuards) = do
@@ -899,7 +900,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                           )
                         ]
 
-          binderToErl :: Binder Ann -> StateT DB m Erl
+          binderToErl :: Binder Ann -> StateT DB ErlW Erl
           binderToErl binder =
             case binder of
               NullBinder _ -> pure $ EVar "_"
@@ -941,10 +942,10 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
 
     constructorLiteral name args = ETupleLiteral (EAtomLiteral (Atom Nothing (toAtomName name)) : args)
 
-    literalToValueErl :: Literal (Expr Ann) -> m Erl
+    literalToValueErl :: Literal (Expr Ann) -> ErlW Erl
     literalToValueErl = fmap fst . literalToValueErl' EMapLiteral (fmap (, []) . valueToErl)
 
-    literalToValueErl' :: Show a => ([(Atom, Erl)] -> Erl) -> (a -> m (Erl, [b])) -> Literal a -> m (Erl, [b])
+    literalToValueErl' :: Show a => ([(Atom, Erl)] -> Erl) -> (a -> ErlW (Erl, [b])) -> Literal a -> ErlW (Erl, [b])
     literalToValueErl' _ _ (NumericLiteral n) = pure (ENumericLiteral n, [])
     literalToValueErl' _ _ (StringLiteral s) = pure (EStringLiteral s, [])
     literalToValueErl' _ _ (CharLiteral c) = pure (ECharLiteral c , [])
@@ -958,7 +959,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
       pairs <- mapM (sndM f) ps
       pure (mapLiteral $ map (\(label, (e, _)) -> (AtomPS Nothing label, e)) pairs, concatMap (snd . snd) pairs)
 {-
-    bindersToErl :: [Erl] -> [CaseAlternative Ann] -> m ([Erl], [(EFunBinder, Erl)], [Erl])
+    bindersToErl :: [Erl] -> [CaseAlternative Ann] -> ErlW ([Erl], [(EFunBinder, Erl)], [Erl])
     bindersToErl vals cases = do
       let binderLengths = map (length . caseAlternativeBinders) cases
           maxBinders = maximum binderLengths
@@ -976,7 +977,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
 
       pure (concatMap (\(x, _, _) -> x) res, binders', arrayVars)
       where
-        caseToErl :: Int -> CaseAlternative Ann -> m ([Erl], [(EFunBinder, Erl)], [(Erl, Erl)])
+        caseToErl :: Int -> CaseAlternative Ann -> ErlW ([Erl], [(EFunBinder, Erl)], [(Erl, Erl)])
         caseToErl numBinders (CaseAlternative binders alt) = do
           let binders' = binders ++ replicate (numBinders - length binders) (NullBinder (nullSourceSpan, [], Nothing))
               vars = nub $ concatMap binderVars binders'
@@ -1012,10 +1013,10 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
 
           pure (es ++ binderBinds, res, binderVars)
 
-        mapMIndex :: Monad m => (Int -> a -> m b) -> [a] -> m [b]
+        mapMIndex :: Monad m => (Int -> a -> ErlW b) -> [a] -> ErlW [b]
         mapMIndex f xs = sequence $ zipWith f [0..] xs
 
-        guardToErl :: [Erl] -> (Expr Ann, Expr Ann) -> m ([Erl], (EFunBinder, Erl))
+        guardToErl :: [Erl] -> (Expr Ann, Expr Ann) -> ErlW ([Erl], (EFunBinder, Erl))
         guardToErl bs (ge, e) = do
           var <- freshNameErl' "GuardVar"
           ge' <- valueToErl2 ann Nothing ge
@@ -1048,7 +1049,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
     replaceBVars vars (NamedBinder a x b) = NamedBinder a (fromMaybe x $ lookup x vars) b
     replaceBVars _ z = z
 
-    binderToErl' :: Binder Ann -> m (Erl, [((EFunBinder, [Erl]) -> Erl, (T.Text, Erl))])
+    binderToErl' :: Binder Ann -> ErlW (Erl, [((EFunBinder, [Erl]) -> Erl, (T.Text, Erl))])
     binderToErl' (NullBinder _) = pure (EVar "_", [])
     binderToErl' (VarBinder _ ident) = pure (EVar $ identToVar ident, [])
     binderToErl' (LiteralBinder _ (ArrayLiteral es)) = do
@@ -1096,10 +1097,10 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
 
     ensureFreshVars_ = ensureFreshVars Set.empty M.empty
 
-    ensureFreshVars :: Set Ident -> Map Ident Ident -> Expr Ann -> m (Expr Ann)
+    ensureFreshVars :: Set Ident -> Map Ident Ident -> Expr Ann -> ErlW (Expr Ann)
     ensureFreshVars scope vars = go
       where
-        go :: Expr Ann -> m (Expr Ann)
+        go :: Expr Ann -> ErlW (Expr Ann)
         go expr = case expr of
           Literal ann lit ->
             Literal ann <$> case lit of
@@ -1134,7 +1135,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
             lowerIdent (Ident x) = Ident $ T.toLower x
             lowerIdent other = other
 
-        goBind :: (Set Ident, Map Ident Ident, [Bind Ann]) -> Bind Ann -> m (Set Ident, Map Ident Ident, [Bind Ann])
+        goBind :: (Set Ident, Map Ident Ident, [Bind Ann]) -> Bind Ann -> ErlW (Set Ident, Map Ident Ident, [Bind Ann])
         goBind (scope, vars, acc) = \case
           NonRec ann ident e -> do
             (ident', scope', vars') <- bindIdent scope vars ident

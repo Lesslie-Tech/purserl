@@ -15,6 +15,7 @@ module Language.PureScript.Erl.CodeGen.Optimizer.Inliner
   )
 where
 
+import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (fresh))
 import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
@@ -84,10 +85,10 @@ beginBinds = everywhereOnErl convert
 -- begin X1 = E1, ... Xn = En, F(X) end
 -- X /= Xi, X \notin FV(Ei)
 
-etaConvert :: MonadSupply m => Erl -> m Erl
+etaConvert :: Erl -> Supply Erl
 etaConvert = everywhereOnErlTopDownM convert
   where
-    convert :: MonadSupply m => Erl -> m Erl
+    convert :: Erl -> Supply Erl
     -- TODO ported from JS, but this seems to be beta-reduction and the iife below is eta...?
     convert (EApp _ (EFunN _ xs e) args)
       | all isEVar args,
@@ -468,7 +469,7 @@ data Binary
 
 data Unary = Unary (Text, PSString) (Text, PSString) UnaryOperator
 
-inlineCommonFnsM :: forall m. (Monad m, MonadSupply m) => (Erl -> Erl) -> Erl -> m Erl
+inlineCommonFnsM :: (Erl -> Erl) -> Erl -> Supply Erl
 inlineCommonFnsM _expander =
   everywhereOnErlTopDownM $
     applyAllM
@@ -515,18 +516,18 @@ inlineCommonFnsM _expander =
             (EBinder (ETupleLiteral [EAtomLiteral (Atom Nothing "just"), var]), f var)
           ]
 
-    inlineNonClassFunction3 :: (Text, Text) -> (Erl -> Erl -> Erl -> m Erl) -> Erl -> m Erl
+    inlineNonClassFunction3 :: (Text, Text) -> (Erl -> Erl -> Erl -> Supply Erl) -> Erl -> Supply Erl
     inlineNonClassFunction3 modFn f = convert
       where
-        convert :: Erl -> m Erl
+        convert :: Erl -> Supply Erl
         convert (EApp _ (EApp _ (EApp _ op' [x]) [y]) [z]) | isFn modFn op' = f x y z
         convert (EApp _ op' [x, y, z]) | isUncurriedFn' modFn op' = f x y z
         convert other = pure other
 
-    inlineNonClassFunction :: (Text, Text) -> (Erl -> Erl -> m Erl) -> Erl -> m Erl
+    inlineNonClassFunction :: (Text, Text) -> (Erl -> Erl -> Supply Erl) -> Erl -> Supply Erl
     inlineNonClassFunction modFn f = convert
       where
-        convert :: Erl -> m Erl
+        convert :: Erl -> Supply Erl
         convert (EApp _ (EApp _ op' [x]) [y]) | isFn modFn op' = f x y
         convert (EApp _ op' [x, y]) | isUncurriedFn' modFn op' = f x y
         convert other = pure other
