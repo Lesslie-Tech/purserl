@@ -23,7 +23,6 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment (NameKind(..))
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors(..), SimpleErrorMessage(..), addHint, errorMessage', parU, rethrow, withPosition)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident, Qualified(..), freshIdent', freshIdent)
-import Language.PureScript.TypeChecker.Monad (guardWith)
 import Language.PureScript.Sugar.Monad (DesugarM)
 import Control.Monad.Supply (SupplyT)
 import Language.PureScript.Make.Monad (Make)
@@ -354,7 +353,7 @@ toDecls :: forall m. (MonadSupply m, MonadError MultipleErrors m) => [Declaratio
 toDecls [ValueDecl sa@(SourceAnn ss _) ident nameKind bs [MkUnguarded val]] | all isIrrefutable bs = do
   args <- mapM fromVarBinder bs
   let body = foldr (Abs . VarBinder ss) val args
-  guardWith (errorMessage' ss (OverlappingArgNames (Just ident))) $ length (ordNub args) == length args
+  unless (length (ordNub args) == length args) . throwError $ errorMessage' ss (OverlappingArgNames (Just ident))
   return [ValueDecl sa ident nameKind [] [MkUnguarded body]]
   where
   fromVarBinder :: Binder -> m Ident

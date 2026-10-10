@@ -25,16 +25,14 @@ import Language.PureScript.TypeChecker.Monad (Check, CheckState(..))
 import Language.PureScript.Types (SkolemScope(..), SourceType, Type(..), everythingOnTypes, everywhereOnTypesM, replaceTypeVars)
 
 -- | Generate a new skolem constant
-{-# SPECIALIZE newSkolemConstant :: Check Int #-}
-newSkolemConstant :: MonadState CheckState m => m Int
+newSkolemConstant :: Check Int
 newSkolemConstant = do
   s <- gets checkNextSkolem
   modify $ \st -> st { checkNextSkolem = s + 1 }
   return s
 
 -- | Introduce skolem scope at every occurrence of a ForAll
-{-# SPECIALIZE introduceSkolemScope :: Type a -> Check (Type a) #-}
-introduceSkolemScope :: MonadState CheckState m => Type a -> m (Type a)
+introduceSkolemScope :: Type a -> Check (Type a)
 introduceSkolemScope t
   | not (getAny (everythingOnTypes (<>) needsScope t)) = return t
   | otherwise = everywhereOnTypesM go t
@@ -45,8 +43,7 @@ introduceSkolemScope t
   go other = return other
 
 -- | Generate a new skolem scope
-{-# SPECIALIZE newSkolemScope :: Check SkolemScope #-}
-newSkolemScope :: MonadState CheckState m => m SkolemScope
+newSkolemScope :: Check SkolemScope
 newSkolemScope = do
   s <- gets checkNextSkolemScope
   modify $ \st -> st { checkNextSkolemScope = s + 1 }

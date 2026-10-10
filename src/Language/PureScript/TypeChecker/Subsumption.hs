@@ -58,24 +58,20 @@ defaultCoercion SElaborate   = id
 defaultCoercion SNoElaborate = ()
 
 -- | Check that one type subsumes another, rethrowing errors to provide a better error message
-{-# SPECIALIZE subsumes :: SourceType -> SourceType -> Check (Expr -> Expr) #-}
 subsumes
-  :: (MonadError MultipleErrors m, MonadState CheckState m)
-  => SourceType
+  :: SourceType
   -> SourceType
-  -> m (Expr -> Expr)
+  -> Check (Expr -> Expr)
 subsumes ty1 ty2 =
   withErrorMessageHint (ErrorInSubsumption ty1 ty2) $
     subsumes' SElaborate ty1 ty2
 
 -- | Check that one type subsumes another
-{-# SPECIALIZE subsumes' :: ModeSing mode -> SourceType -> SourceType -> Check (Coercion mode) #-}
 subsumes'
-  :: (MonadError MultipleErrors m, MonadState CheckState m)
-  => ModeSing mode
+  :: ModeSing mode
   -> SourceType
   -> SourceType
-  -> m (Coercion mode)
+  -> Check (Coercion mode)
 subsumes' mode (ForAll _ _ ident mbK ty1 _) ty2 = do
   u <- maybe (internalCompilerError "Unelaborated forall") freshTypeWithKind mbK
   let replaced = replaceTypeVars ident u ty1

@@ -56,8 +56,7 @@ replaceAllTypeSynonyms' syns kinds = everywhereOnTypesTopDownM try
   lookupKindArgs ctor = fromMaybe [] $ fmap (fmap (fst . snd) . fst) . completeBinderList . fst =<< M.lookup ctor kinds
 
 -- | Replace fully applied type synonyms
-{-# SPECIALIZE replaceAllTypeSynonyms :: SourceType -> Check SourceType #-}
-replaceAllTypeSynonyms :: (e ~ MultipleErrors, MonadState CheckState m, MonadError e m) => SourceType -> m SourceType
+replaceAllTypeSynonyms :: SourceType -> Check SourceType
 replaceAllTypeSynonyms d = do
   env <- getEnv
   either throwError return $ replaceAllTypeSynonyms' (typeSynonyms env) (types env) d

@@ -12,6 +12,7 @@ import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify)
 import Control.Monad (forM_, guard, join, unless, when, (<=<))
 import Control.Exception (Exception, onException, throwIO, try)
+import System.IO.Unsafe (unsafePerformIO)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Strict (put)
 import Control.Monad.Supply (SupplyT(..))
@@ -38,10 +39,8 @@ import Language.PureScript.Types (Constraint(..), SourceType, Type(..), srcKinde
 import Language.PureScript.Make.Monad (Make)
 import Text.PrettyPrint.Boxes (render)
 
--- | Concrete monad for the real compiler's type checker. Kept separate from
--- 'TypeSearch', which runs shared type-checking logic (unification,
--- entailment) under a different, pure stack for IDE type search -- those
--- shared functions stay polymorphic and are 'SPECIALIZE'd for both.
+-- | The concrete monad of the type checker, also used (via 'runCheckPure') by
+-- IDE type search.
 --
 -- It is a single reader-over-IO monad with the checker state, the fresh name
 -- supply and the warnings kept in mutable references, because a stack of
@@ -143,6 +142,19 @@ runCheckInMake st (Check m) = do
   case res of
     Left (CheckFailure e) -> lift (throwError e)
     Right r -> SupplyT (put n') >> pure r
+
+-- | Run a 'Check' computation purely, for callers outside the build (IDE type
+-- search). The IORefs are private to the call, so this is referentially
+-- transparent.
+runCheckPure :: CheckState -> Check a -> Either MultipleErrors (a, CheckState)
+runCheckPure st (Check m) = unsafePerformIO $ do
+  stRef <- newIORef st
+  supplyRef <- newIORef 0
+  warningsRef <- newIORef mempty
+  try (m (CheckRefs stRef supplyRef warningsRef) >>= \a -> (,) a <$> readIORef stRef) >>= \case
+    Left (CheckFailure e) -> pure (Left e)
+    Right r -> pure (Right r)
+{-# NOINLINE runCheckPure #-}
 
 newtype UnkLevel = UnkLevel (NEL.NonEmpty Unknown)
   deriving (Eq, Show)
@@ -248,12 +260,10 @@ bindNames newNames action = do
   return a
 
 -- | Temporarily bind a collection of names to types
-{-# SPECIALIZE bindTypes :: M.Map (Qualified (ProperName 'TypeName)) (SourceType, TypeKind) -> Check a -> Check a #-}
 bindTypes
-  :: MonadState CheckState m
-  => M.Map (Qualified (ProperName 'TypeName)) (SourceType, TypeKind)
-  -> m a
-  -> m a
+  :: M.Map (Qualified (ProperName 'TypeName)) (SourceType, TypeKind)
+  -> Check a
+  -> Check a
 bindTypes newNames action = do
   orig <- get
   modify $ \st -> st { checkEnv = (checkEnv st) { types = newNames `mUnionLeftBiasRightLarger` (types . checkEnv $ st) } }
@@ -276,12 +286,10 @@ withScopedTypeVars mn ks ma = do
       tell . errorMessage $ ShadowedTypeVar name
   bindTypes (M.fromList (map (\(name, k) -> (Qualified (ByModuleName mn) (ProperName name), (k, ScopedTypeVar))) ks)) ma
 
-{-# SPECIALIZE withErrorMessageHint :: ErrorMessageHint -> Check a -> Check a #-}
 withErrorMessageHint
-  :: (MonadState CheckState m, MonadError MultipleErrors m)
-  => ErrorMessageHint
-  -> m a
-  -> m a
+  :: ErrorMessageHint
+  -> Check a
+  -> Check a
 withErrorMessageHint hint action = do
   orig <- get
   modify $ \st -> st { checkHints = hint : checkHints st }
@@ -292,8 +300,7 @@ withErrorMessageHint hint action = do
 
 -- | These hints are added at the front, so the most nested hint occurs
 -- at the front, but the simplifier assumes the reverse order.
-{-# SPECIALIZE getHints :: Check [ErrorMessageHint] #-}
-getHints :: MonadState CheckState m => m [ErrorMessageHint]
+getHints :: Check [ErrorMessageHint]
 getHints = gets (reverse . checkHints)
 
 rethrowWithPositionTC
@@ -329,10 +336,8 @@ withTypeClassDictionaries entries action = do
   return a
 
 -- | Get the currently available map of type class dictionaries
-{-# SPECIALIZE getTypeClassDictionaries :: Check (M.Map QualifiedBy (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict)))) #-}
 getTypeClassDictionaries
-  :: (MonadState CheckState m)
-  => m (M.Map QualifiedBy (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict))))
+  :: Check (M.Map QualifiedBy (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict))))
 getTypeClassDictionaries = gets $ typeClassDictionaries . checkEnv
 
 -- | Lookup type class dictionaries in a module.
@@ -357,13 +362,11 @@ bindLocalVariables bindings =
   bindNames (M.fromList $ flip map bindings $ \(ss, name, ty, visibility) -> (Qualified (BySourcePos $ spanStart ss) name, (ty, Private, visibility)))
 
 -- | Temporarily bind a collection of names to local type variables
-{-# SPECIALIZE bindLocalTypeVariables :: ModuleName -> [(ProperName 'TypeName, SourceType)] -> Check a -> Check a #-}
 bindLocalTypeVariables
-  :: (MonadState CheckState m)
-  => ModuleName
+  :: ModuleName
   -> [(ProperName 'TypeName, SourceType)]
-  -> m a
-  -> m a
+  -> Check a
+  -> Check a
 bindLocalTypeVariables moduleName bindings =
   bindTypes (M.fromList $ flip map bindings $ \(pn, kind) -> (Qualified (ByModuleName moduleName) pn, (kind, LocalTypeVariable)))
 
@@ -414,12 +417,10 @@ checkVisibility name@(Qualified _ var) = do
     _ -> return ()
 
 -- | Lookup the kind of a type by name in the @Environment@
-{-# SPECIALIZE lookupTypeVariable :: ModuleName -> Qualified (ProperName 'TypeName) -> Check SourceType #-}
 lookupTypeVariable
-  :: (e ~ MultipleErrors, MonadState CheckState m, MonadError e m)
-  => ModuleName
+  :: ModuleName
   -> Qualified (ProperName 'TypeName)
-  -> m SourceType
+  -> Check SourceType
 lookupTypeVariable currentModule (Qualified qb name) = do
   env <- getEnv
   case M.lookup (Qualified qb' name) (types env) of
@@ -431,13 +432,11 @@ lookupTypeVariable currentModule (Qualified qb name) = do
     BySourcePos _ -> currentModule
 
 -- | Get the current @Environment@
-{-# SPECIALIZE getEnv :: Check Environment #-}
-getEnv :: (MonadState CheckState m) => m Environment
+getEnv :: Check Environment
 getEnv = gets checkEnv
 
 -- | Get locally-bound names in context, to create an error message.
-{-# SPECIALIZE getLocalContext :: Check Context #-}
-getLocalContext :: MonadState CheckState m => m Context
+getLocalContext :: Check Context
 getLocalContext = do
   env <- getEnv
   return [ (ident, ty') | (Qualified (BySourcePos _) ident@Ident{}, (ty', _, Defined)) <- M.toList (names env) ]
@@ -450,13 +449,8 @@ putEnv env = modify (\s -> s { checkEnv = env })
 modifyEnv :: (Environment -> Environment) -> Check ()
 modifyEnv f = modify (\s -> s { checkEnv = f (checkEnv s) })
 
--- | Run a computation in the typechecking monad, failing with an error, or succeeding with a return value and the final @Environment@.
-runCheck :: (Functor m) => CheckState -> StateT CheckState m a -> m (a, Environment)
-runCheck st check = second checkEnv <$> runStateT check st
-
 -- | Make an assertion, failing with an error message
-{-# SPECIALIZE guardWith :: MultipleErrors -> Bool -> Check () #-}
-guardWith :: (MonadError e m) => e -> Bool -> m ()
+guardWith :: MultipleErrors -> Bool -> Check ()
 guardWith _ True = return ()
 guardWith e False = throwError e
 
@@ -484,11 +478,7 @@ withoutWarnings
   -> Check (a, MultipleErrors)
 withoutWarnings = censor (const mempty) . listen
 
-{-# SPECIALIZE unsafeCheckCurrentModule :: Check ModuleName #-}
-unsafeCheckCurrentModule
-  :: forall m
-   . (MonadError MultipleErrors m, MonadState CheckState m)
-  => m ModuleName
+unsafeCheckCurrentModule :: Check ModuleName
 unsafeCheckCurrentModule = gets checkCurrentModule >>= \case
   Nothing -> internalError "No module name set in scope"
   Just name -> pure name

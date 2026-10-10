@@ -4,7 +4,7 @@ module Language.PureScript.TypeChecker.TypeSearch
 
 import Protolude hiding (StateT, evalStateT)
 
-import Control.Monad.State.Strict (StateT, evalStateT)
+import Control.Monad.State.Strict (evalStateT)
 import Control.Monad.Writer (WriterT, runWriterT)
 import Data.Map qualified as Map
 import Language.PureScript.TypeChecker.Entailment qualified as Entailment
@@ -27,14 +27,11 @@ import Language.PureScript.Types                   as P
 checkInEnvironment
   :: Environment
   -> TC.CheckState
-  -> StateT TC.CheckState (SupplyT (WriterT b (Except P.MultipleErrors))) a
+  -> TC.Check a
   -> Maybe (a, Environment)
 checkInEnvironment env st =
-  either (const Nothing) Just
-  . runExcept
-  . evalWriterT
-  . P.evalSupplyT 0
-  . TC.runCheck (st { TC.checkEnv = env })
+  either (const Nothing) (Just . second TC.checkEnv)
+  . TC.runCheckPure (st { TC.checkEnv = env })
 
 evalWriterT :: Monad m => WriterT b m r -> m r
 evalWriterT m = fmap fst (runWriterT m)
