@@ -47,7 +47,7 @@ import Language.PureScript.Names (ModuleName, isBuiltinModuleName, runModuleName
 import Language.PureScript.Renamer (renameInModule)
 import Language.PureScript.Sugar (Env, collapseBindingGroups, createBindingGroups, desugar, desugarCaseGuards, externsEnv, primEnv)
 import Language.PureScript.Sugar.Names.Resolve (runResolveM)
-import Language.PureScript.TypeChecker (CheckState(..), emptyCheckState, typeCheckModule)
+import Language.PureScript.TypeChecker (CheckState(..), emptyCheckState, runCheckInMake, typeCheckModule)
 import Language.PureScript.Make.BuildPlan (BuildJobResult(..), BuildPlan(..))
 import Language.PureScript.Make.BuildPlan qualified as BuildPlan
 import Language.PureScript.Make.Cache qualified as Cache
@@ -146,7 +146,7 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
     -- lift $ progress $ CompilingModule moduleName moduleIndex "3"
     let modulesExports = (\(_, _, exports) -> exports) <$> exEnv'
     -- lift $ progress $ CompilingModule moduleName moduleIndex "4"
-    (checked, CheckState{..}) <- runStateT (typeCheckModule modulesExports desugared) $ emptyCheckState env
+    (checked, CheckState{..}) <- runCheckInMake (emptyCheckState env) (typeCheckModule modulesExports desugared)
     end3 <- lift realTime
     lift $ progress $ CompileMeta ("### CS.doneTypeCheck2[" <> runModuleName moduleName <> "] " <> diffTime st3 end3)
     st4 <- lift realTime

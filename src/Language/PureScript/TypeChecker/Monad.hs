@@ -11,7 +11,13 @@ import Control.Arrow (second)
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify)
 import Control.Monad (forM_, guard, join, unless, when, (<=<))
-import Control.Monad.Supply (SupplyT)
+import Control.Exception (Exception, onException, throwIO, try)
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.State.Strict (put)
+import Control.Monad.Supply (SupplyT(..))
+import Control.Monad.Supply.Class (MonadSupply(..))
+import Control.Monad.Trans.Class (lift)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Control.Monad.Writer.Class (MonadWriter(..), censor)
 
 import Data.Maybe (fromMaybe)
@@ -36,7 +42,107 @@ import Text.PrettyPrint.Boxes (render)
 -- 'TypeSearch', which runs shared type-checking logic (unification,
 -- entailment) under a different, pure stack for IDE type search -- those
 -- shared functions stay polymorphic and are 'SPECIALIZE'd for both.
-type Check = StateT CheckState (SupplyT Make)
+--
+-- It is a single reader-over-IO monad with the checker state, the fresh name
+-- supply and the warnings kept in mutable references, because a stack of
+-- transformers (StateT / SupplyT / Make) was costing an allocation per layer
+-- on every bind. Errors are exceptions; 'catchError' restores the state and
+-- supply as they were before the failed action, like the old stack did.
+newtype Check a = Check { unCheck :: CheckRefs -> IO a }
+
+data CheckRefs = CheckRefs
+  { crState :: !(IORef CheckState)
+  , crSupply :: !(IORef Integer)
+  , crWarnings :: !(IORef MultipleErrors)
+  }
+
+newtype CheckFailure = CheckFailure MultipleErrors
+
+instance Show CheckFailure where
+  show _ = "CheckFailure"
+
+instance Exception CheckFailure
+
+instance Functor Check where
+  fmap f (Check m) = Check $ \r -> fmap f (m r)
+  {-# INLINE fmap #-}
+
+instance Applicative Check where
+  pure a = Check $ \_ -> pure a
+  {-# INLINE pure #-}
+  Check f <*> Check a = Check $ \r -> f r <*> a r
+  {-# INLINE (<*>) #-}
+  Check a *> Check b = Check $ \r -> a r *> b r
+  {-# INLINE (*>) #-}
+
+instance Monad Check where
+  Check m >>= f = Check $ \r -> m r >>= \a -> unCheck (f a) r
+  {-# INLINE (>>=) #-}
+
+instance MonadState CheckState Check where
+  get = Check $ \r -> readIORef (crState r)
+  put s = Check $ \r -> writeIORef (crState r) s
+  state f = Check $ \r -> do
+    s <- readIORef (crState r)
+    case f s of
+      (a, s') -> writeIORef (crState r) s' >> pure a
+  {-# INLINE get #-}
+  {-# INLINE put #-}
+  {-# INLINE state #-}
+
+instance MonadError MultipleErrors Check where
+  throwError e = Check $ \_ -> throwIO (CheckFailure e)
+  catchError (Check m) h = Check $ \r -> do
+    s <- readIORef (crState r)
+    n <- readIORef (crSupply r)
+    res <- try (m r)
+    case res of
+      Right a -> pure a
+      Left (CheckFailure e) -> do
+        writeIORef (crState r) s
+        writeIORef (crSupply r) n
+        unCheck (h e) r
+
+instance MonadWriter MultipleErrors Check where
+  tell w = Check $ \r -> modifyIORef' (crWarnings r) (<> w)
+  writer (a, w) = a <$ tell w
+  listen (Check m) = Check $ \r -> do
+    old <- readIORef (crWarnings r)
+    writeIORef (crWarnings r) mempty
+    a <- m r `onException` writeIORef (crWarnings r) old
+    w <- readIORef (crWarnings r)
+    writeIORef (crWarnings r) (old <> w)
+    pure (a, w)
+  pass (Check m) = Check $ \r -> do
+    old <- readIORef (crWarnings r)
+    writeIORef (crWarnings r) mempty
+    (a, f) <- m r `onException` writeIORef (crWarnings r) old
+    w <- readIORef (crWarnings r)
+    writeIORef (crWarnings r) (old <> f w)
+    pure a
+
+instance MonadSupply Check where
+  fresh = Check $ \r -> do
+    n <- readIORef (crSupply r)
+    writeIORef (crSupply r) (n + 1)
+    pure n
+  peek = Check $ \r -> readIORef (crSupply r)
+
+-- | Run a 'Check' computation inside the surrounding fresh name supply, handing
+-- back the final state. Warnings are reported even if the computation fails.
+runCheckInMake :: CheckState -> Check a -> SupplyT Make (a, CheckState)
+runCheckInMake st (Check m) = do
+  n <- peek
+  (res, n', warnings) <- liftIO $ do
+    stRef <- newIORef st
+    supplyRef <- newIORef n
+    warningsRef <- newIORef mempty
+    res <- try (m (CheckRefs stRef supplyRef warningsRef) >>= \a -> (,) a <$> readIORef stRef)
+    (,,) res <$> readIORef supplyRef <*> readIORef warningsRef
+  lift (tell warnings)
+  case res of
+    Left (CheckFailure e) -> lift (throwError e)
+    Right r -> SupplyT (put n') >> pure r
 
 newtype UnkLevel = UnkLevel (NEL.NonEmpty Unknown)
   deriving (Eq, Show)
