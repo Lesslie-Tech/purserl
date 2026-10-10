@@ -17,7 +17,7 @@ import Prelude
 
 import Language.PureScript.AST
 import Language.PureScript.Crash (internalError)
-import Language.PureScript.Errors (SimpleErrorMessage(..), addHint, errorMessage, errorMessage', parU, rethrow, rethrowWithPosition)
+import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage, errorMessage', parU, rethrow, rethrowWithPosition)
 import Language.PureScript.Externs (ExternsFile(..), ExternsFixity(..), ExternsTypeFixity(..))
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), Name(..), OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), freshIdent')
 import Language.PureScript.Sugar.Operators.Binders (matchBinderOperators)
@@ -25,13 +25,14 @@ import Language.PureScript.Sugar.Operators.Expr (matchExprOperators)
 import Language.PureScript.Sugar.Operators.Types (matchTypeOperators)
 import Language.PureScript.Sugar.Monad (DesugarM)
 import Language.PureScript.Traversals (defS, sndM)
-import Language.PureScript.Types (Constraint(..), SourceType, Type(..), everywhereOnTypesTopDownM, overConstraintArgs)
+import Language.PureScript.Types (Constraint(..), SourceType, Type(..), everythingOnTypes, everywhereOnTypesTopDownM, overConstraintArgs)
 
 import Control.Monad (unless, (<=<))
 import Control.Monad.Error.Class (throwError)
 
+import Data.Bits ((.&.), (.|.))
 import Data.Either (partitionEithers)
-import Data.Foldable (for_, traverse_)
+import Data.Foldable (fold, foldl', for_, traverse_)
 import Data.Function (on)
 import Data.Functor (($>))
 import Data.Functor.Identity (Identity(..), runIdentity)
@@ -100,8 +101,7 @@ rebracketFiltered !caller pred_ externs m = do
   let typeOpTable = customOperatorTable' typeFixities
   let typeAliased = M.fromList (map makeLookupEntry typeFixities)
 
-  rebracketModule caller pred_ valueOpTable typeOpTable m >>=
-    renameAliasedOperators valueAliased typeAliased
+  rebracketModule caller pred_ valueOpTable typeOpTable valueAliased typeAliased m
 
   where
 
@@ -121,60 +121,6 @@ rebracketFiltered !caller pred_ externs m = do
   makeLookupEntry :: FixityRecord op alias -> (Qualified op, Qualified alias)
   makeLookupEntry (qname, _, _, alias) = (qname, alias)
 
-  renameAliasedOperators
-    :: M.Map (Qualified (OpName 'ValueOpName)) (Qualified (Either Ident (ProperName 'ConstructorName)))
-    -> M.Map (Qualified (OpName 'TypeOpName)) (Qualified (ProperName 'TypeName))
-    -> Module
-    -> DesugarM Module
-  renameAliasedOperators valueAliased typeAliased (Module ss coms mn ds exts) =
-    Module ss coms mn <$> mapM (usingPredicate pred_ f') ds <*> pure exts
-    where
-    (goDecl', goExpr', goBinder') = updateTypes goType
-    (f', _, _, _, _, _) =
-      everywhereWithContextOnValuesM
-        ss
-        (\_ d -> (declSourceSpan d,) <$> goDecl' d)
-        (\pos -> uncurry goExpr <=< goExpr' pos)
-        (\pos -> uncurry goBinder <=< goBinder' pos)
-        defS
-        defS
-        defS
-
-    goExpr :: SourceSpan -> Expr -> DesugarM (SourceSpan, Expr)
-    goExpr _ e@(PositionedValue pos _ _) = return (pos, e)
-    goExpr _ (Op pos op) =
-      (pos,) <$> case op `M.lookup` valueAliased of
-        Just (Qualified mn' (Left alias)) ->
-          return $ Var pos (Qualified mn' alias)
-        Just (Qualified mn' (Right alias)) ->
-          return $ Constructor pos (Qualified mn' alias)
-        Nothing ->
-          throwError . errorMessage' pos . UnknownName $ fmap ValOpName op
-    goExpr pos other = return (pos, other)
-
-    goBinder :: SourceSpan -> Binder -> DesugarM (SourceSpan, Binder)
-    goBinder _ b@(PositionedBinder pos _ _) = return (pos, b)
-    goBinder _ (BinaryNoParensBinder (OpBinder pos op) lhs rhs) =
-      case op `M.lookup` valueAliased of
-        Just (Qualified mn' (Left alias)) ->
-          throwError . errorMessage' pos $ InvalidOperatorInBinder op (Qualified mn' alias)
-        Just (Qualified mn' (Right alias)) ->
-          return (pos, ConstructorBinder pos (Qualified mn' alias) [lhs, rhs])
-        Nothing ->
-          throwError . errorMessage' pos . UnknownName $ fmap ValOpName op
-    goBinder _ BinaryNoParensBinder{} =
-      internalError "BinaryNoParensBinder has no OpBinder"
-    goBinder pos other = return (pos, other)
-
-    goType :: SourceSpan -> SourceType -> DesugarM SourceType
-    goType pos (TypeOp ann2 op) =
-      case op `M.lookup` typeAliased of
-        Just alias ->
-          return $ TypeConstructor ann2 alias
-        Nothing ->
-          throwError . errorMessage' pos $ UnknownName $ fmap TyOpName op
-    goType _ other = return other
-
 -- | Indicates whether the `rebracketModule`
 -- is being called with the full desugar pass
 -- run via `purs compile` or whether
@@ -188,20 +134,32 @@ data RebracketCaller
   | CalledByDocs
   deriving (Eq, Show)
 
+type ValueAliases = M.Map (Qualified (OpName 'ValueOpName)) (Qualified (Either Ident (ProperName 'ConstructorName)))
+type TypeAliases = M.Map (Qualified (OpName 'TypeOpName)) (Qualified (ProperName 'TypeName))
+
 rebracketModule
   :: RebracketCaller
   -> (Declaration -> Bool)
   -> [[(Qualified (OpName 'ValueOpName), Associativity)]]
   -> [[(Qualified (OpName 'TypeOpName), Associativity)]]
+  -> ValueAliases
+  -> TypeAliases
   -> Module
   -> DesugarM Module
-rebracketModule !caller pred_ valueOpTable typeOpTable (Module ss coms mn ds exts) =
-  Module ss coms mn <$> f' ds <*> pure exts
+rebracketModule !caller pred_ valueOpTable typeOpTable valueAliased typeAliased (Module ss coms mn ds exts) =
+  Module ss coms mn <$> (stageB =<< stageA) <*> pure exts
   where
-  f' :: [Declaration] -> DesugarM [Declaration]
-  f' =
-    fmap (map (\d -> if pred_ d then removeParens d else d)) .
-    flip parU (usingPredicate pred_ h)
+  needed = map needs ds
+
+  -- Reordering can only fail, so it runs in 'Either'; the errors of all the
+  -- declarations are collected like 'parU' does.
+  stageA =
+    case partitionEithers [if pred_ d && n .&. needsReorder /= 0 then f d else Right d | (d, n) <- zip ds needed] of
+      ([], ds') -> pure ds'
+      (errs, _) -> throwError (fold errs)
+
+  stageB ds' = parU (zip ds' needed) $ \(d, n) ->
+    if pred_ d && n .&. needsFinish /= 0 then finish d else pure d
 
   -- The AST will run through all the desugar passes when compiling
   -- and only some of the desugar passes when generating docs.
@@ -212,11 +170,10 @@ rebracketModule !caller pred_ valueOpTable typeOpTable (Module ss coms mn ds ext
   -- when running `purs docs`.
   -- See https://github.com/purescript/purescript/issues/4274#issuecomment-1087730651=
   -- for more info.
-  h :: Declaration -> DesugarM Declaration
-  h = case caller of
-    CalledByDocs -> f
-    CalledByCompile -> g <=< f
+  compiling = caller == CalledByCompile
 
+  -- Reorders the operator chains. This has to see the explicit parentheses,
+  -- which delimit the chains.
   (f, _, _, _, _, _) =
       everywhereWithContextOnValuesM
         ss
@@ -227,15 +184,124 @@ rebracketModule !caller pred_ valueOpTable typeOpTable (Module ss coms mn ds ext
         defS
         defS
 
-  (g, _, _) = everywhereOnValuesTopDownM pure removeBinaryNoParens pure
+  (goDecl, goExpr', goBinder') = updateTypes (flip matchTypeOperators typeOpTable)
 
-  (goDecl, goExpr', goBinder') = updateTypes goType
-
-  goType :: SourceSpan -> SourceType -> DesugarM SourceType
-  goType = flip matchTypeOperators typeOpTable
-
-  wrap :: (a -> DesugarM a) -> (SourceSpan, a) -> DesugarM (SourceSpan, a)
+  wrap :: (a -> Either MultipleErrors a) -> (SourceSpan, a) -> Either MultipleErrors (SourceSpan, a)
   wrap go (ss', a) = (ss',) <$> go a
+
+  -- Everything that is left to do once the chains are reordered, in a single
+  -- traversal: turn the remaining binary applications and sections into
+  -- applications and lambdas, remove the explicit parentheses and replace the
+  -- operators with the functions and constructors they alias.
+  (finish, _, _, _, _, _) =
+    everywhereWithContextOnValuesM
+      ss
+      (\_ d -> (declSourceSpan d,) <$> goDecl2 d)
+      goExprFull
+      goBinderFull
+      defS
+      defS
+      defS
+
+  (goDecl2, goExpr2', goBinder2') = updateTypes goType2
+
+  goExprFull :: SourceSpan -> Expr -> DesugarM (SourceSpan, Expr)
+  goExprFull pos = uncurry goExpr2 <=< goExpr2' pos
+
+  goExpr2 :: SourceSpan -> Expr -> DesugarM (SourceSpan, Expr)
+  goExpr2 pos e0 = do
+    e <- if compiling then removeBinaryNoParens e0 else pure e0
+    case e of
+      Parens val -> goExprFull pos val
+      PositionedValue pos' _ _ -> return (pos', e)
+      Op pos' op ->
+        (pos',) <$> case op `M.lookup` valueAliased of
+          Just (Qualified mn' (Left alias)) ->
+            return $ Var pos' (Qualified mn' alias)
+          Just (Qualified mn' (Right alias)) ->
+            return $ Constructor pos' (Qualified mn' alias)
+          Nothing ->
+            throwError . errorMessage' pos' . UnknownName $ fmap ValOpName op
+      _ -> return (pos, e)
+
+  goBinderFull :: SourceSpan -> Binder -> DesugarM (SourceSpan, Binder)
+  goBinderFull pos = uncurry goBinder2 <=< goBinder2' pos
+
+  goBinder2 :: SourceSpan -> Binder -> DesugarM (SourceSpan, Binder)
+  goBinder2 pos = \case
+    ParensInBinder b -> goBinderFull pos b
+    b@(PositionedBinder pos' _ _) -> return (pos', b)
+    BinaryNoParensBinder (OpBinder pos' op) lhs rhs ->
+      case op `M.lookup` valueAliased of
+        Just (Qualified mn' (Left alias)) ->
+          throwError . errorMessage' pos' $ InvalidOperatorInBinder op (Qualified mn' alias)
+        Just (Qualified mn' (Right alias)) ->
+          return (pos', ConstructorBinder pos' (Qualified mn' alias) [lhs, rhs])
+        Nothing ->
+          throwError . errorMessage' pos' . UnknownName $ fmap ValOpName op
+    BinaryNoParensBinder{} ->
+      internalError "BinaryNoParensBinder has no OpBinder"
+    other -> return (pos, other)
+
+  goType2 :: SourceSpan -> SourceType -> DesugarM SourceType
+  goType2 pos = \case
+    ParensInType _ t -> goType2 pos t
+    TypeOp ann2 op ->
+      case op `M.lookup` typeAliased of
+        Just alias ->
+          return $ TypeConstructor ann2 alias
+        Nothing ->
+          throwError . errorMessage' pos $ UnknownName $ fmap TyOpName op
+    other -> return other
+
+needsReorder, needsFinish :: Int
+needsReorder = 1
+needsFinish = 2
+
+-- | Which of the rebracketing steps a declaration needs: 'needsReorder' if it
+-- has operator chains to reorder, 'needsFinish' if it has anything to do with
+-- parentheses, operators or anonymous arguments. Lets us skip the traversals
+-- for declarations that have none of them.
+needs :: Declaration -> Int
+needs = fd
+  where
+  (fd, _, _, _, _) = everythingOnValues (.|.) goDecl goExpr goBinder (const 0) (const 0)
+
+  goDecl = \case
+    DataDeclaration _ _ _ args ctors -> tys (mapMaybe snd args ++ concatMap (map snd . dataCtorFields) ctors)
+    ExternDeclaration _ _ ty -> ty1 ty
+    TypeClassDeclaration _ _ args implies _ _ -> tys (mapMaybe snd args ++ concatMap constraintArgs implies)
+    TypeInstanceDeclaration _ _ _ _ _ cs _ ts _ -> tys (concatMap constraintArgs cs ++ ts)
+    TypeSynonymDeclaration _ _ args ty -> tys (mapMaybe snd args ++ [ty])
+    TypeDeclaration (TypeDeclarationData _ _ ty) -> ty1 ty
+    KindDeclaration _ _ _ ty -> ty1 ty
+    ExternDataDeclaration _ _ ty -> ty1 ty
+    _ -> 0
+
+  goExpr = \case
+    BinaryNoParens{} -> needsReorder .|. needsFinish
+    Op{} -> needsFinish
+    Parens{} -> needsFinish
+    AnonymousArgument -> needsFinish
+    TypeClassDictionary c _ _ -> tys (constraintKindArgs c ++ constraintArgs c)
+    DeferredDictionary _ ts -> tys ts
+    TypedValue _ _ ty -> ty1 ty
+    VisibleTypeApp _ ty -> ty1 ty
+    _ -> 0
+
+  goBinder = \case
+    BinaryNoParensBinder{} -> needsReorder .|. needsFinish
+    ParensInBinder{} -> needsFinish
+    TypedBinder ty _ -> ty1 ty
+    _ -> 0
+
+  tys = foldl' (.|.) 0 . map ty1
+
+  ty1 = everythingOnTypes (.|.) $ \case
+    BinaryNoParensType{} -> needsReorder .|. needsFinish
+    ParensInType{} -> needsFinish
+    TypeOp{} -> needsFinish
+    _ -> 0
 
 removeBinaryNoParens :: Expr -> DesugarM Expr
 removeBinaryNoParens u
@@ -254,35 +320,6 @@ removeBinaryNoParens e = return e
 stripPositionInfo :: Expr -> Expr
 stripPositionInfo (PositionedValue _ _ e) = stripPositionInfo e
 stripPositionInfo e = e
-
-removeParens :: Declaration -> Declaration
-removeParens = f
-  where
-  (f, _, _) =
-      everywhereOnValues
-        (runIdentity . goDecl)
-        (goExpr . decontextify goExpr')
-        (goBinder . decontextify goBinder')
-
-  (goDecl, goExpr', goBinder') = updateTypes (\_ -> return . goType)
-
-  goExpr :: Expr -> Expr
-  goExpr (Parens val) = goExpr val
-  goExpr val = val
-
-  goBinder :: Binder -> Binder
-  goBinder (ParensInBinder b) = goBinder b
-  goBinder b = b
-
-  goType :: Type a -> Type a
-  goType (ParensInType _ t) = goType t
-  goType t = t
-
-  decontextify
-    :: (SourceSpan -> a -> Identity (SourceSpan, a))
-    -> a
-    -> a
-  decontextify ctxf = snd . runIdentity . ctxf (internalError "attempted to use SourceSpan in removeParens")
 
 externsFixities :: ExternsFile -> [Either ValueFixityRecord TypeFixityRecord]
 externsFixities ExternsFile{..} =

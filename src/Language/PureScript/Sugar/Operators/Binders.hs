@@ -3,14 +3,14 @@ module Language.PureScript.Sugar.Operators.Binders where
 import Prelude
 
 import Language.PureScript.AST (Associativity, Binder(..), SourceSpan)
+import Language.PureScript.Errors (MultipleErrors)
 import Language.PureScript.Names (OpName(..), OpNameType(..), Qualified(..))
 import Language.PureScript.Sugar.Operators.Common (matchOperators)
-import Language.PureScript.Sugar.Monad (DesugarM)
 
 matchBinderOperators
   :: [[(Qualified (OpName 'ValueOpName), Associativity)]]
   -> Binder
-  -> DesugarM Binder
+  -> Either MultipleErrors Binder
 matchBinderOperators = matchOperators isBinOp extractOp fromOp reapply id
   where
 

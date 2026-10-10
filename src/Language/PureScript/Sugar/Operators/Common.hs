@@ -20,7 +20,6 @@ import Language.PureScript.AST (Associativity(..), ErrorMessageHint(..), SourceS
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors(..), SimpleErrorMessage(..))
 import Language.PureScript.Names (OpName, Qualified, eraseOpName)
-import Language.PureScript.Sugar.Monad (DesugarM)
 
 type Chain a = [Either a a]
 
@@ -70,10 +69,10 @@ matchOperators
   -> ([[P.Operator (Chain a) () Identity a]] -> P.OperatorTable (Chain a) () Identity a)
   -> [[(Qualified (OpName nameType), Associativity)]]
   -> a
-  -> DesugarM a
+  -> Either MultipleErrors a
 matchOperators isBinOp extractOp fromOp reapply modOpTable ops = parseChains
   where
-  parseChains :: a -> DesugarM a
+  parseChains :: a -> Either MultipleErrors a
   parseChains ty
     | True <- isBinOp ty = bracketChain (extendChain ty)
     | otherwise = pure ty
@@ -81,7 +80,10 @@ matchOperators isBinOp extractOp fromOp reapply modOpTable ops = parseChains
   extendChain ty
     | Just (op, l, r) <- extractOp ty = Left l : Right op : extendChain r
     | otherwise = [Left ty]
-  bracketChain :: Chain a -> DesugarM a
+  bracketChain :: Chain a -> Either MultipleErrors a
+  -- A lone operator needs no precedence resolution.
+  bracketChain [Left l, Right op, Left r]
+    | Just (ss, name) <- fromOp op = pure (reapply ss name l r)
   bracketChain chain =
     case P.parse opParser "operator expression" chain of
       Right a -> pure a
