@@ -130,15 +130,25 @@ replaceTypeClassDictionaries shouldGeneralize expr = flip evalStateT M.empty $ d
   where
     -- This pass solves constraints where possible, deferring constraints if not.
     deferPass :: Expr -> StateT InstanceContext m (Expr, Any)
-    deferPass = fmap (second fst) . runWriterT . f where
+    deferPass e | not (hasPlaceholders e) = return (e, Any False)
+    deferPass e = (fmap (second fst) . runWriterT . f) e where
       f :: Expr -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
       (_, f, _) = everywhereOnValuesTopDownM return (go True) return
 
     -- This pass generalizes any remaining constraints
     generalizePass :: Expr -> StateT InstanceContext m (Expr, [(Ident, InstanceContext, SourceConstraint)])
-    generalizePass = fmap (second snd) . runWriterT . f where
+    generalizePass e | not (hasPlaceholders e) = return (e, [])
+    generalizePass e = (fmap (second snd) . runWriterT . f) e where
       f :: Expr -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
       (_, f, _) = everywhereOnValuesTopDownM return (go False) return
+
+    -- Cheap pure check so that passes over expressions with nothing left to solve are skipped.
+    hasPlaceholders :: Expr -> Bool
+    hasPlaceholders = getAny . scan
+      where
+      (_, scan, _, _, _) = everythingOnValues (<>) (const mempty) isPlaceholder (const mempty) (const mempty) (const mempty)
+      isPlaceholder TypeClassDictionary{} = Any True
+      isPlaceholder _ = mempty
 
     go :: Bool -> Expr -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
     go deferErrors (TypeClassDictionary constraint context hints) =
