@@ -177,6 +177,8 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
 
         ELet (EBind a b) c | a == c -> b
 
+        EApp {} | Just e <- applySpine expr -> convert e
+
         ECaseOf cond [(EBinder pat, rhs)] | pat == rhs ->
           cond
 
@@ -187,7 +189,7 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
           rhs
 
         ECaseOf cond [(EBinder pat, rhs)] ->
-          ELet (EBind pat cond) rhs
+          convert $ ELet (EBind pat cond) rhs
 
         ELet (EBind (ETupleLiteral pats) (ETupleLiteral rhs)) body ->
           letBindPats pats rhs body
@@ -215,7 +217,7 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         ENegate (EIntLit a) -> EIntLit (-a)
         ENegate (ENumLit a) -> ENumLit (-a)
         EBinary Subtract a (EIntLit b) -> convert $ EBinary Add a (EIntLit (-b))
-        EBinary Subtract a b -> convert $ EBinary Add a (ENegate b)
+        EBinary Subtract a b -> convert $ EBinary Add a (convert (ENegate b))
         EBinary Add (EBinary Add a b) c -> floatAssocInt Add a b c
         EBinary Multiply (EBinary Multiply a b) c -> floatAssocInt Multiply a b c
 
@@ -232,15 +234,17 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         other -> other
 
     floatAssocInt op a b c =
-      let noop = EBinary op (EBinary op a b) c in
+      let noop = EBinary op (EBinary op a b) c
+          inner x y = convert (EBinary op x y)
+      in
       case (a,b,c) of
         (EIntLit _, EIntLit _, EIntLit _) -> noop
         (EIntLit _, EIntLit _, _) -> noop
-        (EIntLit _, _, EIntLit _) -> EBinary op (EBinary op a c) b
-        (_, EIntLit _, EIntLit _) -> EBinary op (EBinary op b c) a
+        (EIntLit _, _, EIntLit _) -> EBinary op (inner a c) b
+        (_, EIntLit _, EIntLit _) -> EBinary op (inner b c) a
         (EIntLit _, _, _) -> noop
-        (_, EIntLit _, _) -> EBinary op (EBinary op b a) c
-        (_, _, EIntLit _) -> EBinary op (EBinary op c a) b
+        (_, EIntLit _, _) -> EBinary op (inner b a) c
+        (_, _, EIntLit _) -> EBinary op (inner c a) b
         (_, _, _) -> noop
 
 
@@ -311,7 +315,7 @@ inlineCommonValuesTopDown expander = everywhereOnErlTopDown convert
         EApp _ (EAtomLiteral (Atom (Just "maps") "get")) [EAtomLiteral key, EMapLiteral fields] | Just v <- findKey (runAtom key) fields -> v
         -- EMapLiteral fields | Just rhs <- allFieldsAreMapGetSame Nothing fields -> rhs -- [drathier]: this optimization broke prod
 
-        EApp appKind (ELet bind body) args -> ELet bind (EApp appKind body args)
+        EApp {} | Just e <- applySpine expr -> e
 
         -- EFunFull Nothing [(EFunBinder [EVar "_@251"],EApp RegularApp (EAtomLiteral (Atom Nothing "eqNewtypeRep_156")) [EVar "_@251"])]
         -- (EFunFull Nothing [(EFunBinder [EVar "_@251"],EVar "_@251")])
@@ -438,15 +442,21 @@ letBindIdents vars body =
   case vars of
     ("_",EVar _):rest -> letBindIdents rest body
     (_,EVar "_"):rest -> letBindIdents rest body
-    (a,b):rest -> ELet (EBind (EVar a) b) (letBindIdents rest body)
+    (a,b):rest -> bindLet (EVar a) b (letBindIdents rest body)
     [] -> body
+
+-- | @let a = b in a@ is just @b@.
+bindLet :: Erl -> Erl -> Erl -> Erl
+bindLet a b body
+  | a == body = b
+  | otherwise = ELet (EBind a b) body
 
 letBindPats :: [Erl] -> [Erl] -> Erl -> Erl
 letBindPats pats rhs body =
   case (pats, rhs) of
     (EVar "_":prest, EVar _:brest) -> letBindPats prest brest body
     (EVar _:prest, EVar "_":brest) -> letBindPats prest brest body
-    (a:prest,b:brest) -> ELet (EBind a b) (letBindPats prest brest body)
+    (a:prest,b:brest) -> bindLet a b (letBindPats prest brest body)
     ([],[]) -> body
 
 findKey k fields =
@@ -774,6 +784,24 @@ fnNs =
          ]
   where
     name prefix n = atomPS $ mkString $ prefix <> T.pack (show n)
+
+-- | Push a curried application chain into the @let@s and single-argument
+-- functions at its head in one go, instead of one argument per optimizer round.
+applySpine :: Erl -> Maybe Erl
+applySpine = go []
+  where
+    go as = \case
+      EApp k f args -> go ((k, args) : as) f
+      h | not (null as), canStep h as -> Just (step h as)
+      _ -> Nothing
+
+    canStep (ELet _ _) _ = True
+    canStep (EFun1 _ _ _) ((_, [_]) : _) = True
+    canStep _ _ = False
+
+    step (ELet b body) as = ELet b (step body as)
+    step (EFun1 _ v body) ((_, [arg]) : as) = ELet (EBind (EVar v) arg) (step body as)
+    step h as = foldl (\g (k, args) -> EApp k g args) h as
 
 onTupleN :: Erl -> Erl
 onTupleN = \case

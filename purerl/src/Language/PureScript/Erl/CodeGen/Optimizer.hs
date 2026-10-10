@@ -39,11 +39,14 @@ optimize exports es = do
         b
           & inlineCommonOperators EC.effect EC.effectDictionaries id
           & specialize
-          & untilFix go
+          & go
           & inlineCommonFnsM id
       )
 
   where
+  -- A single pass is enough: every rewrite re-applies the rules to what it
+  -- builds, so a second round never changes anything. Keep it that way
+  -- (re-run `convert` on new nodes) instead of looping to a fixed point.
   go erl =
     erl
       & inlineCommonValuesTopDown id -- expander
@@ -53,23 +56,6 @@ optimize exports es = do
       -- Compilation took 102926 ms -- only bottomup
       -- Compilation took 102995 ms -- only bottomup
       -- Compilation took 109079 ms -- both
-
-
-untilFixedPoint :: Show a => (Monad m, Eq a) => (a -> m a) -> a -> m a
-untilFixedPoint f = go 10
-  where
-  go 0 a = pure a -- trace (show ("untilFixedPoint bailed out", a)) $ pure a
-  go n a = do
-   a' <- f a
-   if a' == a then return a' else go (n-1) a'
-
-untilFix :: Show a => Eq a => (a -> a) -> a -> a
-untilFix f = go 10
-  where
-  go 0 a = a -- trace (show ("untilFix bailed out", a)) $ a
-  go n a =
-   let a2 = f a in
-   if a2 == a then a2 else go (n-1) a2
 
 
 -- |
