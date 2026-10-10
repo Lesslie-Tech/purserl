@@ -13,6 +13,7 @@ import Prelude
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Class (MonadState(..), gets, modify)
 import Data.Foldable (traverse_)
+import Data.Monoid (Any(..))
 import Data.Functor.Identity (Identity(), runIdentity)
 import Data.Set (Set, fromList, notMember)
 import Data.Text (Text)
@@ -34,8 +35,12 @@ newSkolemConstant = do
 -- | Introduce skolem scope at every occurrence of a ForAll
 {-# SPECIALIZE introduceSkolemScope :: Type a -> Check (Type a) #-}
 introduceSkolemScope :: MonadState CheckState m => Type a -> m (Type a)
-introduceSkolemScope = everywhereOnTypesM go
+introduceSkolemScope t
+  | not (getAny (everythingOnTypes (<>) needsScope t)) = return t
+  | otherwise = everywhereOnTypesM go t
   where
+  needsScope (ForAll _ _ _ _ _ Nothing) = Any True
+  needsScope _ = Any False
   go (ForAll ann vis ident mbK ty Nothing) = ForAll ann vis ident mbK ty <$> (Just <$> newSkolemScope)
   go other = return other
 

@@ -16,7 +16,8 @@ module Language.PureScript.TypeChecker.Unify
 
 import Prelude
 
-import Control.Monad (forM_, void)
+import Control.Monad (forM_, void, when)
+import Data.Monoid (Any(..))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Class (MonadState(..), gets, modify, state)
 import Control.Monad.Writer.Class (MonadWriter(..))
@@ -96,10 +97,10 @@ substituteType sub = everywhereOnTypes go
 -- | Make sure that an unknown does not occur in a type
 occursCheck :: (MonadError MultipleErrors m) => Int -> SourceType -> m ()
 occursCheck _ TUnknown{} = return ()
-occursCheck u t = void $ everywhereOnTypesM go t
+occursCheck u t = when (getAny (everythingOnTypes (<>) go t)) . throwError . errorMessage . InfiniteType $ t
   where
-  go (TUnknown _ u') | u == u' = throwError . errorMessage . InfiniteType $ t
-  go other = return other
+  go (TUnknown _ u') | u == u' = Any True
+  go _ = Any False
 
 -- | Compute a list of all unknowns appearing in a type
 unknownsInType :: Type a -> [(a, Int)]
@@ -234,8 +235,12 @@ rowItemsMapToList m =
 --
 {-# SPECIALIZE replaceTypeWildcards :: SourceType -> Check SourceType #-}
 replaceTypeWildcards :: (MonadWriter MultipleErrors m, MonadState CheckState m) => SourceType -> m SourceType
-replaceTypeWildcards = everywhereOnTypesM replace
+replaceTypeWildcards t
+  | not (getAny (everythingOnTypes (<>) hasWildcard t)) = return t
+  | otherwise = everywhereOnTypesM replace t
   where
+  hasWildcard TypeWildcard{} = Any True
+  hasWildcard _ = Any False
   replace (TypeWildcard ann wdata) = do
     t <- freshType
     ctx <- getLocalContext
