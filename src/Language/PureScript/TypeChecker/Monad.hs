@@ -10,7 +10,7 @@ import Prelude
 import Control.Arrow (second)
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify)
-import Control.Monad (forM_, guard, join, when, (<=<))
+import Control.Monad (forM_, guard, join, unless, when, (<=<))
 import Control.Monad.Supply (SupplyT)
 import Control.Monad.Writer.Class (MonadWriter(..), censor)
 
@@ -114,11 +114,14 @@ data CheckState = CheckState
   , checkConstructorImportsForCoercible :: S.Set (ModuleName, Qualified (ProperName 'ConstructorName))
   -- ^ Newtype constructors imports required to solve Coercible constraints.
   -- We have to keep track of them so that we don't emit unused import warnings.
+  , checkUndefinedNames :: S.Set (Qualified Ident)
+  -- ^ Superset of the names currently bound with 'Undefined' visibility, so
+  -- that making a binding group visible doesn't have to traverse the whole environment.
   }
 
 -- | Create an empty @CheckState@
 emptyCheckState :: Environment -> CheckState
-emptyCheckState env = CheckState env 0 0 0 Nothing [] emptySubstitution [] mempty
+emptyCheckState env = CheckState env 0 0 0 Nothing [] emptySubstitution [] mempty mempty
 
 -- | Unification variables
 type Unknown = Int
@@ -130,9 +133,12 @@ bindNames
   -> Check a
 bindNames newNames action = do
   orig <- get
-  modify $ \st -> st { checkEnv = (checkEnv st) { names = newNames `mUnionLeftBiasRightLarger` (names . checkEnv $ st) } }
+  let undef = S.fromList [ k | (k, (_, _, Undefined)) <- M.toList newNames ]
+  modify $ \st -> st { checkEnv = (checkEnv st) { names = newNames `mUnionLeftBiasRightLarger` (names . checkEnv $ st) }
+                     , checkUndefinedNames = undef <> checkUndefinedNames st }
   a <- action
-  modify $ \st -> st { checkEnv = (checkEnv st) { names = names . checkEnv $ orig } }
+  modify $ \st -> st { checkEnv = (checkEnv st) { names = names . checkEnv $ orig }
+                     , checkUndefinedNames = checkUndefinedNames orig }
   return a
 
 -- | Temporarily bind a collection of names to types
@@ -257,7 +263,11 @@ bindLocalTypeVariables moduleName bindings =
 
 -- | Update the visibility of all names to Defined
 makeBindingGroupVisible :: Check ()
-makeBindingGroupVisible = modifyEnv $ \e -> e { names = M.map (\(ty, nk, _) -> (ty, nk, Defined)) (names e) }
+makeBindingGroupVisible = do
+  undef <- gets checkUndefinedNames
+  unless (S.null undef) $ do
+    modifyEnv $ \e -> e { names = foldr (M.adjust (\(ty, nk, _) -> (ty, nk, Defined))) (names e) (S.toList undef) }
+    modify $ \st -> st { checkUndefinedNames = mempty }
 
 -- | Update the visibility of all names to Defined in the scope of the provided action
 withBindingGroupVisible :: Check a -> Check a
@@ -267,8 +277,10 @@ withBindingGroupVisible action = preservingNames $ makeBindingGroupVisible >> ac
 preservingNames :: Check a -> Check a
 preservingNames action = do
   orig <- gets (names . checkEnv)
+  origUndef <- gets checkUndefinedNames
   a <- action
   modifyEnv $ \e -> e { names = orig }
+  modify $ \st -> st { checkUndefinedNames = origUndef }
   return a
 
 -- | Lookup the type of a value by name in the @Environment@
