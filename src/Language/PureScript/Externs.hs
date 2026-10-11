@@ -549,17 +549,11 @@ data TypeRefsMemoState = TypeRefsMemoState {-# UNPACK #-} !Int [GHCExts.Any]
 
 type TypeRefsMemo = IORef TypeRefsMemoState
 
--- | Create a fresh, empty memo cache. @NOINLINE@ alone is not enough to stop
--- GHC's full-laziness pass from floating the 'unsafePerformIO' out of the
--- lambda into a single shared top-level CAF -- it only blocks inlining at
--- call sites, not floating within this definition's own body. The dummy
--- argument must actually be forced ('seq') so the body is no longer
--- provably independent of it; only then does every logical call get its own
--- distinct 'IORef', which matters since 'moduleToExternsFile' runs
--- concurrently across modules and a shared cache would both race and leak
--- for the lifetime of the process.
+-- | Create a fresh, empty memo cache. The 'unsafePerformIO' body must mention
+-- the argument, or full laziness floats it into one shared global 'IORef'
+-- (racy across threads, and it made the cache-shape hashes nondeterministic).
 newTypeRefsMemo :: a -> TypeRefsMemo
-newTypeRefsMemo x = x `seq` unsafePerformIO (newIORef (TypeRefsMemoState 0 []))
+newTypeRefsMemo x = unsafePerformIO (x `seq` newIORef (TypeRefsMemoState 0 []))
 {-# NOINLINE newTypeRefsMemo #-}
 
 -- | Has this exact (by pointer identity, not structural equality) node
