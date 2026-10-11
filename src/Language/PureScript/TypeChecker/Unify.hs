@@ -121,12 +121,18 @@ unknownsInType t = everythingOnTypes (.) go t []
 
 -- | Unify two types, updating the current substitution
 unifyTypes :: SourceType -> SourceType -> Check ()
-unifyTypes t1 t2 = do
+unifyTypes = unifyTypesHinted id
+
+-- | Unify two types. The error hint shows the types after applying the given
+-- function, which lets a caller that only resolved the head of its types
+-- report the substituted subterms, as if they had been substituted up front.
+unifyTypesHinted :: (SourceType -> SourceType) -> SourceType -> SourceType -> Check ()
+unifyTypesHinted hinted t1 t2 = do
   sub <- gets checkSubstitution
   let a = headSubst sub t1
       b = headSubst sub t2
   -- Equal leaves cannot fail, so skip the hint bookkeeping.
-  if sameLeaf a b then return () else withErrorMessageHint (ErrorUnifyingTypes t1 t2) $ unifyFast sub a b
+  if sameLeaf a b then return () else withErrorMessageHint (ErrorUnifyingTypes (hinted t1) (hinted t2)) $ unifyFast sub a b
   where
   sameLeaf (TUnknown _ u1) (TUnknown _ u2) = u1 == u2
   sameLeaf (TypeVar _ v1) (TypeVar _ v2) = v1 == v2
@@ -171,12 +177,12 @@ unifyTypes t1 t2 = do
   fast _ (TypeConstructor _ c1) (TypeConstructor _ c2) | c1 == c2 = return ()
   fast _ (TypeLevelString _ s1) (TypeLevelString _ s2) | s1 == s2 = return ()
   fast _ (TypeLevelInt _ n1) (TypeLevelInt _ n2) | n1 == n2 = return ()
-  fast _ (TypeApp _ t3 t4) (TypeApp _ t5 t6) = do
-    t3 `unifyTypes` t5
-    t4 `unifyTypes` t6
+  fast sub (TypeApp _ t3 t4) (TypeApp _ t5 t6) = do
+    unifyTypesHinted (substituteType sub) t3 t5
+    unifyTypesHinted (substituteType sub) t4 t6
   fast _ (Skolem _ _ _ s1 _) (Skolem _ _ _ s2 _) | s1 == s2 = return ()
-  fast _ (KindedType _ ty1 _) ty2 = ty1 `unifyTypes` ty2
-  fast _ ty1 (KindedType _ ty2 _) = ty1 `unifyTypes` ty2
+  fast sub (KindedType _ ty1 _) ty2 = unifyTypesHinted (substituteType sub) ty1 ty2
+  fast sub ty1 (KindedType _ ty2 _) = unifyTypesHinted (substituteType sub) ty1 ty2
   fast sub a b = slow sub a b
 
   unifyTypes' (TUnknown _ u1) (TUnknown _ u2) | u1 == u2 = return ()
