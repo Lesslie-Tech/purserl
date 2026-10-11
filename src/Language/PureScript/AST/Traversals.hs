@@ -25,6 +25,7 @@ import Language.PureScript.Traversals (sndM, sndM', thirdM)
 import Language.PureScript.TypeClassDictionaries (TypeClassDictionaryInScope(..))
 import Language.PureScript.Types (Constraint(..), SourceType, mapConstraintArgs)
 
+{-# INLINABLE guardedExprM #-}
 guardedExprM :: Applicative m
              => (Guard -> m Guard)
              -> (Expr -> m Expr)
@@ -40,6 +41,7 @@ mapGuardedExpr :: (Guard -> Guard)
 mapGuardedExpr f g (GuardedExpr guards rhs) =
   GuardedExpr (fmap f guards) (g rhs)
 
+{-# INLINABLE litM #-}
 litM :: Monad m => (a -> m a) -> Literal a -> m (Literal a)
 litM go (ObjectLiteral as) = ObjectLiteral <$> traverse (sndM go) as
 litM go (ArrayLiteral as) = ArrayLiteral <$> traverse go as
@@ -193,6 +195,7 @@ everywhereOnValues f g h = (f', g', h')
   handleGuard (ConditionGuard e) = ConditionGuard (g' e)
   handleGuard (PatternGuard b e) = PatternGuard (h' b) (g' e)
 
+{-# INLINABLE everywhereOnValuesTopDownM #-}
 everywhereOnValuesTopDownM
   :: forall m
    . (Monad m)
@@ -339,6 +342,7 @@ everywhereOnValuesTopDownM f g h = (f' <=< f, g' <=< g, h' <=< h)
   handleGuard (ConditionGuard e) = ConditionGuard <$> (g' <=< g) e
   handleGuard (PatternGuard b e) = PatternGuard <$> (h' <=< h) b <*> (g' <=< g) e
 
+{-# INLINABLE everywhereOnValuesM #-}
 everywhereOnValuesM
   :: forall m
    . (Monad m)
@@ -672,6 +676,7 @@ everywhereWithContextOnValues s f g h i j k = (runIdentity . f', runIdentity . g
   (f', g', h', i', j', k') = everywhereWithContextOnValuesM s (wrap f) (wrap g) (wrap h) (wrap i) (wrap j) (wrap k)
   wrap = ((pure .) .)
 
+{-# INLINABLE everywhereWithContextOnValuesM #-}
 everywhereWithContextOnValuesM
   :: forall m s
    . (Monad m)

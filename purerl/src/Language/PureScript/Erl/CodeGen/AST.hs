@@ -416,6 +416,7 @@ everywhereOnErl f = go
 everywhereOnErlTopDown :: (Erl -> Erl) -> Erl -> Erl
 everywhereOnErlTopDown f = runIdentity . everywhereOnErlTopDownM (Identity . f)
 
+{-# INLINABLE everywhereOnErlTopDownM #-}
 everywhereOnErlTopDownM :: forall m. (Monad m) => (Erl -> m Erl) -> Erl -> m Erl
 everywhereOnErlTopDownM f = f >=> go
   where

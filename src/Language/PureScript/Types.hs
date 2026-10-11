@@ -331,6 +331,7 @@ mapConstraintArgsAllShared f c =
        else c { constraintKindArgs = kindArgs', constraintArgs = args' }
 
 -- | Monadic analogue of 'mapMaybeTypeShared'.
+{-# INLINABLE mapMaybeTypeSharedM #-}
 mapMaybeTypeSharedM :: Monad m => (Type a -> m (Type a)) -> Maybe (Type a) -> m (Maybe (Type a))
 mapMaybeTypeSharedM _ Nothing = pure Nothing
 mapMaybeTypeSharedM f m@(Just x) = do
@@ -338,6 +339,7 @@ mapMaybeTypeSharedM f m@(Just x) = do
   pure $! if ptrEq x' x then m else Just x'
 
 -- | Monadic analogue of 'mapListTypeShared'.
+{-# INLINABLE mapListTypeSharedM #-}
 mapListTypeSharedM :: Monad m => (Type a -> m (Type a)) -> [Type a] -> m [Type a]
 mapListTypeSharedM _ [] = pure []
 mapListTypeSharedM f xs0@(x : xs) = do
@@ -915,6 +917,7 @@ everywhereOnTypes f = go where
 
 -- | Monadic analogue of 'everywhereOnTypes' -- see its docs for why this is
 -- sharing-preserving and why that matters.
+{-# INLINABLE everywhereOnTypesM #-}
 everywhereOnTypesM :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
 everywhereOnTypesM f = go where
   go t@(TypeApp ann t1 t2) = do
@@ -995,6 +998,7 @@ everywhereOnTypesM f = go where
     pure $! if ptrEq t new then t else new
 
 
+{-# INLINABLE everywhereOnTypesTopDownM #-}
 everywhereOnTypesTopDownM :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
 everywhereOnTypesTopDownM f = go <=< f where
   go (TypeApp ann t1 t2) = do

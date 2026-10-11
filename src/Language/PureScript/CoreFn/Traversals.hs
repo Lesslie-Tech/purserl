@@ -52,6 +52,7 @@ everywhereOnValues f g h = (f', g', h')
 -- This function is useful as a building block for recursive functions, but
 -- doesn't actually recurse itself.
 --
+{-# INLINABLE traverseCoreFn #-}
 traverseCoreFn
   :: forall f a
    . Applicative f
