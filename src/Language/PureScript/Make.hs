@@ -1,3 +1,6 @@
+{-# OPTIONS_GHC -fno-full-laziness #-}
+-- With full laziness, GHC floats work on the parsed modules out of `make` and keeps every module's AST alive for the whole build (about 30% more peak RSS).
+{-# LANGUAGE BangPatterns #-}
 {- HLINT ignore "Use if" -}
 module Language.PureScript.Make
   (
@@ -254,6 +257,11 @@ make ma@MakeActions{..} ms = do
   progress $ CompileMeta ("### CS.doneSortModules9 " <> diffTime st2 end2)
 
 
+  -- Jobs and the final result only need the module names. Holding on to `sorted` itself would keep
+  -- every module's parsed source alive until the whole build finishes.
+  let !sortedNames = forceNames (map (getModuleName . CST.resPartial) sorted)
+      forceNames names = foldr seq () names `seq` names
+
   st3 <- realTime
   (buildPlan, newCacheDb) <- BuildPlan.construct2 ma cacheDb (sorted, graph)
   end3 <- realTime
@@ -315,7 +323,7 @@ make ma@MakeActions{..} ms = do
             (T.unpack . spanName . getModuleSourceSpan . CST.resPartial $ m)
             (fst $ CST.resFull m)
             (fmap importPrim . snd $ CST.resFull m)
-            (deps `inOrderOf` map (getModuleName . CST.resPartial) sorted)
+            (deps `inOrderOf` sortedNames)
           -- NOTE: exception safety for this whole per-module job (including
           -- goBuild/buildModule) is handled by the `onException` wrapped around
           -- the entire forked action below, not here.
@@ -444,7 +452,7 @@ make ma@MakeActions{..} ms = do
   let lookupResult mn =
         fromMaybe (internalError "make: module not found in results")
         $ M.lookup mn successes
-  return (map (lookupResult . getModuleName . CST.resPartial) sorted)
+  return (map lookupResult sortedNames)
 
   where
   checkModuleNames :: Make ()

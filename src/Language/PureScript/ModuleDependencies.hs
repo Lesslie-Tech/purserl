@@ -57,7 +57,9 @@ sortModules dependencyDepth toSig ms = do
                                          Transitive -> reachable graph v
                              toKey i = case fromVertex i of (_, key, _) -> key
                          return (mn, filter (/= mn) (map toKey deps))
-    return (fst <$> ms'', moduleGraph)
+    -- Force the graph: its lazy elements would otherwise keep `fromVertex`, and with it every module, alive.
+    let !forcedGraph = force moduleGraph
+    return (fst <$> ms'', forcedGraph)
   where
     toGraphNode :: S.Set ModuleName -> (a, ModuleSignature) -> Either MultipleErrors ((a, ModuleSignature), ModuleName, [ModuleName])
     toGraphNode mns m@(_, ModuleSignature _ mn deps) = do
