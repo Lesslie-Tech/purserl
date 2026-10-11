@@ -439,65 +439,68 @@ validateParamsInTypeConstructors derivingClass utc isBi CovariantClasses{..} con
 
   where
   typeToUsageOf :: InstanceContext -> [(Text, SourceType)] -> These Text Text -> Bool -> SourceType -> Writer [SourceSpan] (Maybe (ParamUsage c))
-  typeToUsageOf tcds subst = fix $ \go params isNegative -> let
-    goCo = go params isNegative
-    goContra = go params $ not isNegative
+  typeToUsageOf tcds subst = go
+    where
+    go :: These Text Text -> Bool -> SourceType -> Writer [SourceSpan] (Maybe (ParamUsage c))
+    go params isNegative = let
+      goCo = go params isNegative
+      goContra = go params $ not isNegative
 
-    assertNoParamUsedIn :: SourceType -> Writer [SourceSpan] ()
-    assertNoParamUsedIn ty = void $ both (flip assertParamNotUsedIn ty) params
+      assertNoParamUsedIn :: SourceType -> Writer [SourceSpan] ()
+      assertNoParamUsedIn ty = void $ both (flip assertParamNotUsedIn ty) params
 
-    assertParamNotUsedIn :: Text -> SourceType -> Writer [SourceSpan] ()
-    assertParamNotUsedIn param = everythingOnTypes (*>) $ \case
-      TypeVar (SourceAnn ss _) name | name == param -> tell [ss]
-      _ -> pure ()
+      assertParamNotUsedIn :: Text -> SourceType -> Writer [SourceSpan] ()
+      assertParamNotUsedIn param = everythingOnTypes (*>) $ \case
+        TypeVar (SourceAnn ss _) name | name == param -> tell [ss]
+        _ -> pure ()
 
-    tryBiClasses ht tyLArg tyArg
-      | hasInstance tcds ht biClass
-        = goCo tyLArg >>= preferMonoClass MentionsParamBi
-      | Just (ContravarianceSupport c _ _ ContravariantClasses{..}) <- contravarianceSupport, hasInstance tcds ht proClass
-        = goContra tyLArg >>= preferMonoClass (MentionsParamContravariantly c . MentionsParamPro)
-      | otherwise
-        = assertNoParamUsedIn tyLArg *> tryMonoClasses ht tyArg
-      where
-      preferMonoClass f lUsage =
-        (if isNothing lUsage && hasInstance tcds ht monoClass then fmap MentionsParam else fmap f . align lUsage) <$> goCo tyArg
-
-    tryMonoClasses ht tyArg
-      | hasInstance tcds ht monoClass
-        = fmap MentionsParam <$> goCo tyArg
-      | Just (ContravarianceSupport c _ _ ContravariantClasses{..}) <- contravarianceSupport, hasInstance tcds ht contraClass
-        = fmap (MentionsParamContravariantly c . MentionsParamContra) <$> goContra tyArg
-      | otherwise
-        = assertNoParamUsedIn tyArg $> Nothing
-
-    headOfTypeWithSubst :: SourceType -> Qualified (Either Text (ProperName 'TypeName))
-    headOfTypeWithSubst = headOfType . replaceAllTypeVars subst
-
-    in \case
-      ForAll _ _ name _ ty _ ->
-        fmap join . traverse (\params' -> go params' isNegative ty) $ filterThese (/= name) params
-
-      ConstrainedType _ _ ty ->
-        goCo ty
-
-      TypeApp _ (TypeConstructor _ Prim.Record) row ->
-        fmap (fmap IsRecord . nonEmpty . catMaybes) . for (decomposeRec' row) $ \(Label lbl, ty) ->
-          fmap (lbl, ) <$> goCo ty
-
-      TypeApp _ (TypeApp _ tyFn tyLArg) tyArg ->
-        assertNoParamUsedIn tyFn *> tryBiClasses (headOfTypeWithSubst tyFn) tyLArg tyArg
-
-      TypeApp _ tyFn tyArg ->
-        assertNoParamUsedIn tyFn *> tryMonoClasses (headOfTypeWithSubst tyFn) tyArg
-
-      TypeVar (SourceAnn ss _) name -> mergeTheseWith (checkName lparamIsContra IsLParam) (checkName paramIsContra IsParam) (liftA2 (<|>)) params
+      tryBiClasses ht tyLArg tyArg
+        | hasInstance tcds ht biClass
+          = goCo tyLArg >>= preferMonoClass MentionsParamBi
+        | Just (ContravarianceSupport c _ _ ContravariantClasses{..}) <- contravarianceSupport, hasInstance tcds ht proClass
+          = goContra tyLArg >>= preferMonoClass (MentionsParamContravariantly c . MentionsParamPro)
+        | otherwise
+          = assertNoParamUsedIn tyLArg *> tryMonoClasses ht tyArg
         where
-        checkName thisParamIsContra usage param
-          | name == param = when (thisParamIsContra /= isNegative) (tell [ss]) $> Just usage
-          | otherwise = pure Nothing
+        preferMonoClass f lUsage =
+          (if isNothing lUsage && hasInstance tcds ht monoClass then fmap MentionsParam else fmap f . align lUsage) <$> goCo tyArg
 
-      ty ->
-        assertNoParamUsedIn ty $> Nothing
+      tryMonoClasses ht tyArg
+        | hasInstance tcds ht monoClass
+          = fmap MentionsParam <$> goCo tyArg
+        | Just (ContravarianceSupport c _ _ ContravariantClasses{..}) <- contravarianceSupport, hasInstance tcds ht contraClass
+          = fmap (MentionsParamContravariantly c . MentionsParamContra) <$> goContra tyArg
+        | otherwise
+          = assertNoParamUsedIn tyArg $> Nothing
+
+      headOfTypeWithSubst :: SourceType -> Qualified (Either Text (ProperName 'TypeName))
+      headOfTypeWithSubst = headOfType . replaceAllTypeVars subst
+
+      in \case
+        ForAll _ _ name _ ty _ ->
+          fmap join . traverse (\params' -> go params' isNegative ty) $ filterThese (/= name) params
+
+        ConstrainedType _ _ ty ->
+          goCo ty
+
+        TypeApp _ (TypeConstructor _ Prim.Record) row ->
+          fmap (fmap IsRecord . nonEmpty . catMaybes) . for (decomposeRec' row) $ \(Label lbl, ty) ->
+            fmap (lbl, ) <$> goCo ty
+
+        TypeApp _ (TypeApp _ tyFn tyLArg) tyArg ->
+          assertNoParamUsedIn tyFn *> tryBiClasses (headOfTypeWithSubst tyFn) tyLArg tyArg
+
+        TypeApp _ tyFn tyArg ->
+          assertNoParamUsedIn tyFn *> tryMonoClasses (headOfTypeWithSubst tyFn) tyArg
+
+        TypeVar (SourceAnn ss _) name -> mergeTheseWith (checkName lparamIsContra IsLParam) (checkName paramIsContra IsParam) (liftA2 (<|>)) params
+          where
+          checkName thisParamIsContra usage param
+            | name == param = when (thisParamIsContra /= isNegative) (tell [ss]) $> Just usage
+            | otherwise = pure Nothing
+
+        ty ->
+          assertNoParamUsedIn ty $> Nothing
 
   paramIsContra = any paramIsContravariant contravarianceSupport
   lparamIsContra = any lparamIsContravariant contravarianceSupport
@@ -515,9 +518,9 @@ validateParamsInTypeConstructors derivingClass utc isBi CovariantClasses{..} con
       _ -> False
 
   headOfType :: SourceType -> Qualified (Either Text (ProperName 'TypeName))
-  headOfType = fix $ \go -> \case
-    TypeApp _ ty _ -> go ty
-    KindApp _ ty _ -> go ty
+  headOfType = \case
+    TypeApp _ ty _ -> headOfType ty
+    KindApp _ ty _ -> headOfType ty
     TypeVar _ nm -> Qualified ByNullSourcePos (Left nm)
     Skolem _ nm _ _ _ -> Qualified ByNullSourcePos (Left nm)
     TypeConstructor _ (Qualified qb nm) -> Qualified qb (Right nm)
@@ -532,8 +535,8 @@ traverseFields :: forall c f. Applicative f => (ParamUsage c -> Expr -> f Expr) 
 traverseFields f fields r = fmap (ObjectUpdate r) . for (toList fields) $ \(lbl, usage) -> (lbl, ) <$> f usage (Accessor lbl r)
 
 unnestRecords :: forall c f. Applicative f => (ParamUsage c -> Expr -> f Expr) -> ParamUsage c -> Expr -> f Expr
-unnestRecords f = fix $ \go -> \case
-  IsRecord fields -> traverseFields go fields
+unnestRecords f = \case
+  IsRecord fields -> traverseFields (unnestRecords f) fields
   usage -> f usage
 
 mkCasesForTraversal
