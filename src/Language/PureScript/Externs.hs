@@ -433,7 +433,7 @@ instance Binary CSTypeInstanceBody where
     n -> fail ("Binary CSTypeInstanceBody: invalid tag " <> show n)
 
 data ToCSDB
-  = ToCSDB (M.Map ModuleName ToCSDBInner)
+  = ToCSDB !(M.Map ModuleName ToCSDBInner)
   deriving (Show, Eq, Generic, NFData)
 
 runToCSDB :: ToCSDB -> M.Map ModuleName ToCSDBInner
