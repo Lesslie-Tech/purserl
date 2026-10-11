@@ -375,7 +375,7 @@ executable purs
   import: defaults
   hs-source-dirs: app
   main-is: Main.hs
-  ghc-options: -fno-warn-unused-do-bind -threaded -rtsopts "-with-rtsopts=-maxN8 -A128m -qn8" -Wno-unused-packages
+  ghc-options: -fno-warn-unused-do-bind -threaded -rtsopts "-with-rtsopts=-maxN8 -A96m -qn8" -Wno-unused-packages
   build-depends:
     ansi-wl-pprint >=1.0.2,
     network >=3.2.7.0,

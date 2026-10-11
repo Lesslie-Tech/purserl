@@ -63,14 +63,14 @@ test-profiling: ## Run the tests, with profiling enabled. Also builds a flamegra
 	cat tests.prof | stack exec ghc-prof-aeson-flamegraph | flamegraph.pl > tests.svg
 
 # RTS tuning of the compiler itself, measured with `purs compile ... +RTS -s`
-# on a clean ~1500 module build (32 cores, Oct 2026). GC was about half of the
-# wall time with the default 4MB allocation area, so -with-rtsopts is
-# -maxN8 -A128m -qn8: at most 8 capabilities, a big nursery, 8 GC threads.
-#   options                     wall     peak RSS
-#   -N (old default)            32.5 s   2.4 GB
-#   -N -A64m                    21.3 s   4.7 GB
-#   -N8 -A128m -qn8             23.1 s   3.05 GB
-# Pinned to 8 cores: -N 34.2 s / 2.1 GB, -N -A128m 23.0 s / 2.9 GB.
+# on a clean ~1500 module build (32 cores, Oct 2026, after the RSS fixes).
+# -with-rtsopts is -maxN8 -A96m -qn8: at most 8 capabilities, a big nursery,
+# 8 GC threads. GC CPU time is ~20 s of ~160 s total, so it no longer dominates.
+#   -A      wall     peak RSS
+#   4m      32.5 s   2.4 GB   (before the RSS fixes, -N)
+#   128m    20.2 s   1.97 GB
+#   96m     20.5 s   1.73 GB   (current)
+#   64m     21.1 s   1.62 GB
 # Mutator time is flat beyond ~8 cores, so only the GC settings matter there.
 
 bench: ## Run benchmarks for PureScript
