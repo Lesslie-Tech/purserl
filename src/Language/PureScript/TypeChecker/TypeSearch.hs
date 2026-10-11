@@ -2,10 +2,8 @@ module Language.PureScript.TypeChecker.TypeSearch
   ( typeSearch
   ) where
 
-import Protolude hiding (StateT, evalStateT)
+import Protolude
 
-import Control.Monad.State.Strict (evalStateT)
-import Control.Monad.Writer (WriterT, runWriterT)
 import Data.Map qualified as Map
 import Language.PureScript.TypeChecker.Entailment qualified as Entailment
 
@@ -33,8 +31,6 @@ checkInEnvironment env st =
   either (const Nothing) (Just . second TC.checkEnv)
   . TC.runCheckPure (st { TC.checkEnv = env })
 
-evalWriterT :: Monad m => WriterT b m r -> m r
-evalWriterT m = fmap fst (runWriterT m)
 
 checkSubsume
   :: Maybe [(P.Ident, Entailment.InstanceContext, P.SourceConstraint)]
@@ -66,7 +62,7 @@ checkSubsume unsolved env st userT envT = checkInEnvironment env st $ do
   -- Now check that any unsolved constraints have not become impossible
   (traverse_ . traverse_) (\(_, context, constraint) -> do
     let constraint' = P.mapConstraintArgs (map (P.substituteType subst)) constraint
-    flip evalStateT Map.empty . evalWriterT $
+    Entailment.runSolver $
       Entailment.entails
         (Entailment.SolverOptions
           { solverShouldGeneralize = True
