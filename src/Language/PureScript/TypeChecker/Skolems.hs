@@ -22,7 +22,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (ErrorMessage(..), MultipleErrors, SimpleErrorMessage(..), positionedError, singleError)
 import Language.PureScript.Traversals (defS)
 import Language.PureScript.TypeChecker.Monad (Check, CheckState(..))
-import Language.PureScript.Types (SkolemScope(..), SourceType, Type(..), everythingOnTypes, everywhereOnTypesM, replaceTypeVars)
+import Language.PureScript.Types (SkolemScope(..), SourceType, Type(..), everythingOnTypes, everywhereOnTypesM, foldOnTypes, replaceTypeVars)
 
 -- | Generate a new skolem constant
 newSkolemConstant :: Check Int
@@ -129,8 +129,8 @@ skolemEscapeCheck expr@TypedValue{} =
 
         -- Collect any skolem variables appearing in a type
         collectSkolems :: SourceType -> [(SourceAnn, Text, SkolemScope)]
-        collectSkolems = everythingOnTypes (++) collect where
-          collect (Skolem ss name _ _ scope) = [(ss, name, scope)]
-          collect _ = []
+        collectSkolems = foldOnTypes collect [] where
+          collect (Skolem ss name _ _ scope) acc = (ss, name, scope) : acc
+          collect _ acc = acc
     go scos _ = (scos, [])
 skolemEscapeCheck _ = internalError "skolemEscapeCheck: untyped value"

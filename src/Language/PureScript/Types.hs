@@ -21,7 +21,8 @@ import Data.Aeson qualified as A
 import Data.Aeson.Types qualified as A
 import Data.Foldable (fold, foldl')
 import Data.IntSet qualified as IS
-import Data.List (sortOn)
+import Data.List (sortBy, sortOn)
+import Data.Ord (comparing)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -616,7 +617,15 @@ rowToList = go where
 
 -- | Convert a row to a list of pairs of labels and types, sorted by the labels.
 rowToSortedList :: Type a -> ([RowListItem a], Type a)
-rowToSortedList = first (sortOn rowListLabel) . rowToList
+rowToSortedList t = case rowToList t of
+  (items, tail') -> (sortItems items, tail')
+  where
+  -- Rows are often already in order, which needs no allocation to check.
+  sortItems items
+    | ascending items = items
+    | otherwise = sortBy (comparing rowListLabel) items
+  ascending (a : rest@(b : _)) = rowListLabel a <= rowListLabel b && ascending rest
+  ascending _ = True
 
 -- | Convert a list of labels and types to a row
 rowFromList :: ([RowListItem a], Type a) -> Type a
@@ -634,17 +643,18 @@ alignRowsWith
   -> Type a
   -> Type a
   -> ([r], (([RowListItem a], Type a), ([RowListItem a], Type a)))
-alignRowsWith f ty1 ty2 = go s1 s2 where
+alignRowsWith f ty1 ty2 = go [] [] [] s1 s2 where
   (s1, tail1) = rowToSortedList ty1
   (s2, tail2) = rowToSortedList ty2
 
-  go [] r = ([], (([], tail1), (r, tail2)))
-  go r [] = ([], ((r, tail1), ([], tail2)))
-  go lhs@(RowListItem a1 l1 t1 : r1) rhs@(RowListItem a2 l2 t2 : r2) = 
+  -- The accumulators hold the common results and the left/right-only items, newest first.
+  go common lOnly rOnly [] r = (reverse common, ((reverse lOnly, tail1), (reverse rOnly ++ r, tail2)))
+  go common lOnly rOnly r [] = (reverse common, ((reverse lOnly ++ r, tail1), (reverse rOnly, tail2)))
+  go common lOnly rOnly lhs@(i1@(RowListItem _ l1 t1) : r1) rhs@(i2@(RowListItem _ l2 t2) : r2) =
     case compare l1 l2 of
-      LT -> (second . first . first) (RowListItem a1 l1 t1 :) (go r1 rhs)
-      GT -> (second . second . first) (RowListItem a2 l2 t2 :) (go lhs r2)
-      EQ -> first (f l1 t1 t2 :) (go r1 r2)
+      LT -> go common (i1 : lOnly) rOnly r1 rhs
+      GT -> go common lOnly (i2 : rOnly) lhs r2
+      EQ -> go (f l1 t1 t2 : common) lOnly rOnly r1 r2
 
 -- | Check whether a type is a monotype
 isMonoType :: Type a -> Bool
@@ -1051,6 +1061,27 @@ everythingOnTypes (<+>) f = go where
   go t@(BinaryNoParensType _ t1 t2 t3) = f t <+> go t1 <+> go t2 <+> go t3
   go t@(ParensInType _ t1) = f t <+> go t1
   go other = f other
+
+-- | A strict pre-order right fold over a type and all of its sub-types, visiting
+-- the same nodes in the same order as 'everythingOnTypes'.
+foldOnTypes :: (Type a -> r -> r) -> r -> Type a -> r
+foldOnTypes f = flip go where
+  go t !acc = case t of
+    TypeApp _ t1 t2 -> visit (go t1 (go t2 acc))
+    KindApp _ t1 t2 -> visit (go t1 (go t2 acc))
+    ForAll _ _ _ (Just k) ty _ -> visit (go k (go ty acc))
+    ForAll _ _ _ _ ty _ -> visit (go ty acc)
+    ConstrainedType _ c ty ->
+      visit (foldr go (go ty acc) (constraintKindArgs c ++ constraintArgs c))
+    Skolem _ _ (Just k) _ _ -> visit (go k acc)
+    RCons _ _ ty rest -> visit (go ty (go rest acc))
+    KindedType _ ty k -> visit (go ty (go k acc))
+    BinaryNoParensType _ t1 t2 t3 -> visit (go t1 (go t2 (go t3 acc)))
+    ParensInType _ t1 -> visit (go t1 acc)
+    _ -> f t acc
+    where
+    visit !r = f t r
+{-# INLINE foldOnTypes #-}
 
 everythingWithContextOnTypes :: s -> r -> (r -> r -> r) -> (s -> Type a -> (s, r)) -> Type a -> r
 everythingWithContextOnTypes s0 r0 (<+>) f = go' s0 where
