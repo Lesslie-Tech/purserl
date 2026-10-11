@@ -96,10 +96,20 @@ substituteType sub = everywhereOnTypes go
 -- | Make sure that an unknown does not occur in a type
 occursCheck :: Int -> SourceType -> Check ()
 occursCheck _ TUnknown{} = return ()
-occursCheck u t = when (getAny (everythingOnTypes (<>) go t)) . throwError . errorMessage . InfiniteType $ t
+occursCheck u t = when (go t) . throwError . errorMessage . InfiniteType $ t
   where
-  go (TUnknown _ u') | u == u' = Any True
-  go _ = Any False
+  go :: SourceType -> Bool
+  go (TUnknown _ u') = u == u'
+  go (TypeApp _ t1 t2) = go t1 || go t2
+  go (KindApp _ t1 t2) = go t1 || go t2
+  go (ForAll _ _ _ mk ty _) = maybe False go mk || go ty
+  go (ConstrainedType _ c ty) = any go (constraintKindArgs c) || any go (constraintArgs c) || go ty
+  go (Skolem _ _ (Just k) _ _) = go k
+  go (RCons _ _ ty rest) = go ty || go rest
+  go (KindedType _ ty k) = go ty || go k
+  go (BinaryNoParensType _ t1 t2 t3) = go t1 || go t2 || go t3
+  go (ParensInType _ t1) = go t1
+  go _ = False
 
 -- | Compute a list of all unknowns appearing in a type
 unknownsInType :: Type a -> [(a, Int)]
@@ -113,8 +123,62 @@ unknownsInType t = everythingOnTypes (.) go t []
 unifyTypes :: SourceType -> SourceType -> Check ()
 unifyTypes t1 t2 = do
   sub <- gets checkSubstitution
-  withErrorMessageHint (ErrorUnifyingTypes t1 t2) $ unifyTypes' (substituteType sub t1) (substituteType sub t2)
+  let a = headSubst sub t1
+      b = headSubst sub t2
+  -- Equal leaves cannot fail, so skip the hint bookkeeping.
+  if sameLeaf a b then return () else withErrorMessageHint (ErrorUnifyingTypes t1 t2) $ unifyFast sub a b
   where
+  sameLeaf (TUnknown _ u1) (TUnknown _ u2) = u1 == u2
+  sameLeaf (TypeVar _ v1) (TypeVar _ v2) = v1 == v2
+  sameLeaf (TypeConstructor _ c1) (TypeConstructor _ c2) = c1 == c2
+  sameLeaf (TypeLevelString _ s1) (TypeLevelString _ s2) = s1 == s2
+  sameLeaf (TypeLevelInt _ n1) (TypeLevelInt _ n2) = n1 == n2
+  sameLeaf (Skolem _ _ _ s1 _) (Skolem _ _ _ s2 _) = s1 == s2
+  sameLeaf _ _ = False
+
+  -- Only the head is resolved here so that recursing into a type does not
+  -- re-substitute the whole subtree at every level. Shapes that need the
+  -- fully substituted types (foralls, rows, kind applications, errors) take
+  -- the slow path.
+  headSubst sub t@(TUnknown _ u) =
+    case IM.lookup u (substType sub) of
+      Nothing -> t
+      Just t'@(TUnknown _ u1) | u1 == u -> t'
+      Just t' -> headSubst sub t'
+  headSubst _ t = t
+
+  fastShape = \case
+    TypeApp{} -> True
+    TypeConstructor{} -> True
+    TypeLevelString{} -> True
+    TypeLevelInt{} -> True
+    TypeVar{} -> True
+    Skolem{} -> True
+    KindedType{} -> True
+    TUnknown{} -> True
+    _ -> False
+
+  unifyFast sub a b
+    | fastShape a && fastShape b = fast sub a b
+    | otherwise = slow sub a b
+
+  slow sub a b = unifyTypes' (substituteType sub a) (substituteType sub b)
+
+  fast _ (TUnknown _ u1) (TUnknown _ u2) | u1 == u2 = return ()
+  fast sub (TUnknown _ u) t = solveType u (substituteType sub t)
+  fast sub t (TUnknown _ u) = solveType u (substituteType sub t)
+  fast _ (TypeVar _ v1) (TypeVar _ v2) | v1 == v2 = return ()
+  fast _ (TypeConstructor _ c1) (TypeConstructor _ c2) | c1 == c2 = return ()
+  fast _ (TypeLevelString _ s1) (TypeLevelString _ s2) | s1 == s2 = return ()
+  fast _ (TypeLevelInt _ n1) (TypeLevelInt _ n2) | n1 == n2 = return ()
+  fast _ (TypeApp _ t3 t4) (TypeApp _ t5 t6) = do
+    t3 `unifyTypes` t5
+    t4 `unifyTypes` t6
+  fast _ (Skolem _ _ _ s1 _) (Skolem _ _ _ s2 _) | s1 == s2 = return ()
+  fast _ (KindedType _ ty1 _) ty2 = ty1 `unifyTypes` ty2
+  fast _ ty1 (KindedType _ ty2 _) = ty1 `unifyTypes` ty2
+  fast sub a b = slow sub a b
+
   unifyTypes' (TUnknown _ u1) (TUnknown _ u2) | u1 == u2 = return ()
   unifyTypes' (TUnknown _ u) t = solveType u t
   unifyTypes' t (TUnknown _ u) = solveType u t
