@@ -49,9 +49,9 @@ import Language.PureScript.Types
 
 import Debug.Trace
 import PrettyPrint
-import Control.Monad.Trans.State.Strict hiding (get, put, modify)
+import Control.Monad.Trans.State.Strict hiding (get, put, modify, modify')
 import Control.Monad.Trans.Reader (ReaderT, runReaderT, ask)
-import Control.Monad.State.Class (modify)
+import Control.Monad.State.Class (modify, modify')
 import Control.Monad
 import Data.Bifunctor (second)
 import Data.Function ((&))
@@ -453,13 +453,13 @@ instance Monoid ToCSDB where
 data ToCSDBInner
   = ToCSDBInner
     -- TODO[drathier]: all these Qualified contain SourcePos if it's referring to something in the current module. We generally don't want to store SourcePos, but since it's only local, we're already rebuilding the module at that point, so I'll leave it in.
-    { _referencedCtors :: M.Map RunIdent ()
+    { _referencedCtors :: !(M.Map RunIdent ())
     -- NOTE[drathier]: it's likely that we only care about the types of ctors, not types themselves, as using ctors means we care about the type shape changing, but if we just refer to the type we probably don't care what its internal structure is.
-    , _referencedTypes :: M.Map (ProperName 'TypeName) ()
-    , _referencedTypeOp :: M.Map (OpName 'TypeOpName) ()
-    , _referencedTypeClass :: M.Map (ProperName 'ClassName) ()
-    , _referencedValues :: M.Map RunIdent ()
-    , _referencedValueOp :: M.Map (OpName 'ValueOpName) ()
+    , _referencedTypes :: !(M.Map (ProperName 'TypeName) ())
+    , _referencedTypeOp :: !(M.Map (OpName 'TypeOpName) ())
+    , _referencedTypeClass :: !(M.Map (ProperName 'ClassName) ())
+    , _referencedValues :: !(M.Map RunIdent ())
+    , _referencedValueOp :: !(M.Map (OpName 'ValueOpName) ())
     }
   deriving (Show, Eq, Generic, NFData)
 
@@ -855,7 +855,7 @@ csdbPutValueOp =
 
 csdbPutHelper :: (ToCSDBInner -> t -> ToCSDBInner) -> Qualified t -> CS ()
 csdbPutHelper f (Qualified qBy ref) =
-  modify
+  modify'
     (\(ToCSDB outer) ->
       ToCSDB $
       case qBy of
@@ -863,7 +863,7 @@ csdbPutHelper f (Qualified qBy ref) =
         ByModuleName mn ->
           M.alter
             (\maybeInner ->
-              Just (f (maybeInner & fromMaybe mempty) ref)
+              let !inner = f (maybeInner & fromMaybe mempty) ref in Just inner
             )
             mn
             outer
