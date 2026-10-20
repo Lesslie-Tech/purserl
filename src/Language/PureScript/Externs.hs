@@ -1122,15 +1122,24 @@ dbToOpaque (DB a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
   (a2 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
   a3
   (a4 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
-  (a5 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a5 & M.map (\v -> v & map withoutValueBodyRefs & Binary.encode & cacheShapeHashFromByteString))
   (a6 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
   (a7 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
   (a8 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
   (a9 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
   (a10 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
   (a11 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
-  (a12 & M.map (\v -> v & Binary.encode & cacheShapeHashFromByteString))
+  (a12 & M.map (\v -> v & map withoutInstanceBodyRefs & Binary.encode & cacheShapeHashFromByteString))
   a13 -- & Binary.encode & cacheShapeHashFromByteString)
+
+-- Body refs stay in the DB for our own dependency collection, but are left out
+-- of the hash, so body-only edits don't change the shape downstream depends on.
+withoutValueBodyRefs :: CSValueDeclaration -> CSValueDeclaration
+withoutValueBodyRefs (CSValueDeclaration nk arity ty _) = CSValueDeclaration nk arity ty mempty
+
+withoutInstanceBodyRefs :: CSTypeInstanceDeclaration -> CSTypeInstanceDeclaration
+withoutInstanceBodyRefs (CSTypeInstanceDeclaration chain csdb1 cls csdb2 (body, _)) =
+  CSTypeInstanceDeclaration chain csdb1 cls csdb2 (body, mempty)
 
 data DBOpaque
   = DBOpaque
