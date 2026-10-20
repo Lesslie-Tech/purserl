@@ -30,6 +30,8 @@ import Data.Text qualified as T
 import Debug.Trace qualified as Debug
 
 import Language.PureScript.AST.Literals (Literal(..))
+import Language.PureScript.Erl.CodeGen.AST (Atom(..))
+import Language.PureScript.Erl.CodeGen.Common (runAtom)
 
 import Language.PureScript.AST.SourcePos qualified as P
 import Language.PureScript.PSString qualified as PS
@@ -58,7 +60,11 @@ optimizeCoreFn m = do
   -- application by optimizeDataFunctionApply; still runs before CSE so a
   -- whole chain is seen at once.
   decls2a <- expandAltChains decls2
-  decls3 <- optimizeCommonSubexpressions (moduleName m) decls2a
+  -- Record operations over a literal `IsSymbol` dictionary -- see
+  -- expandRecordOps. Must run before CSE, which would otherwise float the
+  -- dictionary (and the partial application of it) out of the call site.
+  decls2b <- expandRecordOps decls2a
+  decls3 <- optimizeCommonSubexpressions (moduleName m) decls2b
   pure m {moduleDecls = decls3}
 
 -- | `Control.Semigroupoid.composeFlippedF` (aliased as `>>>`)
@@ -177,6 +183,249 @@ collectAltChain kind e
   | Just (kind', a, b) <- matchAlt2 e, kind' == kind =
       collectAltChain kind a <> collectAltChain kind b
   | otherwise = [e]
+
+-- | The local record module's label-indexed operations take an `IsSymbol`
+-- dictionary only to learn the label, which at every call site with a literal
+-- label is a constant. Rewrite them to native Erlang map syntax. A pipeline
+-- of operations (`r # set @"a" x # modify @"b" f # insert @"c" y`) is fused
+-- into a single `R#{a := X, b := F(maps:get(b, R)), c => Y}`, which the
+-- efficiency guide recommends over one update per key. Calls through a
+-- dictionary variable are left alone.
+recordModule :: ModuleName
+recordModule = ModuleName "R"
+
+-- | How a pending update writes its label: `Assign` to a key the record has,
+-- `Insert` of one it lacks, `Merge` of one it may or may not have.
+-- | A name unique in the whole module. Erlang scopes a variable bound inside
+-- `begin ... end` to the enclosing clause, and the later renaming only keeps
+-- apart names that existed before this pass, so a repeated name would turn the
+-- second binding into a match against the first.
+freshRecIdent :: Text -> Supply Ident
+freshRecIdent name = (\n -> Ident (name <> "@" <> T.pack (show n))) <$> fresh
+
+data RecKind = Assign | Insert | Merge
+  deriving (Eq)
+
+data RecOp
+  = OpSet PS.PSString (Expr Ann)
+  | OpModify PS.PSString (Expr Ann)
+  | OpInsert PS.PSString (Expr Ann)
+  | OpDelete PS.PSString
+  | OpRename PS.PSString PS.PSString
+  | OpPut [(PS.PSString, Expr Ann)]
+  | OpMergeOver (Expr Ann)
+  | OpId
+
+-- | The label of a dictionary built by the `IsSymbol` solver.
+literalSymbolDict :: Expr Ann -> Maybe PS.PSString
+literalSymbolDict (App _ (Var _ (Qualified _ (Ident "IsSymbol$Dict"))) (Literal _ (ObjectLiteral [(k, Abs _ _ (Literal _ (StringLiteral s)))])))
+  | k == PS.mkString "reflectSymbol" = Just s
+literalSymbolDict _ = Nothing
+
+-- | (dictionaries taken, value arguments) for each rewritten function.
+recordOpArity :: Text -> Maybe (Int, Int)
+recordOpArity = \case
+  "get" -> Just (1, 1)
+  "set" -> Just (1, 2)
+  "modify" -> Just (1, 2)
+  "insert" -> Just (1, 2)
+  "delete" -> Just (1, 1)
+  "rename" -> Just (2, 1)
+  "nub" -> Just (0, 1)
+  "merge" -> Just (0, 2)
+  "union" -> Just (0, 2)
+  "disjointUnion" -> Just (0, 2)
+  _ -> Nothing
+
+-- | A call to a rewritten function, split into its function name, labels and
+-- value arguments, when the dictionaries are literal and at most all the
+-- value arguments are present.
+matchRecordCall :: Expr Ann -> Maybe (Ann, Text, [PS.PSString], [Expr Ann], Int)
+matchRecordCall e
+  | (Var ann (Qualified (ByModuleName mn) (Ident fn)), args) <- unApp e [],
+    mn == recordModule,
+    Just (nDicts, nVals) <- recordOpArity fn,
+    length args >= nDicts,
+    length args - nDicts <= nVals,
+    Just labels <- traverse literalSymbolDict (take nDicts args) =
+      Just (ann, fn, labels, drop nDicts args, nVals)
+  | otherwise = Nothing
+  where
+    unApp (App _ f a) acc = unApp f (a : acc)
+    unApp f acc = (f, acc)
+
+-- | The operation of a fully applied call, and the record it applies to.
+matchRecordOp :: Expr Ann -> Maybe (RecOp, Expr Ann)
+matchRecordOp e = do
+  (_, fn, labels, vals, nVals) <- matchRecordCall e
+  guard (length vals == nVals)
+  case (fn, labels, vals) of
+    ("set", [l], [v, r]) -> Just (OpSet l v, r)
+    ("modify", [l], [f, r]) -> Just (OpModify l f, r)
+    ("insert", [l], [v, r]) -> Just (OpInsert l v, r)
+    ("delete", [l], [r]) -> Just (OpDelete l, r)
+    ("rename", [from, to], [r]) -> Just (OpRename from to, r)
+    ("nub", [], [r]) -> Just (OpId, r)
+    (_, [], [Literal _ (ObjectLiteral fields), r])
+      | fn `elem` ["merge", "union", "disjointUnion"] ->
+          Just (OpPut fields, r)
+    (_, [], [l, r])
+      | fn `elem` ["merge", "union", "disjointUnion"] -> Just (OpMergeOver l, r)
+    _ -> Nothing
+
+-- | Pending state of a fused chain: the record being updated, labels to drop
+-- from it, and the updates to apply to what is left. `stLet` holds a binding
+-- for the record, introduced only once something reads from it.
+data RecState = RecState
+  { stBase :: Expr Ann,
+    stLet :: Maybe (Ident, Expr Ann),
+    stDels :: [PS.PSString],
+    stUps :: [(PS.PSString, RecKind, Expr Ann)]
+  }
+
+expandRecordOps :: [Bind Ann] -> Supply [Bind Ann]
+expandRecordOps = traverse goBind
+  where
+    goExpr :: Expr Ann -> Supply (Expr Ann)
+    goExpr e
+      | Just (_, "get", [l], [r], _) <- matchRecordCall e =
+          Accessor (extractAnn e) l <$> goExpr r
+      | Just _ <- matchRecordOp e = chain goExpr e
+      | Just (ann, _, _, vals, nVals) <- matchRecordCall e = do
+          -- Partial application: eta-expand, binding any non-trivial
+          -- argument outside the lambda so it's still evaluated once.
+          vals' <- traverse goExpr vals
+          missing <- traverse (const (freshRecIdent "recArg")) [length vals + 1 .. nVals]
+          named <- for vals' $ \v ->
+            if trivial v
+              then pure (v, Nothing)
+              else do
+                x <- freshRecIdent "recVal"
+                pure (local ann x, Just (NonRec ann x v))
+          let sat = rebuild e (map fst named ++ map (local ann) missing)
+          body <- case sat of
+            _ | Just (_, "get", [l], [r], _) <- matchRecordCall sat -> pure (Accessor ann l r)
+            _ -> chain pure sat
+          pure $ foldr (Let ann . pure) (foldr (Abs ann) body missing) (mapMaybe snd named)
+      | otherwise = goExprOneLevel e
+
+    local ann x = Var ann (Qualified ByNullSourcePos x)
+
+    trivial = \case
+      Var {} -> True
+      Abs {} -> True
+      Literal _ (ArrayLiteral _) -> False
+      Literal _ (ObjectLiteral _) -> False
+      Literal {} -> True
+      _ -> False
+
+    -- Replace a call's value arguments, keeping its function and dictionaries.
+    rebuild e vals = case matchRecordCall e of
+      Just (ann, _, labels, _, _) ->
+        let (hd, args) = spine e []
+         in foldl' (App ann) hd (take (length labels) args ++ vals)
+      Nothing -> e
+
+    spine (App _ f a) acc = spine f (a : acc)
+    spine f acc = (f, acc)
+
+    goBinder :: Binder Ann -> Supply (Binder Ann)
+    goBinder = goBinderOneLevel
+
+    goCaseAlt :: CaseAlternative Ann -> Supply (CaseAlternative Ann)
+    goCaseAlt = goCaseAltOneLevel
+
+    (goBind, goExprOneLevel, goBinderOneLevel, goCaseAltOneLevel) =
+      traverseCoreFn goBind goExpr goBinder goCaseAlt
+
+-- | Fuse a chain of record operations, `rec` being applied to every
+-- sub-expression that is carried over into the result.
+chain :: (Expr Ann -> Supply (Expr Ann)) -> Expr Ann -> Supply (Expr Ann)
+chain rec e = do
+  let (ops, base) = peel e []
+  base' <- rec base
+  ops' <- traverse (recOp rec) ops
+  st <- foldM (step ann) (RecState base' Nothing [] []) ops'
+  pure (flush ann st)
+  where
+    ann = extractAnn e
+    peel x acc = case matchRecordOp x of
+      Just (op, r) -> peel r (op : acc)
+      Nothing -> (acc, x)
+
+recOp :: (Expr Ann -> Supply (Expr Ann)) -> RecOp -> Supply RecOp
+recOp rec = \case
+  OpSet l v -> OpSet l <$> rec v
+  OpModify l f -> OpModify l <$> rec f
+  OpInsert l v -> OpInsert l <$> rec v
+  OpPut fs -> OpPut <$> traverse (traverse rec) fs
+  OpMergeOver l -> OpMergeOver <$> rec l
+  op -> pure op
+
+step :: Ann -> RecState -> RecOp -> Supply RecState
+step ann st = \case
+  OpId -> pure st
+  OpSet l v -> pure st {stUps = upsert l Assign v (stUps st)}
+  OpInsert l v
+    | l `elem` stDels st -> pure st {stDels = filter (/= l) (stDels st), stUps = upsert l Assign v (stUps st)}
+    | otherwise -> pure st {stUps = upsert l Insert v (stUps st)}
+  OpPut fs -> pure $ foldl' (\s (l, v) -> s {stDels = filter (/= l) (stDels s), stUps = replaceKind l v (stUps s)}) st fs
+  OpModify l f -> do
+    (cur, st') <- current l st
+    pure st' {stUps = upsert l Assign (App ann f cur) (stUps st')}
+  OpDelete l -> pure (delete l st)
+  OpRename from to -> do
+    (cur, st') <- current from st
+    step ann (delete from st') (OpInsert to cur)
+  OpMergeOver l ->
+    let r = flush ann st
+     in pure (RecState (raw ann "maps:merge(($r), ($l))" [("r", r), ("l", l)]) Nothing [] [])
+  where
+    upsert l kind v ups
+      | any (\(l', _, _) -> l' == l) ups = [if l' == l then (l', k, v) else u | u@(l', k, _) <- ups]
+      | otherwise = ups ++ [(l, kind, v)]
+    -- A merged-in value overrides the label without changing how it is written.
+    replaceKind l v = upsert l Merge v
+
+    delete l s = case [k | (l', k, _) <- stUps s, l' == l] of
+      [Insert] -> s {stUps = [u | u@(l', _, _) <- stUps s, l' /= l]}
+      _ -> s {stDels = l : stDels s, stUps = [u | u@(l', _, _) <- stUps s, l' /= l]}
+
+    -- The current value of a label: a pending update's, or else read from the
+    -- record (bound to a name first, as it is also the target of the update).
+    current l s = case [v | (l', _, v) <- stUps s, l' == l] of
+      v : _ -> pure (v, s)
+      [] -> do
+        (b, s') <- baseVar s
+        pure (Accessor ann l b, s')
+
+    baseVar s = case stBase s of
+      b@(Var {}) -> pure (b, s)
+      b -> do
+        x <- freshRecIdent "recBase"
+        let v = Var ann (Qualified ByNullSourcePos x)
+        pure (v, s {stBase = v, stLet = Just (x, b)})
+
+flush :: Ann -> RecState -> Expr Ann
+flush ann st = maybe body (\(x, b) -> Let ann [NonRec ann x b] body) (stLet st)
+  where
+    body
+      | null (stUps st) = withoutDels
+      | otherwise = raw ann ("($b)#{" <> T.intercalate ", " (zipWith entry [1 :: Int ..] (stUps st)) <> "}") (("b", withoutDels) : [(valName i, v) | (i, (_, _, v)) <- zip [1 ..] (stUps st)])
+    withoutDels = foldl' (\b l -> raw ann ("maps:remove(" <> atomText l <> ", ($b))") [("b", b)]) (stBase st) (stDels st)
+    valName i = "v" <> T.pack (show (i :: Int))
+    entry i (l, kind, _) = atomText l <> (if kind == Assign then " := $" else " => $") <> valName i
+
+-- | A label as it is written as a key in Erlang source, quoted if need be.
+-- `$` is escaped as it would otherwise start a template placeholder.
+atomText :: PS.PSString -> Text
+atomText = T.replace "$" "\\x24" . runAtom . AtomPS Nothing
+
+-- | Emit Erlang source through the `CodeGen.erlang` escape hatch that purerl's
+-- Inliner.hs turns into raw source, with `$name` standing for each binding.
+raw :: Ann -> Text -> [(Text, Expr Ann)] -> Expr Ann
+raw ann fmt binds =
+  App ann (App ann (Var ann codeGenErlangIdent) (Literal ann (StringLiteral (PS.mkString fmt)))) (Literal ann (ObjectLiteral [(PS.mkString k, v) | (k, v) <- binds]))
 
 expandAltChains :: [Bind Ann] -> Supply [Bind Ann]
 expandAltChains = traverse goBind
