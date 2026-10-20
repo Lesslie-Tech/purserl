@@ -25,6 +25,7 @@ import Control.Monad.Writer.Class (MonadWriter(..))
 import Data.Foldable (traverse_)
 import Data.Maybe (fromMaybe)
 import Data.Map qualified as M
+import Data.Set qualified as S
 import Data.IntMap.Strict qualified as IM
 import Data.Text qualified as T
 
@@ -34,7 +35,7 @@ import Language.PureScript.Errors (ErrorMessageHint(..), MultipleErrors, SimpleE
 import Language.PureScript.TypeChecker.Kinds (elaborateKind, instantiateKind, unifyKinds')
 import Language.PureScript.TypeChecker.Monad (Check, CheckState(..), Substitution(..), UnkLevel(..), Unknown, getLocalContext, guardWith, lookupUnkName, withErrorMessageHint)
 import Language.PureScript.TypeChecker.Skolems (newSkolemConstant, skolemize)
-import Language.PureScript.Types (Constraint(..), pattern REmptyKinded, RowListItem(..), SourceType, Type(..), WildcardData(..), alignRowsWith, everythingOnTypes, everywhereOnTypes, everywhereOnTypesM, getAnnForType, mkForAll, rowFromList, srcTUnknown)
+import Language.PureScript.Types (Constraint(..), pattern REmptyKinded, RowListItem(..), SourceType, Type(..), WildcardData(..), alignRowsWith, everythingOnTypes, everywhereOnTypes, everywhereOnTypesM, getAnnForType, mkForAll, rowFromList, srcTUnknown, usedTypeVariables)
 
 import Language.PureScript.Label (Label)
 
@@ -326,21 +327,34 @@ replaceTypeWildcards t
 --
 varIfUnknown :: [(Unknown, SourceType)] -> SourceType -> Check SourceType
 varIfUnknown unks ty = do
-  bn' <- traverse toBinding unks
-  ty' <- go ty
+  -- Number the variables by position, not by unification variable, so the names
+  -- (which end up in externs) don't depend on how much was inferred earlier.
+  prefixes <- traverse (fmap (fromMaybe "t") . lookupUnkName . fst) unks
+  let names = M.fromList (zip (fst <$> unks) (freshNames (S.fromList (usedTypeVariables ty)) prefixes))
+  bn' <- traverse (toBinding names) unks
+  ty' <- go names ty
   pure $ mkForAll bn' ty'
   where
-  toName :: Unknown -> Check T.Text
-  toName u = (<> T.pack (show u)) . fromMaybe "t" <$> lookupUnkName u
+  freshNames :: S.Set T.Text -> [T.Text] -> [T.Text]
+  freshNames used0 = loop used0 (0 :: Int)
+    where
+    loop _ _ [] = []
+    loop used i ps@(p : rest)
+      | n `S.member` used = loop used (i + 1) ps
+      | otherwise = n : loop (S.insert n used) (i + 1) rest
+      where n = p <> T.pack (show i)
 
-  toBinding :: (Unknown, SourceType) -> Check (SourceAnn, (T.Text, Maybe SourceType))
-  toBinding (u, k) = do
-    u' <- toName u
-    k' <- go k
+  toName :: M.Map Unknown T.Text -> Unknown -> Check T.Text
+  toName names u = maybe ((<> T.pack (show u)) . fromMaybe "t" <$> lookupUnkName u) pure (M.lookup u names)
+
+  toBinding :: M.Map Unknown T.Text -> (Unknown, SourceType) -> Check (SourceAnn, (T.Text, Maybe SourceType))
+  toBinding names (u, k) = do
+    u' <- toName names u
+    k' <- go names k
     pure (getAnnForType ty, (u', Just k'))
 
-  go :: SourceType -> Check SourceType
-  go = everywhereOnTypesM $ \case
+  go :: M.Map Unknown T.Text -> SourceType -> Check SourceType
+  go names = everywhereOnTypesM $ \case
     (TUnknown ann u) ->
-      TypeVar ann <$> toName u
+      TypeVar ann <$> toName names u
     t -> pure t
