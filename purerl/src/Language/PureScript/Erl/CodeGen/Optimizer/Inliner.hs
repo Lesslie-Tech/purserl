@@ -592,10 +592,15 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         inlineNonClassUnaryFunction (EC.effectUnsafe, EC.unsafePerformEffect) $ \x -> EApp RegularApp x [],
         inlineNonClassUnaryFunction ("int@ps", "toNumber") $ \x -> EApp RegularApp erlangFloat [x],
         unaryUndefTCFn (EC.safeCoerceMod, EC.coerce) id,
-        unaryUndefTCFn (EC.dataNewtype, EC.unwrap) id,
-        unaryUndefTCFn (EC.dataNewtype, EC.wrap) id,
-        binaryUndefTC2Fn (EC.dataNewtype, EC.over) $ \_ x -> x,
-        binaryUndefTC2Fn (EC.dataNewtype, EC.over2) $ \_ x -> x,
+        -- The Newtype dictionary is erased, so these are plain calls.
+        inlineNonClassUnaryFunction (EC.dataNewtype, EC.unwrap) id,
+        inlineNonClassUnaryFunction (EC.dataNewtype, EC.wrap) id,
+        inlineNonClassFunction (EC.dataNewtype, "un") $ \_ x -> x,
+        -- `over c f` is `f` at runtime; extra saturated args are applied directly.
+        inlineNonClassFunction (EC.dataNewtype, EC.over) $ \_ f -> f,
+        inlineNonClassFunction (EC.dataNewtype, EC.over2) $ \_ f -> f,
+        overSaturated (EC.dataNewtype, EC.over) 1,
+        overSaturated (EC.dataNewtype, EC.over2) 2,
         onNFn expander,
         onTupleN
       ]
@@ -620,16 +625,12 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         isUndef (EAtomLiteral atom) | runAtom atom == C.S_undefined = True
         isUndef _ = False
 
-    binaryUndefTC2Fn :: (Text, PSString) -> (Erl -> Erl -> Erl) -> Erl -> Erl
-    binaryUndefTC2Fn fns f = convert
+    overSaturated :: (Text, Text) -> Int -> Erl -> Erl
+    overSaturated modFn n = convert
       where
         convert :: Erl -> Erl
-        convert (EApp _ (EApp _ (expander -> EApp _ fn [undef, undef']) [x]) [y]) | isUndef undef && isUndef undef' && isFnName fns fn = f x y
-        convert (EApp _ fn [undef, undef', x, y]) | isUndef undef && isUndef undef' && isFnName fns fn = f x y
+        convert (EApp _ op' (_ : f : args)) | length args == n, isUncurriedFn' modFn op' = foldl (\g a -> EApp RegularApp g [a]) f args
         convert other = other
-
-        isUndef (EAtomLiteral atom) | runAtom atom == C.S_undefined = True
-        isUndef _ = False
 
     inlineNonClassFunction :: (Text, Text) -> (Erl -> Erl -> Erl) -> Erl -> Erl
     inlineNonClassFunction modFn f = convert
