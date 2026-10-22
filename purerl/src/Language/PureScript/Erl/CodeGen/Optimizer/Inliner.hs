@@ -18,7 +18,7 @@ where
 import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (fresh))
 import qualified Data.Map as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import qualified Data.Set as Set
 import Data.String (IsString)
 import Data.Text (Text)
@@ -484,68 +484,8 @@ data Binary
 
 data Unary = Unary (Text, PSString) (Text, PSString) UnaryOperator
 
-inlineCommonFnsM :: (Erl -> Erl) -> Erl -> Supply Erl
-inlineCommonFnsM _expander =
-  everywhereOnErlTopDownM $
-    applyAllM
-      [ inlineNonClassFunction3 ("maybe@ps", "maybe") $ \x f -> inlineMaybe x (\z -> EApp RegularApp f [z]),
-        inlineNonClassFunction3 ("maybe@ps", "maybe'") $ \fx f -> inlineMaybe (applyUnit fx) (\z -> EApp RegularApp f [z]),
-        inlineNonClassFunction ("maybe@ps", "withDefault") $ \x -> inlineMaybe x id,
-        inlineNonClassFunction ("maybe@ps", "map") $ \f ->
-          inlineMaybe
-            (ETupleLiteral [EAtomLiteral (Atom Nothing "nothing")])
-            (\z -> ETupleLiteral [EAtomLiteral (Atom Nothing "just"), EApp RegularApp f [z]]),
-        inlineNonClassFunction3 ("either@ps", "either") $ \l r -> inlineEither (\z -> EApp RegularApp l [z]) (\z -> EApp RegularApp r [z]),
-        inlineNonClassFunction ("either@ps", "fromLeft") $ \r -> inlineEither id (const r),
-        inlineNonClassFunction ("either@ps", "fromRight") $ \l -> inlineEither (const l) id,
-        inlineNonClassFunction ("either@ps", "map") $ \f ->
-          inlineEither
-            (\l -> ETupleLiteral [EAtomLiteral (Atom Nothing "left"), l])
-            (\r -> ETupleLiteral [EAtomLiteral (Atom Nothing "right"), EApp RegularApp f [r]])
-      ]
-  where
-    applyUnit (EFun1 _ x e)
-      | not (occurs x e) =
-        e
-    applyUnit fx =
-      EApp RegularApp fx [EAtomLiteral $ Atom Nothing "unit"]
-
-    inlineEither l r e = do
-      n <- fresh
-      let var = EVar $ "_E" <> "@" <> T.pack (show n)
-
-      pure $
-        ECaseOf
-          e
-          [ (EBinder (ETupleLiteral [EAtomLiteral (Atom Nothing "left"), var]), l var),
-            (EBinder (ETupleLiteral [EAtomLiteral (Atom Nothing "right"), var]), r var)
-          ]
-    inlineMaybe x f m = do
-      n <- fresh
-      let var = EVar $ "_J" <> "@" <> T.pack (show n)
-
-      pure $
-        ECaseOf
-          m
-          [ (EBinder (ETupleLiteral [EAtomLiteral (Atom Nothing "nothing")]), x),
-            (EBinder (ETupleLiteral [EAtomLiteral (Atom Nothing "just"), var]), f var)
-          ]
-
-    inlineNonClassFunction3 :: (Text, Text) -> (Erl -> Erl -> Erl -> Supply Erl) -> Erl -> Supply Erl
-    inlineNonClassFunction3 modFn f = convert
-      where
-        convert :: Erl -> Supply Erl
-        convert (EApp _ (EApp _ (EApp _ op' [x]) [y]) [z]) | isFn modFn op' = f x y z
-        convert (EApp _ op' [x, y, z]) | isUncurriedFn' modFn op' = f x y z
-        convert other = pure other
-
-    inlineNonClassFunction :: (Text, Text) -> (Erl -> Erl -> Supply Erl) -> Erl -> Supply Erl
-    inlineNonClassFunction modFn f = convert
-      where
-        convert :: Erl -> Supply Erl
-        convert (EApp _ (EApp _ op' [x]) [y]) | isFn modFn op' = f x y
-        convert (EApp _ op' [x, y]) | isUncurriedFn' modFn op' = f x y
-        convert other = pure other
+inlineCommonFnsM :: (Erl -> Maybe PSString) -> Erl -> Supply Erl
+inlineCommonFnsM symbolOf = everywhereOnErlTopDownM (inlineLibFns symbolOf libRules)
 
 inlineCommonOperators :: Text -> EC.EffectDictionaries -> (Erl -> Erl) -> Erl -> Erl
 inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
@@ -563,6 +503,14 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         inlineNonClassUnaryFunction ("list@ps", "concat") $ \x -> EApp RegularApp erlangListsAppend1 [x],
         inlineNonClassUnaryFunction ("list@ps", "unsafeHead") $ \x -> EApp RegularApp erlangHd [x],
         inlineNonClassFunction ("list@ps", "map") $ \f xs -> EApp RegularApp erlangListsMap [f, xs],
+        -- Local `E` wrappers around Effect's primitives: an Effect is a nullary fun.
+        inlineNonClassUnaryFunction ("e@ps", "pure") $ \x -> EFun0 Nothing x,
+        inlineNonClassFunction ("e@ps", "bind") $ \a f -> effectBind a f,
+        inlineNonClassFunction ("e@ps", "andThen") $ \f a -> effectBind a f,
+        inlineNonClassFunction ("e@ps", "map") $ \f a -> EFun0 Nothing (EApp RegularApp f [runEffect a]),
+        -- Same shape as Effect.applyE, so evaluation order is unchanged.
+        inlineNonClassFunction ("e@ps", "apply") $ \f a -> EFun0 Nothing (EApp RegularApp (runEffect f) [runEffect a]),
+        inlineNonClassUnaryFunction ("e@ps", "join") $ \a -> EFun0 Nothing (EApp RegularApp (runEffect a) []),
         inlineArrayFromList,
         inlineNonClassUnaryFunction ("array@ps", "size") $ \x -> EApp RegularApp erlangArraySize [x],
         -- `Array.map`/`Array.mapWithIndex`'s own FFI already wraps `F` in an
@@ -713,6 +661,12 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
 
     isModFn :: (Text, Text) -> Erl -> Bool
     isModFn = isFn
+
+    runEffect :: Erl -> Erl
+    runEffect e = EApp RegularApp e []
+
+    effectBind :: Erl -> Erl -> Erl
+    effectBind a f = EFun0 Nothing (EApp RegularApp (EApp RegularApp f [runEffect a]) [])
 
 binaryOps :: (Erl -> Erl) -> Erl -> Erl
 binaryOps expander = \case
@@ -1055,3 +1009,153 @@ erlangListsMap = EAtomLiteral (Atom (Just "lists") "map")
 
 erlangArrayMap :: Erl
 erlangArrayMap = EAtomLiteral (Atom (Just "array") "map")
+
+erlangMapsFind :: Erl
+erlangMapsFind = EAtomLiteral (Atom (Just "maps") "find")
+
+-- | The arguments of a call to a module function, whether it was emitted as
+-- `m:f(a, b)`, `m:f()(a)(b)` or a mix of the two.
+flattenCall :: Erl -> Maybe ((Text, Text), [Erl])
+flattenCall = go []
+  where
+    go acc = \case
+      EApp _ (EAtomLiteral (Atom (Just m) f)) args -> Just ((m, f), args <> acc)
+      -- `fun m:f/N` applied to N arguments is a direct call.
+      EApp _ (EFunRef (Atom (Just m) f) n) args | n == length args -> Just ((m, f), args <> acc)
+      EApp _ fn args -> go (args <> acc) fn
+      _ -> Nothing
+
+-- | An inlining rule for a function of the local Maybe/Either/Veither/Map modules.
+data LibRule = LibRule
+  { -- | Number of arguments, not counting the dictionary.
+    ruleArity :: Int,
+    -- | The function takes an `IsSymbol` dictionary first; the builder gets its label.
+    ruleLabelled :: Bool,
+    ruleBuild :: Maybe PSString -> [Erl] -> Supply Erl
+  }
+
+-- | Inline a call whose arguments are all present. A partial application is
+-- eta-expanded over the missing arguments, so it becomes a closure with the
+-- inlined body instead of a call into the generic function.
+inlineLibFns :: (Erl -> Maybe PSString) -> Map.Map (Text, Text) LibRule -> Erl -> Supply Erl
+inlineLibFns symbolOf table expr@EApp {}
+  | Just (key, allArgs) <- flattenCall expr,
+    Just rule <- Map.lookup key table,
+    Just (label, args) <- splitLabel rule allArgs =
+    case compare (length args) (ruleArity rule) of
+      EQ -> ruleBuild rule label args
+      LT | isJust label || not (null args) -> etaExpand rule label args
+      _ -> pure expr
+  where
+    splitLabel rule as
+      | not (ruleLabelled rule) = Just (Nothing, as)
+      | dict : rest <- as, Just s <- symbolOf dict = Just (Just s, rest)
+      | otherwise = Nothing
+
+    etaExpand rule label args = do
+      missing <- traverse (const (freshName "_A")) [1 .. ruleArity rule - length args]
+      -- Supplied arguments are evaluated once, outside the closure, unless they are values already.
+      supplied <- traverse (\a -> if isValue a then pure (a, Nothing) else (\v -> (EVar v, Just (v, a))) <$> freshName "_B") args
+      body <- ruleBuild rule label (map fst supplied <> map EVar missing)
+      pure (foldr (\(v, a) b -> ELet (EBind (EVar v) a) b) (foldr (EFun1 Nothing) body missing) (mapMaybe snd supplied))
+
+    isValue = \case
+      EVar _ -> True
+      EAtomLiteral _ -> True
+      ENumericLiteral _ -> True
+      EStringLiteral _ -> True
+      EFunRef {} -> True
+      EFunFull {} -> True
+      _ -> False
+inlineLibFns _ _ expr = pure expr
+
+freshName :: Text -> Supply Text
+freshName prefix = do
+  n <- fresh
+  pure (prefix <> "@" <> T.pack (show n))
+
+-- | Arguments that are only needed on one branch end up inside that branch, so
+-- they are evaluated lazily. The names here must include the Veither functions
+-- that CoreFn's `shouldFloatExpr` keeps un-floated.
+libRules :: Map.Map (Text, Text) LibRule
+libRules =
+  Map.fromList
+    [ (("map@ps", "lookupOr"), r3 $ \d k m -> do
+        v <- freshVar "_V"
+        pure $ ECaseOf (app erlangMapsFind [k, m]) [(EBinder (tagged "ok" [v]), v), (EBinder (atom "error"), d)]),
+      (("maybe@ps", "maybe"), r3 $ \x f m -> maybeCase m x (\z -> app f [z])),
+      (("maybe@ps", "withDefault"), r2 $ \x m -> maybeCase m x id),
+      (("maybe@ps", "map"), r2 $ \f m -> maybeCase m nothing (\z -> just (app f [z]))),
+      (("maybe@ps", "iff"), r2 $ \b v -> pure (boolCase b (just v) nothing)),
+      (("maybe@ps", "keepIf"), r2 $ \p m -> maybeCase m nothing (\a -> boolCase (app p [a]) (just a) nothing)),
+      (("maybe@ps", "dropIf"), r2 $ \p m -> maybeCase m nothing (\a -> boolCase (app p [a]) nothing (just a))),
+      (("either@ps", "either"), r3 $ \l r e -> eitherCase e (\z -> app l [z]) (\z -> app r [z])),
+      (("either@ps", "fromLeft"), r2 $ \r e -> eitherCase e id (const r)),
+      (("either@ps", "fromRight"), r2 $ \l e -> eitherCase e (const l) id),
+      (("either@ps", "withDefault"), r2 $ \l e -> eitherCase e (const l) id),
+      (("either@ps", "map"), r2 $ \f e -> eitherCase e left (\r -> right (app f [r]))),
+      (("either@ps", "fromMaybe"), r2 $ \e m -> maybeCase m (left e) right),
+      (("either@ps", "assert"), r2 $ \e b -> pure (boolCase b (right unit) (left e))),
+      (("veither@ps", "pure"), r1 $ \x -> pure (veitherVal okLabel x)),
+      (("veither@ps", "expand"), r1 pure),
+      (("veither@ps", "withDefault"), r2 $ \d v -> okCase v id (const d)),
+      (("veither@ps", "isOk"), r1 $ \v -> okCase v (const ETrue) (const EFalse)),
+      (("veither@ps", "isErr"), r1 $ \v -> okCase v (const EFalse) (const ETrue)),
+      (("veither@ps", "toMaybe"), r1 $ \v -> okCase v just (const nothing)),
+      (("veither@ps", "map"), r2 $ \f v -> okCase v (\a -> veitherVal okLabel (app f [a])) id),
+      (("veither@ps", "bind"), r2 $ \v f -> okCase v (\a -> app f [a]) id),
+      (("veither@ps", "andThen"), r2 $ \f v -> okCase v (\a -> app f [a]) id),
+      (("veither@ps", "join"), r1 $ \v -> okCase v id id),
+      (("veither@ps", "onOtherErr"), r2 $ \f v -> okCase v id (\x -> app f [x])),
+      (("veither@ps", "veither"), r3 $ \he hs v -> okCase v (\a -> app hs [a]) (\x -> app he [x])),
+      (("veither@ps", "toEither"), r2 $ \f v -> okCase v right (\x -> left (app f [x]))),
+      (("veither@ps", "err"), l1 $ \s a -> pure (veitherVal s a)),
+      (("veither@ps", "fromMaybe"), l2 $ \s a m -> maybeCase m (veitherVal s a) (veitherVal okLabel)),
+      (("veither@ps", "assert"), l2 $ \s a b -> pure (boolCase b (veitherVal okLabel unit) (veitherVal s a))),
+      (("veither@ps", "fromEither"), l1 $ \s e -> eitherCase e (veitherVal s) (veitherVal okLabel)),
+      (("veither@ps", "is"), l1 $ \s v -> labelCase s v (const ETrue) (const EFalse)),
+      (("veither@ps", "on"), l2 $ \s f v -> labelCase s v (\a -> veitherVal okLabel (app f [a])) id)
+    ]
+  where
+    -- Rules by number of arguments; the dispatcher only calls a builder with that many.
+    r1 f = LibRule 1 False (\_ -> \case [a] -> f a; _ -> unreachable)
+    r2 f = LibRule 2 False (\_ -> \case [a, b] -> f a b; _ -> unreachable)
+    r3 f = LibRule 3 False (\_ -> \case [a, b, c] -> f a b c; _ -> unreachable)
+    l1 f = LibRule 1 True (\l -> \case [a] -> f (label l) a; _ -> unreachable)
+    l2 f = LibRule 2 True (\l -> \case [a, b] -> f (label l) a b; _ -> unreachable)
+    label = fromMaybe unreachable
+    unreachable = error "libRules: arity mismatch"
+
+    app = EApp RegularApp
+    atom = EAtomLiteral . Atom Nothing
+    tagged tag xs = ETupleLiteral (atom tag : xs)
+    nothing = tagged "nothing" []
+    just x = tagged "just" [x]
+    left x = tagged "left" [x]
+    right x = tagged "right" [x]
+    unit = atom "unit"
+
+    freshVar prefix = EVar <$> freshName prefix
+
+    boolCase b onTrue onFalse = ECaseOf b [(EBinder ETrue, onTrue), (EBinder EFalse, onFalse)]
+
+    maybeCase m onNothing onJust = do
+      v <- freshVar "_J"
+      pure $ ECaseOf m [(EBinder nothing, onNothing), (EBinder (just v), onJust v)]
+
+    eitherCase e onLeft onRight = do
+      v <- freshVar "_E"
+      pure $ ECaseOf e [(EBinder (left v), onLeft v), (EBinder (right v), onRight v)]
+
+    -- A Veither is `#{type := ~"_", value := V}` when ok and `#{type := Label, value := E}` for an error.
+    okLabel = mkString "_"
+    veitherVal label v = EMapLiteral [(Atom Nothing "type", EStringLiteral label), (Atom Nothing "value", v)]
+    veitherPat label v = EMapPattern [(Atom Nothing "type", EStringLiteral label), (Atom Nothing "value", v)]
+
+    -- Branch on the label; the other branch gets the whole value.
+    labelCase label v onMatch onOther = do
+      a <- freshVar "_V"
+      x <- freshVar "_X"
+      pure $ ECaseOf v [(EBinder (veitherPat label a), onMatch a), (EBinder x, onOther x)]
+
+    okCase = labelCase okLabel

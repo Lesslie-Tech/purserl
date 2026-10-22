@@ -20,7 +20,7 @@ import Language.PureScript.CoreFn.Expr (Bind(..), CaseAlternative(..), Expr(..),
 import Language.PureScript.CoreFn.Meta (Meta(IsSyntheticApp))
 import Language.PureScript.CoreFn.Traversals (everywhereOnValues)
 import Language.PureScript.Environment (dictTypeName)
-import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName, ProperName(..), Qualified(..), QualifiedBy(..), freshIdent, runIdent, toMaybeModuleName)
+import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName(..), ProperName(..), Qualified(..), QualifiedBy(..), freshIdent, runIdent, toMaybeModuleName)
 import Language.PureScript.PSString (decodeString)
 
 -- |
@@ -315,6 +315,11 @@ shouldFloatExpr = \case
   App3 "Data.Ord" _ "Data.Ord" _ -> False
   App3 "Data.Eq" _ "Data.Eq" _ -> False
   App3 "Data.Int" _ "Data.Int" _ -> False
+  -- Veither functions that purerl inlines using the label of the `IsSymbol`
+  -- dictionary: keep the application at the call site so the label is visible there.
+  -- Keep in sync with the labelled rules in purerl's `libRules`.
+  App (_, _, Just IsSyntheticApp) (Var _ (Qualified (ByModuleName (ModuleName "Veither")) (Ident f))) _
+    | f `elem` ["fromMaybe", "assert", "err", "fromEither", "is", "on"] -> False
   App (_, _, Just IsSyntheticApp) e _ -> isSimple e
   _                                   -> False
   where
