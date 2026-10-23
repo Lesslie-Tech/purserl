@@ -450,10 +450,13 @@ letBindIdents vars body =
     (a,b):rest -> bindLet (EVar a) b (letBindIdents rest body)
     [] -> body
 
--- | @let a = b in a@ is just @b@.
+-- | @let a = b in a@ is just @b@. Aliasing a variable only to rename it is
+-- dropped, for the body variables made by `wrapped` and for `_`.
 bindLet :: Erl -> Erl -> Erl -> Erl
 bindLet a b body
   | a == body = b
+  | EVar "_" <- a, EVar _ <- b = body
+  | EVar x <- a, EVar _ <- b, "Body@" `T.isPrefixOf` x = replaceIdents [(x, b)] body
   | otherwise = ELet (EBind a b) body
 
 letBindPats :: [Erl] -> [Erl] -> Erl -> Erl
@@ -760,7 +763,7 @@ applySpine = go []
     canStep _ _ = False
 
     step (ELet b body) as = ELet b (step body as)
-    step (EFun1 _ v body) ((_, [arg]) : as) = ELet (EBind (EVar v) arg) (step body as)
+    step (EFun1 _ v body) ((_, [arg]) : as) = bindLet (EVar v) arg (step body as)
     step h as = foldl (\g (k, args) -> EApp k g args) h as
 
 onTupleN :: Erl -> Erl
@@ -1022,8 +1025,16 @@ flattenCall = go []
       EApp _ (EAtomLiteral (Atom (Just m) f)) args -> Just ((m, f), args <> acc)
       -- `fun m:f/N` applied to N arguments is a direct call.
       EApp _ (EFunRef (Atom (Just m) f) n) args | n == length args -> Just ((m, f), args <> acc)
+      -- Only the `m:f()` that starts a curried call has no arguments; running a result, `m:f(a)()`, is not one.
+      EApp _ _ [] -> Nothing
       EApp _ fn args -> go (args <> acc) fn
       _ -> Nothing
+
+-- | What a monad wraps around its base type, outermost first.
+data Wrapper = Reader | Thunk
+
+-- | The base type of a monad, which decides how a bind short-circuits.
+data Base = OkVeither | JustMaybe | RightEither
 
 -- | An inlining rule for a function of the local Maybe/Either/Veither/Map modules.
 data LibRule = LibRule
@@ -1079,13 +1090,13 @@ freshName prefix = do
 -- that CoreFn's `shouldFloatExpr` keeps un-floated.
 libRules :: Map.Map (Text, Text) LibRule
 libRules =
-  Map.fromList
-    [ (("map@ps", "lookupOr"), r3 $ \d k m -> do
+  Map.fromList $
+    stackRules
+    ++ [ (("map@ps", "lookupOr"), r3 $ \d k m -> do
         v <- freshVar "_V"
         pure $ ECaseOf (app erlangMapsFind [k, m]) [(EBinder (tagged "ok" [v]), v), (EBinder (atom "error"), d)]),
       (("maybe@ps", "maybe"), r3 $ \x f m -> maybeCase m x (\z -> app f [z])),
       (("maybe@ps", "withDefault"), r2 $ \x m -> maybeCase m x id),
-      (("maybe@ps", "map"), r2 $ \f m -> maybeCase m nothing (\z -> just (app f [z]))),
       (("maybe@ps", "iff"), r2 $ \b v -> pure (boolCase b (just v) nothing)),
       (("maybe@ps", "keepIf"), r2 $ \p m -> maybeCase m nothing (\a -> boolCase (app p [a]) (just a) nothing)),
       (("maybe@ps", "dropIf"), r2 $ \p m -> maybeCase m nothing (\a -> boolCase (app p [a]) nothing (just a))),
@@ -1093,19 +1104,13 @@ libRules =
       (("either@ps", "fromLeft"), r2 $ \r e -> eitherCase e id (const r)),
       (("either@ps", "fromRight"), r2 $ \l e -> eitherCase e (const l) id),
       (("either@ps", "withDefault"), r2 $ \l e -> eitherCase e (const l) id),
-      (("either@ps", "map"), r2 $ \f e -> eitherCase e left (\r -> right (app f [r]))),
       (("either@ps", "fromMaybe"), r2 $ \e m -> maybeCase m (left e) right),
       (("either@ps", "assert"), r2 $ \e b -> pure (boolCase b (right unit) (left e))),
-      (("veither@ps", "pure"), r1 $ \x -> pure (veitherVal okLabel x)),
       (("veither@ps", "expand"), r1 pure),
       (("veither@ps", "withDefault"), r2 $ \d v -> okCase v id (const d)),
       (("veither@ps", "isOk"), r1 $ \v -> okCase v (const ETrue) (const EFalse)),
       (("veither@ps", "isErr"), r1 $ \v -> okCase v (const EFalse) (const ETrue)),
       (("veither@ps", "toMaybe"), r1 $ \v -> okCase v just (const nothing)),
-      (("veither@ps", "map"), r2 $ \f v -> okCase v (\a -> veitherVal okLabel (app f [a])) id),
-      (("veither@ps", "bind"), r2 $ \v f -> okCase v (\a -> app f [a]) id),
-      (("veither@ps", "andThen"), r2 $ \f v -> okCase v (\a -> app f [a]) id),
-      (("veither@ps", "join"), r1 $ \v -> okCase v id id),
       (("veither@ps", "onOtherErr"), r2 $ \f v -> okCase v id (\x -> app f [x])),
       (("veither@ps", "veither"), r3 $ \he hs v -> okCase v (\a -> app hs [a]) (\x -> app he [x])),
       (("veither@ps", "toEither"), r2 $ \f v -> okCase v right (\x -> left (app f [x]))),
@@ -1114,9 +1119,59 @@ libRules =
       (("veither@ps", "assert"), l2 $ \s a b -> pure (boolCase b (veitherVal okLabel unit) (veitherVal s a))),
       (("veither@ps", "fromEither"), l1 $ \s e -> eitherCase e (veitherVal s) (veitherVal okLabel)),
       (("veither@ps", "is"), l1 $ \s v -> labelCase s v (const ETrue) (const EFalse)),
-      (("veither@ps", "on"), l2 $ \s f v -> labelCase s v (\a -> veitherVal okLabel (app f [a])) id)
+      (("veither@ps", "on"), l2 $ \s f v -> labelCase s v (\a -> veitherVal okLabel (app f [a])) id),
+      -- A Veff is `fun() -> Veither end` and a Ctx is `fun(Body) -> Veff end`; the newtype wrappers are erased.
+      (("veff@ps", "catch"), r1 pure),
+      (("veff@ps", "fromVeither"), r1 $ \v -> wrapped [Thunk] (\_ -> pure v)),
+      (("veff@ps", "lift"), r1 $ \m -> wrapped [Thunk] (\_ -> pure (veitherVal okLabel (app m [])))),
+      (("ctx@ps", "fromBodyFn"), r1 pure),
+      (("ctx@ps", "toVeff"), r2 $ \b c -> pure (app c [b])),
+      (("ctx@ps", "catch"), r2 $ \b c -> pure (app c [b])),
+      (("ctx@ps", "fromVeither"), r1 $ \v -> wrapped [Reader, Thunk] (\_ -> pure v))
     ]
   where
+    -- A monad is some wrappers around a base type. `Reader` takes the body, `Thunk` is an Effect.
+    stackRules = concat
+      [ stack "maybe@ps" [] JustMaybe,
+        stack "either@ps" [] RightEither,
+        stack "veither@ps" [] OkVeither,
+        stack "veff@ps" [Thunk] OkVeither,
+        stack "ctx@ps" [Reader, Thunk] OkVeither
+      ]
+
+    stack m ws base =
+      [ ((m, "pure"), r1 $ \x -> wrapped ws (\_ -> pure (basePure base x))),
+        ((m, "map"), r2 $ \f v -> wrapped ws (\run -> baseMap base (run v) (\a -> app f [a]))),
+        ((m, "bind"), r2 $ \v f -> wrapped ws (\run -> baseBind base (run v) (\a -> run (app f [a])))),
+        ((m, "andThen"), r2 $ \f v -> wrapped ws (\run -> baseBind base (run v) (\a -> run (app f [a])))),
+        ((m, "join"), r1 $ \v -> wrapped ws (\run -> baseBind base (run v) run))
+      ]
+
+    -- Build the wrappers around a body that is given `run`, which unwraps a value down to the base.
+    wrapped :: [Wrapper] -> ((Erl -> Erl) -> Supply Erl) -> Supply Erl
+    wrapped [] k = k id
+    wrapped (Reader : ws) k = do
+      b <- freshName "Body"
+      inner <- wrapped ws (\run -> k (run . \e -> app e [EVar b]))
+      pure (EFun1 Nothing (if b `elem` varsInExpr inner then b else "_") inner)
+    wrapped (Thunk : ws) k = EFun0 Nothing <$> wrapped ws (\run -> k (run . \e -> app e []))
+
+    basePure :: Base -> Erl -> Erl
+    basePure = \case
+      OkVeither -> veitherVal okLabel
+      JustMaybe -> just
+      RightEither -> right
+
+    -- Continue with the wrapped value, or keep the failure as it is.
+    baseBind :: Base -> Erl -> (Erl -> Erl) -> Supply Erl
+    baseBind = \case
+      OkVeither -> \v k -> okCase v k id
+      JustMaybe -> \m k -> maybeCase m nothing k
+      RightEither -> \e k -> eitherCase e left k
+
+    baseMap :: Base -> Erl -> (Erl -> Erl) -> Supply Erl
+    baseMap base v f = baseBind base v (basePure base . f)
+
     -- Rules by number of arguments; the dispatcher only calls a builder with that many.
     r1 f = LibRule 1 False (\_ -> \case [a] -> f a; _ -> unreachable)
     r2 f = LibRule 2 False (\_ -> \case [a, b] -> f a b; _ -> unreachable)
