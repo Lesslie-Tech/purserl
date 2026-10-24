@@ -544,6 +544,10 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
         -- Same shape as Effect.applyE, so evaluation order is unchanged.
         inlineNonClassFunction ("e@ps", "apply") $ \f a -> EFun0 Nothing (EApp RegularApp (runEffect f) [runEffect a]),
         inlineNonClassUnaryFunction ("e@ps", "join") $ \a -> EFun0 Nothing (EApp RegularApp (runEffect a) []),
+        -- Effect's own primitives, reached when a method is applied to the Effect instance.
+        inlineNonClassUnaryFunction ("effect@ps", "pureE") $ \x -> EFun0 Nothing x,
+        inlineNonClassFunction ("effect@ps", "bindE") $ \a f -> effectBind a f,
+        inlineNonClassFunction ("effect@ps", "mapE") $ \f a -> EFun0 Nothing (EApp RegularApp f [runEffect a]),
         inlineArrayFromList,
         inlineNonClassUnaryFunction ("array@ps", "size") $ \x -> EApp RegularApp erlangArraySize [x],
         -- `Array.map`/`Array.mapWithIndex`'s own FFI already wraps `F` in an

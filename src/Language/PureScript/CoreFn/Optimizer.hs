@@ -529,7 +529,7 @@ optimizeModuleDecls modu foreignIdents binds =
   -- (uniqueNamedBinds, uniqueExprs, uniqueBinder, uniqueCase) = traverseCoreFn (p uniqueNamedBinds) (p uniqueExprs) (p uniqueBinder) (p uniqueCase)
   (transformBinds, _, _) = everywhereOnValues identity transformExprs identity
   transformExprs
-    = optimizeDataFunctionApply
+    = optimizeDataFunctionApply modu
 
   p f a =
     do
@@ -569,12 +569,53 @@ optimizeModuleDecls modu foreignIdents binds =
     --     b
 -}
 
-optimizeDataFunctionApply :: Expr a -> Expr a
-optimizeDataFunctionApply e =
+-- | A class method (or the local `M` module's generic wrapper of it) applied
+-- to a known instance of one of the local monads is the instance's own
+-- function, which Erlang's optimizer has inlining rules for. Done here, before
+-- CSE floats the method applied to the instance out of its call sites.
+monadMethods :: Map (Qualified Ident, Qualified Ident) (Qualified Ident)
+monadMethods =
+  Map.fromList $
+    [ ((method, qualified m (instanceOf <> m)), qualified m function)
+    | m <- monadNames,
+      (methods, instanceOf, function) <-
+        [ ([C.I_bind, qualified "M" "bind"], "bind", "bind"),
+          ([qualified "Control.Bind" "join"], "bind", "join"),
+          ([qualified "M" "andThen"], "bind", "andThen"),
+          ([C.I_map, qualified "M" "map"], "functor", "map"),
+          ([C.I_pure, qualified "M" "pure"], "applicative", "pure")
+        ],
+      method <- methods
+    ]
+      -- Effect has no module of its own functions; its instances are the FFI primitives.
+      ++ [ ((method, qualified "Effect" inst), qualified "Effect" function)
+         | (methods, inst, function) <-
+             [ ([C.I_bind, qualified "M" "bind"], "bindEffect", "bindE"),
+               ([C.I_map, qualified "M" "map"], "functorEffect", "mapE"),
+               ([qualified "M" "pure"], "applicativeEffect", "pureE")
+             ],
+           method <- methods
+         ]
+  where
+    qualified :: Text -> Text -> Qualified Ident
+    qualified m n = Qualified (ByModuleName (ModuleName m)) (Ident n)
+
+monadNames :: [Text]
+monadNames = ["Maybe", "Either", "Veither", "Veff", "Ctx"]
+
+monadModules :: [ModuleName]
+monadModules = map ModuleName monadNames
+
+optimizeDataFunctionApply :: ModuleName -> Expr a -> Expr a
+optimizeDataFunctionApply modu e =
   case e of
     (App a (App _ (Var _ fn) x) y)
       | C.I_functionApply <- fn -> App a x y
       | C.I_functionApplyFlipped <- fn -> App a y x
+    -- Not inside the instances' own modules, where e.g. `join = Bind.join` would become `join = join`.
+    (App a (Var _ fn) (Var _ inst))
+      | Just target <- Map.lookup (fn, inst) monadMethods,
+        modu `notElem` monadModules -> Var a target
 -- {-
     (App a (Var b fn) (Var c impl)) | C.I_map <- fn, C.I_functorArray <- impl -> Var a C.I_arrayMap
     (App a (Var b fn) (Var c impl)) | C.I_map <- fn, C.I_functorMaybe <- impl -> Var a C.I_maybeMap
