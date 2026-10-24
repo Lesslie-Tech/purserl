@@ -128,6 +128,9 @@ pattern S_map = "map"
 pattern I_map :: Qualified Ident
 pattern I_map = Qualified (ByModuleName (ModuleName "Data.Functor")) (Ident "map")
 
+pattern I_mapFlipped :: Qualified Ident
+pattern I_mapFlipped = Qualified (ByModuleName (ModuleName "Data.Functor")) (Ident "mapFlipped")
+
 pattern I_functorArray :: Qualified Ident
 pattern I_functorArray = Qualified (ByModuleName (ModuleName "Data.Functor")) (Ident "functorArray")
 

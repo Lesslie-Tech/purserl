@@ -526,51 +526,7 @@ inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =
     applyAll
       [ binaryOps expander,
         unaryOps expander,
-        inlineNonClassFunction ("list@ps", "cons") $ \x xs -> EListCons [x] xs,
-        inlineNonClassUnaryFunction ("list@ps", "isEmpty") $ \x -> EBinary EqualTo (EListLiteral []) x,
-        inlineNonClassUnaryFunction ("list@ps", "isNotEmpty") $ \x -> EBinary NotEqualTo (EListLiteral []) x,
-        inlineNonClassUnaryFunction ("list@ps", "singleton") $ \x -> EListLiteral [x],
-        inlineNonClassFunction ("list@ps", "append") $ \xs ys -> EBinary ListConcat xs ys,
-        inlineNonClassUnaryFunction ("list@ps", "length") $ \x -> EApp RegularApp erlangLength [x],
-        inlineNonClassUnaryFunction ("list@ps", "reverse") $ \x -> EApp RegularApp erlangListsReverse [x],
-        inlineNonClassUnaryFunction ("list@ps", "concat") $ \x -> EApp RegularApp erlangListsAppend1 [x],
-        inlineNonClassUnaryFunction ("list@ps", "unsafeHead") $ \x -> EApp RegularApp erlangHd [x],
-        inlineNonClassFunction ("list@ps", "map") $ \f xs -> EApp RegularApp erlangListsMap [f, xs],
-        -- Local `E` wrappers around Effect's primitives: an Effect is a nullary fun.
-        inlineNonClassUnaryFunction ("e@ps", "pure") $ \x -> EFun0 Nothing x,
-        inlineNonClassFunction ("e@ps", "bind") $ \a f -> effectBind a f,
-        inlineNonClassFunction ("e@ps", "andThen") $ \f a -> effectBind a f,
-        inlineNonClassFunction ("e@ps", "map") $ \f a -> EFun0 Nothing (EApp RegularApp f [runEffect a]),
-        -- Same shape as Effect.applyE, so evaluation order is unchanged.
-        inlineNonClassFunction ("e@ps", "apply") $ \f a -> EFun0 Nothing (EApp RegularApp (runEffect f) [runEffect a]),
-        inlineNonClassUnaryFunction ("e@ps", "join") $ \a -> EFun0 Nothing (EApp RegularApp (runEffect a) []),
-        -- Effect's own primitives, reached when a method is applied to the Effect instance.
-        inlineNonClassUnaryFunction ("effect@ps", "pureE") $ \x -> EFun0 Nothing x,
-        inlineNonClassFunction ("effect@ps", "bindE") $ \a f -> effectBind a f,
-        inlineNonClassFunction ("effect@ps", "mapE") $ \f a -> EFun0 Nothing (EApp RegularApp f [runEffect a]),
         inlineArrayFromList,
-        inlineNonClassUnaryFunction ("array@ps", "size") $ \x -> EApp RegularApp erlangArraySize [x],
-        -- `Array.map`/`Array.mapWithIndex`'s own FFI already wraps `F` in an
-        -- adapter closure to match `array:map/2`'s (Index, Elem) -> Elem shape;
-        -- build that same adapter inline instead of calling through the FFI hop.
-        inlineNonClassFunction ("array@ps", "map") $ \f arr ->
-          EApp RegularApp erlangArrayMap [EFunN Nothing ["_", "_X@arrMap"] (EApp RegularApp f [EVar "_X@arrMap"]), arr],
-        inlineNonClassFunction ("array@ps", "mapWithIndex") $ \f arr ->
-          EApp RegularApp erlangArrayMap [EFunN Nothing ["_I@arrMap", "_X@arrMap"] (EApp RegularApp (EApp RegularApp f [EVar "_I@arrMap"]) [EVar "_X@arrMap"]), arr],
-        inlineNonClassUnaryFunction ("map@ps", "isEmpty") $ \x -> EBinary EqualTo (EMapLiteral []) x,
-        inlineNonClassUnaryFunction ("map@ps", "isNotEmpty") $ \x -> EBinary NotEqualTo (EMapLiteral []) x,
-        inlineNonClassFunction ("map@ps", "member") $ \k m -> EApp RegularApp erlangMapsIsKey [k, m],
-        inlineNonClassFunction ("map@ps", "delete") $ \k m -> EApp RegularApp erlangMapsRemove [k, m],
-        inlineNonClassUnaryFunction ("map@ps", "keys") $ \m -> EApp RegularApp erlangMapsKeys [m],
-        inlineNonClassUnaryFunction ("map@ps", "values") $ \m -> EApp RegularApp erlangMapsValues [m],
-        inlineNonClassUnaryFunction ("map@ps", "size") $ \m -> EApp RegularApp erlangMapsSize [m],
-        inlineNonClassFunction ("map@ps", "mapWithIndex") $ \f m ->
-          EApp RegularApp erlangMapsMap [EFunN Nothing ["_K@mapMap", "_V@mapMap"] (EApp RegularApp (EApp RegularApp f [EVar "_K@mapMap"]) [EVar "_V@mapMap"]), m],
-        inlineNonClassFunction3 ("map@ps", "insert") $ \k v m -> EApp RegularApp erlangMapsPut [k, v, m],
-        inlineNonClassFunction3 ("map@ps", "unsafeUpdate") $ \k v m -> EApp RegularApp erlangMapsUpdate [k, v, m],
-        -- Note: argument order swap preserved from Map's own FFI -- erlang's
-        -- maps:merge/2 is right-biased, but Map.union is left-biased.
-        inlineNonClassFunction ("map@ps", "union") $ \m1 m2 -> EApp RegularApp erlangMapsMerge [m2, m1],
         inlineArrayToList,
         inlineErlAtom,
         unaryFn (effectModule, edFunctor) functorVoid id,
@@ -1194,6 +1150,7 @@ libRules :: Map.Map (Text, Text) LibRule
 libRules =
   Map.fromList $
     stackRules
+    ++ forwardRules
     ++ [ (("map@ps", "lookupOr"), r3 $ \d k m -> do
         v <- freshVar "Val"
         pure $ ECaseOf (app erlangMapsFind [k, m]) [(EBinder (tagged "ok" [v]), v), (EBinder (atom "error"), d)]),
@@ -1245,6 +1202,64 @@ libRules =
         stack "veff@ps" [Thunk] OkVeither,
         stack "ctx@ps" [Reader, Thunk] OkVeither
       ]
+
+    -- Functions of the local List/Array/Map/E modules that are one Erlang call, or a plain closure for an Effect.
+    forwardRules =
+      [ (("list@ps", "cons"), r2 $ \x xs -> pure (EListCons [x] xs)),
+        (("list@ps", "isEmpty"), r1 $ \x -> pure (EBinary EqualTo (EListLiteral []) x)),
+        (("list@ps", "isNotEmpty"), r1 $ \x -> pure (EBinary NotEqualTo (EListLiteral []) x)),
+        (("list@ps", "singleton"), r1 $ \x -> pure (EListLiteral [x])),
+        (("list@ps", "append"), r2 $ \xs ys -> pure (EBinary ListConcat xs ys)),
+        (("list@ps", "length"), r1 $ \x -> pure (app erlangLength [x])),
+        (("list@ps", "reverse"), r1 $ \x -> pure (app erlangListsReverse [x])),
+        (("list@ps", "concat"), r1 $ \x -> pure (app erlangListsAppend1 [x])),
+        (("list@ps", "unsafeHead"), r1 $ \x -> pure (app erlangHd [x])),
+        (("list@ps", "map"), r2 $ \f xs -> pure (app erlangListsMap [f, xs])),
+        -- An Effect is a nullary fun.
+        (("e@ps", "pure"), r1 effectPure),
+        (("e@ps", "bind"), r2 effectBind),
+        (("e@ps", "andThen"), r2 $ flip effectBind),
+        (("e@ps", "map"), r2 effectMap),
+        -- Same shape as Effect.applyE, so evaluation order is unchanged.
+        (("e@ps", "apply"), r2 $ \f a -> pure (EFun0 Nothing (app (runEffect f) [runEffect a]))),
+        (("e@ps", "join"), r1 $ \a -> pure (EFun0 Nothing (app (runEffect a) []))),
+        -- Effect's own primitives, reached when a method is applied to the Effect instance.
+        (("effect@ps", "pureE"), r1 effectPure),
+        (("effect@ps", "bindE"), r2 effectBind),
+        (("effect@ps", "mapE"), r2 effectMap),
+        (("array@ps", "size"), r1 $ \x -> pure (app erlangArraySize [x])),
+        -- `array:map/2` takes (Index, Elem) -> Elem, so `F` gets an adapter closure; the FFI hop would build the same one.
+        (("array@ps", "map"), r2 $ \f arr -> do
+          x <- freshName "Elem"
+          pure (app erlangArrayMap [EFunN Nothing ["_", x] (app f [EVar x]), arr])),
+        (("array@ps", "mapWithIndex"), r2 $ \f arr -> do
+          i <- freshName "Index"
+          x <- freshName "Elem"
+          pure (app erlangArrayMap [EFunN Nothing [i, x] (app (app f [EVar i]) [EVar x]), arr])),
+        (("map@ps", "isEmpty"), r1 $ \x -> pure (EBinary EqualTo (EMapLiteral []) x)),
+        (("map@ps", "isNotEmpty"), r1 $ \x -> pure (EBinary NotEqualTo (EMapLiteral []) x)),
+        (("map@ps", "member"), r2 $ \k m -> pure (app erlangMapsIsKey [k, m])),
+        (("map@ps", "delete"), r2 $ \k m -> pure (app erlangMapsRemove [k, m])),
+        (("map@ps", "keys"), r1 $ \m -> pure (app erlangMapsKeys [m])),
+        (("map@ps", "values"), r1 $ \m -> pure (app erlangMapsValues [m])),
+        (("map@ps", "size"), r1 $ \m -> pure (app erlangMapsSize [m])),
+        (("map@ps", "map"), r2 $ \f m -> do
+          v <- freshName "Val"
+          pure (app erlangMapsMap [EFunN Nothing ["_", v] (app f [EVar v]), m])),
+        (("map@ps", "mapWithIndex"), r2 $ \f m -> do
+          k <- freshName "Key"
+          v <- freshName "Val"
+          pure (app erlangMapsMap [EFunN Nothing [k, v] (app (app f [EVar k]) [EVar v]), m])),
+        (("map@ps", "insert"), r3 $ \k v m -> pure (app erlangMapsPut [k, v, m])),
+        (("map@ps", "unsafeUpdate"), r3 $ \k v m -> pure (app erlangMapsUpdate [k, v, m])),
+        -- Argument order swap preserved from Map's own FFI: maps:merge/2 is right-biased, but Map.union is left-biased.
+        (("map@ps", "union"), r2 $ \m1 m2 -> pure (app erlangMapsMerge [m2, m1]))
+      ]
+
+    runEffect e = app e []
+    effectPure x = pure (EFun0 Nothing x)
+    effectBind a f = pure (EFun0 Nothing (app (app f [runEffect a]) []))
+    effectMap f a = pure (EFun0 Nothing (app f [runEffect a]))
 
     stack m ws base =
       [ ((m, "pure"), r1 $ \x -> wrapped ws (\_ -> pure (basePure base x))),

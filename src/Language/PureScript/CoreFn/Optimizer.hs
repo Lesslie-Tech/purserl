@@ -596,9 +596,25 @@ monadMethods =
              ],
            method <- methods
          ]
+      -- Functors whose `map` is a standalone function of their own module.
+      ++ [ ((method, inst), target)
+         | (inst, target) <-
+             [ (qualified "List" "functorList", qualified "List" "map"),
+               (qualified "Map" "functorMap", qualified "Map" "map"),
+               (C.I_functorArray, C.I_arrayMap),
+               (qualified "Kanon.Sql" "functorSql", qualified "Kanon.Sql" "map"),
+               (qualified "Vstate" "functorVstate", qualified "Vstate" "map"),
+               (qualified "Dubra.Check" "functorCheck", qualified "Dubra.Check" "map")
+             ],
+           method <- [C.I_map, qualified "M" "map"]
+         ]
   where
     qualified :: Text -> Text -> Qualified Ident
     qualified m n = Qualified (ByModuleName (ModuleName m)) (Ident n)
+
+-- | The `map` function of each functor instance in `monadMethods`.
+functorMaps :: Map (Qualified Ident) (Qualified Ident)
+functorMaps = Map.fromList [(inst, target) | ((C.I_map, inst), target) <- Map.toList monadMethods]
 
 monadNames :: [Text]
 monadNames = ["Maybe", "Either", "Veither", "Veff", "Ctx"]
@@ -615,7 +631,11 @@ optimizeDataFunctionApply modu e =
     -- Not inside the instances' own modules, where e.g. `join = Bind.join` would become `join = join`.
     (App a (Var _ fn) (Var _ inst))
       | Just target <- Map.lookup (fn, inst) monadMethods,
-        modu `notElem` monadModules -> Var a target
+        allowedIn target -> Var a target
+    -- `xs <#> f` on a known functor is `map f xs`; saturated only, so no argument is duplicated.
+    (App a (App _ (App _ (Var _ C.I_mapFlipped) (Var _ inst)) xs) f)
+      | Just target <- Map.lookup inst functorMaps,
+        allowedIn target -> App a (App a (Var a target) f) xs
 -- {-
     (App a (Var b fn) (Var c impl)) | C.I_map <- fn, C.I_functorArray <- impl -> Var a C.I_arrayMap
     (App a (Var b fn) (Var c impl)) | C.I_map <- fn, C.I_functorMaybe <- impl -> Var a C.I_maybeMap
@@ -645,6 +665,10 @@ optimizeDataFunctionApply modu e =
 
 -- -}
     _ -> e
+  where
+    -- Never rewrite into the module being compiled: the instance's own `map = map` style definitions would loop.
+    allowedIn (Qualified (ByModuleName m) _) = m /= modu && modu `notElem` monadModules
+    allowedIn _ = modu `notElem` monadModules
 
 
 -------------------------
