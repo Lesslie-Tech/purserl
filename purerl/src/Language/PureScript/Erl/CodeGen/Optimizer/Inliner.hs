@@ -19,6 +19,7 @@ where
 import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (fresh))
 import qualified Data.Map as Map
+import Data.List (sortOn)
 import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import qualified Data.Set as Set
 import Data.String (IsString)
@@ -493,7 +494,31 @@ data Binary
 data Unary = Unary (Text, PSString) (Text, PSString) UnaryOperator
 
 inlineCommonFnsM :: (Erl -> Maybe PSString) -> Erl -> Supply Erl
-inlineCommonFnsM symbolOf = everywhereOnErlTopDownM (inlineLibFns symbolOf libRules)
+inlineCommonFnsM symbolOf = everywhereOnErlTopDownM (\e -> inlineAltChain e >>= inlineLibFns symbolOf libRules)
+
+-- | `CodeGen.altChain` over the operands of `<|>`: the first operand that
+-- isn't the instance's failure value, else the last one. A `maybe` block
+-- stops at the first value that doesn't match the failure pattern and returns it.
+inlineAltChain :: Erl -> Supply Erl
+inlineAltChain expr = case flattenCall expr of
+  Just (("codeGen@ps", "altChain"), [EStringLiteral kind, EMapLiteral fields])
+    | Just k <- PS.decodeString kind,
+      not (null fields) -> do
+        let index f = read (T.unpack (T.drop 1 (runAtom f))) :: Int
+            operands = map snd (sortOn (index . fst) fields)
+        steps <- traverse (altStep k) (init operands)
+        pure (EMaybe steps (last operands))
+  _ -> pure expr
+  where
+    atom = EAtomLiteral . Atom Nothing
+    altStep k operand = case k of
+      "maybe" -> pure (Just (ETupleLiteral [atom "nothing"]), operand)
+      "either" -> pure (Just (ETupleLiteral [atom "left", EVar "_"]), operand)
+      _ -> do
+        v <- freshName "Val"
+        -- A value that is not an error is returned as it is, which stops the block.
+        let ok = EBind (EVar v) (EMapPattern [(Atom Nothing "type", EStringLiteral (mkString "_"))])
+        pure (Just ETrue, ECaseOf operand [(EBinder ok, EVar v), (EBinder (EVar "_"), ETrue)])
 
 inlineCommonOperators :: Text -> EC.EffectDictionaries -> (Erl -> Erl) -> Erl -> Erl
 inlineCommonOperators effectModule EC.EffectDictionaries {..} expander =

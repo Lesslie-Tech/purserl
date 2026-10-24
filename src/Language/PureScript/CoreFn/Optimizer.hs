@@ -447,50 +447,24 @@ expandAltChains = traverse goBind
     (goBind, goExprOneLevel, goBinderOneLevel, goCaseAltOneLevel) =
       traverseCoreFn goBind goExpr goBinder goCaseAlt
 
--- | Template is one line, no real newlines: it round-trips through
--- PS.prettyPrintString (see the CodeGen.erlang -> ERawErlangSource rule in
--- purerl's Inliner.hs), which would escape a real newline into a literal
--- `\n`. Erlang doesn't need newlines between `maybe` clauses, just commas.
+-- | The chain as a call to `CodeGen.altChain`, which purerl's Erlang-level
+-- optimizer turns into a flat `maybe` block (see inlineAltChain). The first
+-- argument says which `Alt` instance the operands are from.
 buildAltMaybeBlock :: Ann -> AltKind -> [Expr Ann] -> Supply (Expr Ann)
-buildAltMaybeBlock ann kind operands = do
-  fmt <- buildFmt kind (length operands)
-  let fields = [(PS.mkString (fieldName i), e) | (i, e) <- zip [1 :: Int ..] operands]
+buildAltMaybeBlock ann kind operands =
   pure $
     App
       ann
-      (App ann (Var ann codeGenErlangIdent) (Literal ann (StringLiteral (PS.mkString fmt))))
-      (Literal ann (ObjectLiteral fields))
+      (App ann (Var ann altChainIdent) (Literal ann (StringLiteral (PS.mkString kindName))))
+      (Literal ann (ObjectLiteral [(PS.mkString ("e" <> T.pack (show i)), e) | (i, e) <- zip [1 :: Int ..] operands]))
   where
-    fieldName i = "e" <> T.pack (show i)
+    kindName = case kind of
+      SimpleFail "{nothing}" -> "maybe"
+      SimpleFail _ -> "either"
+      VeitherKind -> "veither"
 
-    -- Each operand appears once, so no risk of duplicate evaluation and no
-    -- need for let-bound names.
-    buildFmt (SimpleFail failPattern) n =
-      pure $ "maybe " <> T.concat (map (fmtLine failPattern) [1 .. n - 1]) <> "$" <> fieldName n <> " end"
-      where
-        fmtLine failPattern' i = failPattern' <> " ?= $" <> fieldName i <> ", "
-    -- Each checked operand runs through a `case` that captures it via an
-    -- aliased pattern (`V = #{...}`) directly in the matching clause, so it's
-    -- evaluated once. Success yields the captured value (never `true`, so it
-    -- always short-circuits the `?=`); failure yields `true`, continuing to
-    -- the next operand. Capture names must be fresh per check -- Erlang
-    -- rejects reusing one across separate `case`s as an unsafe variable.
-    buildFmt VeitherKind n = do
-      names <- traverse (const freshVeitherVar) [1 .. n - 1]
-      let checks = T.concat (zipWith veitherCheckLine names [1 ..])
-      pure $ "maybe " <> checks <> "$" <> fieldName n <> " end"
-
-    freshVeitherVar = do
-      i <- fresh
-      pure $ "AltVeither" <> T.pack (show i)
-
-    -- `<<95>>` is `_` as a byte literal: avoids `"` (escaped by
-    -- PS.prettyPrintString) and `$` (read as a $name placeholder here).
-    veitherCheckLine varName i =
-      "true ?= case $" <> fieldName i <> " of " <> varName
-        <> " = #{type := <<95>>} -> "
-        <> varName
-        <> "; _ -> true end, "
+altChainIdent :: Qualified Ident
+altChainIdent = Qualified (ByModuleName (ModuleName "CodeGen")) (Ident "altChain")
 
 translateBacktrace :: ModuleName -> [Ident] -> [Bind Ann] -> [Bind Ann]
 translateBacktrace modu foreignIdents binds =
