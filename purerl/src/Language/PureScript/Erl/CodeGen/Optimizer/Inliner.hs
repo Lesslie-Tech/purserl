@@ -20,7 +20,7 @@ import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (fresh))
 import qualified Data.Map as Map
 import Data.List (sortOn)
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import qualified Data.Set as Set
 import Data.String (IsString)
 import Data.Text (Text)
@@ -758,9 +758,17 @@ flattenFailureCases = everywhereOnErl $ \case
                 (replaceIdents [(v, EVar a)] pat, more)
             _ -> (pat, stmts)
           steps = step pat' scrut <> map ((,) Nothing) stmts'
-       in unused $ case final of
+       in plain . unused $ case final of
             EMaybe more final' -> EMaybe (steps <> more) final'
             _ -> EMaybe steps final
+
+    -- With no step left that can fail, the block is just its statements.
+    plain (EMaybe steps final)
+      | all (isNothing . fst) steps = foldr (link . snd) final steps
+      where
+        link s@(EBind _ _) acc = ELet s acc
+        link s acc = EAndThen s acc
+    plain e = e
 
     -- Variables a pattern binds but nothing after it reads.
     unused (EMaybe steps0 final) = EMaybe (go (fuse steps0)) final
@@ -1192,6 +1200,7 @@ libRules =
       (("veither@ps", "is"), l1 $ \s v -> labelCase s v (const ETrue) (const EFalse)),
       (("veither@ps", "on"), l2 $ \s f v -> labelCase s v (\a -> veitherVal okLabel (app f [a])) id),
       -- A Veff is `fun() -> Veither end` and a Ctx is `fun(Body) -> Veff end`; the newtype wrappers are erased.
+      (("veff@ps", "is"), l1 $ \s v -> wrapped [Thunk] (\run -> labelCase s (run v) (const ETrue) (const EFalse))),
       (("veff@ps", "catch"), r1 pure),
       (("veff@ps", "fromVeither"), r1 $ \v -> wrapped [Thunk] (\_ -> pure v)),
       (("veff@ps", "lift"), r1 $ \m -> wrapped [Thunk] (\_ -> pure (veitherVal okLabel (app m [])))),
@@ -1212,7 +1221,22 @@ libRules =
         stack "either@ps" [] RightEither,
         stack "veither@ps" [] OkVeither,
         stack "veff@ps" [Thunk] OkVeither,
-        stack "ctx@ps" [Reader, Thunk] OkVeither
+        stack "ctx@ps" [Reader, Thunk] OkVeither,
+        errorRules "veff@ps" [Thunk],
+        errorRules "ctx@ps" [Reader, Thunk]
+      ]
+
+    -- Throwing and handling errors in a monad whose base is an ok Veither. `run` unwraps a value down to that Veither.
+    errorRules m ws =
+      [ ((m, "err"), l1 $ \s a -> wrapped ws (\_ -> pure (veitherVal s a))),
+        ((m, "fromMaybe"), l2 $ \s a v -> wrapped ws (\_ -> maybeCase v (veitherVal s a) (veitherVal okLabel))),
+        ((m, "assert"), l2 $ \s a b -> wrapped ws (\_ -> pure (boolCase b (veitherVal okLabel unit) (veitherVal s a)))),
+        ((m, "fromEither"), l1 $ \s e -> wrapped ws (\_ -> eitherCase e (veitherVal s) (veitherVal okLabel))),
+        ((m, "on"), l2 $ \s f v -> wrapped ws (\run -> labelCase s (run v) (\a -> veitherVal okLabel (app f [a])) id)),
+        ((m, "onThen"), l2 $ \s f v -> wrapped ws (\run -> labelCase s (run v) (\a -> run (app f [a])) id)),
+        ((m, "onOtherErr"), r2 $ \f v -> wrapped ws (\run -> okCase (run v) (veitherVal okLabel) (\x -> veitherVal okLabel (app f [x])))),
+        ((m, "onOtherThen"), r2 $ \f v -> wrapped ws (\run -> okCase (run v) (veitherVal okLabel) (\x -> run (app f [x])))),
+        ((m, "returnVeither"), r1 $ \v -> wrapped ws (\run -> pure (veitherVal okLabel (run v))))
       ]
 
     -- Functions of the local List/Array/Map/E modules that are one Erlang call, or a plain closure for an Effect.
