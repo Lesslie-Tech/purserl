@@ -85,6 +85,23 @@ clauseBody ind (ELet a b) = blockBody ind (flattenSeq a b)
 clauseBody ind (EBlock es) = blockBody ind es
 clauseBody ind e = sp ind <> render ind e
 
+-- | Literals and variables, which fit on the line of the `fun` they are the body of.
+isLeaf :: Erl -> Bool
+isLeaf = \case
+  EVar _ -> True
+  EAtomLiteral _ -> True
+  ENumericLiteral _ -> True
+  EStringLiteral _ -> True
+  ECharLiteral _ -> True
+  _ -> False
+
+-- | The text on one line, if it fits within a short line.
+oneLine :: Builder -> Maybe Builder
+oneLine b
+  | TL.any (== '\n') t || TL.length t > 100 = Nothing
+  | otherwise = Just b
+  where t = B.toLazyText b
+
 --------------------------------------------------------------------------------
 -- Operator precedence / parenthesization
 --
@@ -262,7 +279,7 @@ render ind = go
   go (EBind x e) = go x <> " = " <> go e
 
   go (EFunctionDef _t _ss x xs e) =
-    B.fromText (runAtom x) <> "(" <> mintercalate "," (map (B.fromText . escapeQuotedVar) xs) <> ") -> " <> body
+    B.fromText (runAtom x) <> "(" <> mintercalate "," (map (B.fromText . escapeQuotedVar) xs) <> ") ->" <> body
     where
       body = case e of
         EAndThen a b -> blockWithSurroundingNewlines (flattenSeq a b)
@@ -275,7 +292,10 @@ render ind = go
 
   go (EMapLiteral elts) =
     let ci = sp (ind + 2)
-    in "#{" <> mintercalate (",\n" <> ci) (map (\(k, e) -> B.fromText (runAtom k) <> " => " <> go e) elts) <> "}"
+        fields = map (\(k, e) -> B.fromText (runAtom k) <> " => " <> go e) elts
+    in case oneLine (mintercalate ", " fields) of
+         Just flat -> "#{" <> flat <> "}"
+         Nothing -> "#{" <> mintercalate (",\n" <> ci) fields <> "}"
 
   go (EMapPattern elts) =
     "#{" <> mintercalate ", " (map (\(k, e) -> B.fromText (runAtom k) <> " := " <> go e) elts) <> "}"
@@ -302,6 +322,12 @@ render ind = go
   go (ELet a b) = renderBlock (flattenSeq a b)
   go (EBlock es) = renderBlock es
 
+  go (EMaybe steps final) =
+    "maybe\n" <> mintercalate ",\n" (map step steps <> [sp (ind + 2) <> render (ind + 2) final]) <> "\n" <> sp ind <> "end"
+    where
+      step (Just pat, e) = sp (ind + 2) <> render (ind + 2) pat <> " ?= " <> render (ind + 2) e
+      step (Nothing, e) = sp (ind + 2) <> render (ind + 2) e
+
   go (ERawErlangSource fmt binds) =
     let (p1 : parts) = T.splitOn "$" fmt
         piece p =
@@ -319,16 +345,26 @@ render ind = go
   -- single-clause single-var-pattern case before the general EFunFull case
   -- below, so e.g. a zero-arity fun (EFun0, an *empty* binder list) does
   -- NOT match here and falls through to the multi-clause rendering.
-  go (EFun1 name x e) =
-    "fun " <> B.fromText (fromMaybe "" name) <> "(" <> B.fromText (escapeQuotedVar x) <> ") -> \n"
-    <> clauseBody (ind + 2) e
+  go (EFun1 name x e)
+    | isLeaf e = "fun " <> B.fromText (fromMaybe "" name) <> "(" <> B.fromText (escapeQuotedVar x) <> ") -> " <> go e <> " end"
+    | otherwise =
+      "fun " <> B.fromText (fromMaybe "" name) <> "(" <> B.fromText (escapeQuotedVar x) <> ") ->\n"
+      <> clauseBody (ind + 2) e
+      <> "\n" <> sp ind <> "end"
+
+  go (EFunFull name [(EFunBinder binds, e')])
+    | isLeaf e' = "fun " <> B.fromText (fromMaybe "" name) <> "(" <> commaSep ind binds <> ") -> " <> go e' <> " end"
+
+  go (EFunFull name [(EFunBinder binds, e')]) =
+    "fun " <> B.fromText (fromMaybe "" name) <> "(" <> commaSep ind binds <> ") ->\n"
+    <> clauseBody (ind + 2) e'
     <> "\n" <> sp ind <> "end"
 
   go (EFunFull name binders) =
     "fun\n" <> mintercalate ";\n" (map prettyPrintBinder binders) <> "\n" <> sp ind <> "end"
     where
       prettyPrintBinder (EFunBinder binds, e') =
-        sp (ind + 2) <> B.fromText (fromMaybe "" name) <> "(" <> commaSep (ind + 2) binds <> ") -> \n"
+        sp (ind + 2) <> B.fromText (fromMaybe "" name) <> "(" <> commaSep (ind + 2) binds <> ") ->\n"
         <> clauseBody (ind + 2) e'
 
   go (ECaseOf e binders) =

@@ -103,12 +103,14 @@ replaceIdents unfilteredVars = go
     go (EMapPattern binds) = f $ EMapPattern $ map (second go) binds
     go (EMapUpdate e binds) = f $ EMapUpdate (go e) $ map (second go) binds
     go (EListLiteral es) = f $ EListLiteral (map go es)
+    go (EArrayLiteral es) = f $ EArrayLiteral (map go es)
     go (EListCons es e) = f $ EListCons (map go es) (go e)
     go (ETryAnyAny e1 e2) = f $ ETryAnyAny (go e1) (go e2)
     go (EAndThen e1 e2) = f $ EAndThen (go e1) (go e2)
     go (ELet e1 e2) = f $ ELet (go e1) (go e2)
     go v@(EVar var) = fromMaybe v $ lookup var vars
     go (ERawErlangSource fmt binds) = f $ ERawErlangSource fmt $ map (second go) binds
+    go (EMaybe steps final) = f $ EMaybe (map (\(p, e) -> (fmap go p, go e)) steps) (go final)
     go other = other
 
     -- -- Vars are *not* fresh inf case binders

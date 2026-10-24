@@ -6,6 +6,7 @@ module Language.PureScript.Erl.CodeGen.Optimizer.Inliner
     specialize,
     inlineCommonOperators,
     inlineCommonFnsM,
+    flattenFailureCases,
     evaluateIifes,
     etaConvert,
     singleBegin,
@@ -183,6 +184,9 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         ELet (EBind a b) c | a == c -> b
 
         EApp {} | Just e <- applySpine expr -> convert e
+
+        -- A closure that is created only to be called.
+        EApp _ (EFun0 _ body) [] -> body
 
         ECaseOf cond [(EBinder pat, rhs)] | pat == rhs ->
           cond
@@ -451,12 +455,13 @@ letBindIdents vars body =
     [] -> body
 
 -- | @let a = b in a@ is just @b@. Aliasing a variable only to rename it is
--- dropped, for the body variables made by `wrapped` and for `_`.
+-- dropped, for the body variables made by `wrapped` (they are unique in the
+-- module) and for `_`.
 bindLet :: Erl -> Erl -> Erl -> Erl
 bindLet a b body
   | a == body = b
   | EVar "_" <- a, EVar _ <- b = body
-  | EVar x <- a, EVar _ <- b, "Body@" `T.isPrefixOf` x = replaceIdents [(x, b)] body
+  | EVar x <- a, EVar y <- b, "Body@" `T.isPrefixOf` x || "Body@" `T.isPrefixOf` y = replaceIdents [(x, b)] body
   | otherwise = ELet (EBind a b) body
 
 letBindPats :: [Erl] -> [Erl] -> Erl -> Erl
@@ -747,6 +752,74 @@ fnNs =
          ]
   where
     name prefix n = atomPS $ mkString $ prefix <> T.pack (show n)
+
+-- | `case E of Pat -> Rest; X -> X end`, where a value that doesn't match is
+-- returned as it is, is one step of a `maybe` block. The binds of a do-block
+-- are such a chain, and become one flat block.
+flattenFailureCases :: Erl -> Erl
+flattenFailureCases = everywhereOnErl $ \case
+  ECaseOf scrut [(EBinder p1, b1), (EBinder p2, b2)]
+    | p2 == b2 -> maybeStep p1 scrut b1
+    | p1 == b1, not (isEVar p1) -> maybeStep p2 scrut b2
+  other -> other
+  where
+    maybeStep pat scrut rest =
+      let (stmts, final) = unsnoc' (statements rest)
+          (pat', stmts') = case stmts of
+            EBind (EVar a) (EVar v) : more
+              | v `elem` varsInExpr pat,
+                a `notElem` varsInExpr pat,
+                v `notElem` concatMap varsInExpr (more <> [final]) ->
+                (replaceIdents [(v, EVar a)] pat, more)
+            _ -> (pat, stmts)
+          steps = step pat' scrut <> map ((,) Nothing) stmts'
+       in unused $ case final of
+            EMaybe more final' -> EMaybe (steps <> more) final'
+            _ -> EMaybe steps final
+
+    -- Variables a pattern binds but nothing after it reads.
+    unused (EMaybe steps0 final) = EMaybe (go (fuse steps0)) final
+      where
+        -- `Val = E, X = Val` is `X = E`, keeping the name from the source.
+        fuse ((Nothing, EBind (EVar v) e) : (Nothing, EBind (EVar a) (EVar v')) : rest)
+          | v == v', "Val@" `T.isPrefixOf` v,
+            v `notElem` concatMap (\(q, x) -> maybe [] varsInExpr q <> varsInExpr x) rest <> varsInExpr final =
+              fuse ((Nothing, EBind (EVar a) e) : rest)
+        fuse (s : rest) = s : fuse rest
+        fuse [] = []
+        go ((Just p, e) : rest) =
+          let later = concatMap (\(q, x) -> maybe [] varsInExpr q <> varsInExpr x) rest <> varsInExpr final
+              dead = [v | v <- varsInExpr p, v /= "_", v `notElem` later, v `notElem` varsInExpr e]
+           in (Just (replaceIdents [(v, EVar "_") | v <- dead] p), e) : go rest
+        go (s : rest) = s : go rest
+        go [] = []
+    unused e = e
+
+    -- A match against a freshly built value is just its bindings, and a
+    -- `maybe` block that is matched hands over its steps: it either fails the
+    -- same way or yields the value that is matched.
+    step pat = \case
+      EMaybe inner final | not (isEVar pat) -> inner <> step pat final
+      scrut@(EMapLiteral fields)
+        | Just binds <- staticMatch pat fields -> map ((,) Nothing) binds
+        | otherwise -> [(Just pat, scrut)]
+      scrut -> [(Just pat, scrut)]
+
+    staticMatch (EMapPattern pats) fields = concat <$> traverse bindField pats
+      where
+        bindField (k, p) = case (p, lookup k fields) of
+          (EVar v, Just e) -> Just [EBind (EVar v) e]
+          (EStringLiteral a, Just (EStringLiteral b)) | a == b -> Just []
+          _ -> Nothing
+    staticMatch _ _ = Nothing
+
+    statements = \case
+      EAndThen a b -> a : statements b
+      ELet a b -> a : statements b
+      EBlock es -> concatMap statements es
+      e -> [e]
+
+    unsnoc' es = (init es, last es)
 
 -- | Push a curried application chain into the @let@s and single-argument
 -- functions at its head in one go, instead of one argument per optimizer round.
@@ -1064,9 +1137,9 @@ inlineLibFns symbolOf table expr@EApp {}
       | otherwise = Nothing
 
     etaExpand rule label args = do
-      missing <- traverse (const (freshName "_A")) [1 .. ruleArity rule - length args]
+      missing <- traverse (const (freshName "Arg")) [1 .. ruleArity rule - length args]
       -- Supplied arguments are evaluated once, outside the closure, unless they are values already.
-      supplied <- traverse (\a -> if isValue a then pure (a, Nothing) else (\v -> (EVar v, Just (v, a))) <$> freshName "_B") args
+      supplied <- traverse (\a -> if isValue a then pure (a, Nothing) else (\v -> (EVar v, Just (v, a))) <$> freshName "Bound") args
       body <- ruleBuild rule label (map fst supplied <> map EVar missing)
       pure (foldr (\(v, a) b -> ELet (EBind (EVar v) a) b) (foldr (EFun1 Nothing) body missing) (mapMaybe snd supplied))
 
@@ -1093,7 +1166,7 @@ libRules =
   Map.fromList $
     stackRules
     ++ [ (("map@ps", "lookupOr"), r3 $ \d k m -> do
-        v <- freshVar "_V"
+        v <- freshVar "Val"
         pure $ ECaseOf (app erlangMapsFind [k, m]) [(EBinder (tagged "ok" [v]), v), (EBinder (atom "error"), d)]),
       (("maybe@ps", "maybe"), r3 $ \x f m -> maybeCase m x (\z -> app f [z])),
       (("maybe@ps", "withDefault"), r2 $ \x m -> maybeCase m x id),
@@ -1127,7 +1200,12 @@ libRules =
       (("ctx@ps", "fromBodyFn"), r1 pure),
       (("ctx@ps", "toVeff"), r2 $ \b c -> pure (app c [b])),
       (("ctx@ps", "catch"), r2 $ \b c -> pure (app c [b])),
-      (("ctx@ps", "fromVeither"), r1 $ \v -> wrapped [Reader, Thunk] (\_ -> pure v))
+      (("ctx@ps", "fromVeither"), r1 $ \v -> wrapped [Reader, Thunk] (\_ -> pure v)),
+      (("ctx@ps", "fromSafeEffect"), r1 $ \e -> wrapped [Reader, Thunk] (\_ -> pure (veitherVal okLabel (app e [])))),
+      (("ctx@ps", "fromSafeVeff"), r1 $ \e -> wrapped [Reader] (\_ -> pure e)),
+      (("ctx@ps", "query"), r1 $ \f -> do
+        b <- freshName "Body"
+        pure (EFun1 Nothing b (EFun0 Nothing (veitherVal okLabel (app f [EVar b])))))
     ]
   where
     -- A monad is some wrappers around a base type. `Reader` takes the body, `Thunk` is an Effect.
@@ -1195,11 +1273,11 @@ libRules =
     boolCase b onTrue onFalse = ECaseOf b [(EBinder ETrue, onTrue), (EBinder EFalse, onFalse)]
 
     maybeCase m onNothing onJust = do
-      v <- freshVar "_J"
+      v <- freshVar "Just"
       pure $ ECaseOf m [(EBinder nothing, onNothing), (EBinder (just v), onJust v)]
 
     eitherCase e onLeft onRight = do
-      v <- freshVar "_E"
+      v <- freshVar "Right"
       pure $ ECaseOf e [(EBinder (left v), onLeft v), (EBinder (right v), onRight v)]
 
     -- A Veither is `#{type := ~"_", value := V}` when ok and `#{type := Label, value := E}` for an error.
@@ -1209,8 +1287,8 @@ libRules =
 
     -- Branch on the label; the other branch gets the whole value.
     labelCase label v onMatch onOther = do
-      a <- freshVar "_V"
-      x <- freshVar "_X"
+      a <- freshVar "Val"
+      x <- freshVar "Other"
       pure $ ECaseOf v [(EBinder (veitherPat label a), onMatch a), (EBinder x, onOther x)]
 
     okCase = labelCase okLabel
