@@ -806,8 +806,9 @@ flattenFailureCases = everywhereOnErl $ \case
 
     unsnoc' es = (init es, last es)
 
--- | Push a curried application chain into the @let@s and single-argument
--- functions at its head in one go, instead of one argument per optimizer round.
+-- | Push a curried application chain into the @let@s, single-argument
+-- functions and thunks at its head in one go, instead of one argument per
+-- optimizer round. Running a thunk is its body, so no closure is left over.
 applySpine :: Erl -> Maybe Erl
 applySpine = go []
   where
@@ -818,10 +819,21 @@ applySpine = go []
 
     canStep (ELet _ _) _ = True
     canStep (EFun1 _ _ _) ((_, [_]) : _) = True
+    canStep (EFun0 _ _) ((_, []) : _) = True
+    -- Running a choice between thunks runs the chosen one; only `()` is pushed in, so no argument is copied.
+    canStep (ECaseOf _ alts) [(_, [])] = any (thunk . snd) alts
     canStep _ _ = False
+
+    thunk = \case
+      EFun0 _ _ -> True
+      ELet _ body -> thunk body
+      ECaseOf _ alts -> any (thunk . snd) alts
+      _ -> False
 
     step (ELet b body) as = ELet b (step body as)
     step (EFun1 _ v body) ((_, [arg]) : as) = bindLet (EVar v) arg (step body as)
+    step (EFun0 _ body) ((_, []) : as) = step body as
+    step (ECaseOf scrutinee alts) as@[(_, [])] = ECaseOf scrutinee [(b, step rhs as) | (b, rhs) <- alts]
     step h as = foldl (\g (k, args) -> EApp k g args) h as
 
 onTupleN :: Erl -> Erl

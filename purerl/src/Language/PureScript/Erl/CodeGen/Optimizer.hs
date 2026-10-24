@@ -52,6 +52,9 @@ optimize exports es = do
   -- A single pass is enough: every rewrite re-applies the rules to what it
   -- builds, so a second round never changes anything. Keep it that way
   -- (re-run `convert` on new nodes) instead of looping to a fixed point.
+  -- Order: inlineCommonFnsM (libRules, which build lambdas) before this, so
+  -- `applySpine` beta-reduces them; a rule that creates a redex below its own
+  -- result must reduce it itself, as nothing revisits already-visited children.
   go erl =
     erl
       & inlineCommonValuesTopDown id -- expander
