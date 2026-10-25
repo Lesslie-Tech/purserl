@@ -870,9 +870,22 @@ applySpine = go []
     canStep (ELet _ _) _ = True
     canStep (EFun1 _ _ _) ((_, [_]) : _) = True
     canStep (EFun0 _ _) ((_, []) : _) = True
-    -- Running a choice between thunks runs the chosen one; only `()` is pushed in, so no argument is copied.
-    canStep (ECaseOf _ alts) [(_, [])] = any (thunk . snd) alts
+    canStep (ECaseOf _ alts) as = pushable alts as
     canStep _ _ = False
+
+    -- Running a choice between thunks runs the chosen one. With arguments the application is copied
+    -- into every arm, so only variables and literals, and only when every arm is a function.
+    pushable alts as
+      | all (null . snd) as = any (thunk . snd) alts
+      | otherwise = all trivial (concatMap snd as) && all (fun . snd) alts
+
+    trivial = \case
+      EVar _ -> True
+      ENumericLiteral _ -> True
+      EStringLiteral _ -> True
+      ECharLiteral _ -> True
+      EAtomLiteral _ -> True
+      _ -> False
 
     thunk = \case
       EFun0 _ _ -> True
@@ -880,10 +893,17 @@ applySpine = go []
       ECaseOf _ alts -> any (thunk . snd) alts
       _ -> False
 
+    fun = \case
+      EFun0 _ _ -> True
+      EFun1 {} -> True
+      ELet _ body -> fun body
+      ECaseOf _ alts -> all (fun . snd) alts
+      _ -> False
+
     step (ELet b body) as = ELet b (step body as)
     step (EFun1 _ v body) ((_, [arg]) : as) = bindLet (EVar v) arg (step body as)
     step (EFun0 _ body) ((_, []) : as) = step body as
-    step (ECaseOf scrutinee alts) as@[(_, [])] = ECaseOf scrutinee [(b, step rhs as) | (b, rhs) <- alts]
+    step (ECaseOf scrutinee alts) as | pushable alts as = ECaseOf scrutinee [(b, step rhs as) | (b, rhs) <- alts]
     step h as = foldl (\g (k, args) -> EApp k g args) h as
 
 onTupleN :: Erl -> Erl
