@@ -110,7 +110,7 @@ replaceIdents unfilteredVars = go
     go (ELet e1 e2) = f $ ELet (go e1) (go e2)
     go v@(EVar var) = fromMaybe v $ lookup var vars
     go (ERawErlangSource fmt binds) = f $ ERawErlangSource fmt $ map (second go) binds
-    go (EMaybe steps final) = f $ EMaybe (map (\(p, e) -> (fmap go p, go e)) steps) (go final)
+    go (EMaybe kind steps final) = f $ EMaybe kind (map (\(p, e) -> (fmap go p, go e)) steps) (go final)
     go other = other
 
     -- -- Vars are *not* fresh inf case binders

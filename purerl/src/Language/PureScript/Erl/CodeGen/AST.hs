@@ -116,8 +116,19 @@ data Erl
   -- | A `maybe ... end` block: each step is `Pattern ?= Expr` or, with no pattern,
   -- a plain expression, followed by the final expression. A pattern that
   -- doesn't match ends the block with the value that failed to match.
-  | EMaybe [(Maybe Erl, Erl)] Erl
+  | EMaybe MaybeKind [(Maybe Erl, Erl)] Erl
 
+  deriving (Show, Eq)
+
+-- | What the value that ends a `maybe` block early is.
+data MaybeKind
+  = -- | A chain of binds: the steps match the success case, so the value that
+    -- ends the block is a failure and the block is what a failing bind returns.
+    -- Such a block that is matched by a bind can become steps of that chain.
+    ExitsOnFailure
+  | -- | An alt chain: the steps match the failure case, so the value that ends
+    -- the block is the first success. It still has to be matched by what uses it.
+    ExitsOnSuccess
   deriving (Show, Eq)
 
 -- | [drathier]: I think this is annotating if a particular App is applying something compiler-generated like a type class dict (SyntheticApp), or is just a normal function call (RegularApp).
@@ -414,7 +425,7 @@ everywhereOnErl f = go
       EAndThen a b -> f $ EAndThen (go a) (go b)
       ELet a b -> f $ ELet (go a) (go b)
       ERawErlangSource fmt binds -> f $ ERawErlangSource fmt $ map (second go) binds
-      EMaybe steps final -> f $ EMaybe (map (\(p, e) -> (fmap go p, go e)) steps) (go final)
+      EMaybe kind steps final -> f $ EMaybe kind (map (\(p, e) -> (fmap go p, go e)) steps) (go final)
 
       -- other -> error (show ("other", other))
 
@@ -449,7 +460,7 @@ everywhereOnErlTopDownM f = f >=> go
   go (EAndThen a b) = EAndThen <$> f' a <*> f' b
   go (ELet a b) = ELet <$> f' a <*> f' b
   go (ERawErlangSource fmt binds) = ERawErlangSource fmt <$> fargs binds
-  go (EMaybe steps final) = EMaybe <$> traverse (\(p, e) -> (,) <$> traverse f' p <*> f' e) steps <*> f' final
+  go (EMaybe kind steps final) = EMaybe kind <$> traverse (\(p, e) -> (,) <$> traverse f' p <*> f' e) steps <*> f' final
 
   go other = f other
 
@@ -476,7 +487,7 @@ everything (<>.) f = go
   go e0@(EAndThen a b) = f e0 <>. go a <>. go b
   go e0@(ELet a b) = f e0 <>. go a <>. go b
   go e0@(ERawErlangSource _ binds) = foldl (<>.) (f e0) (map (go . snd) binds)
-  go e0@(EMaybe steps final) = foldl (<>.) (f e0) (concatMap (\(p, e) -> maybe [] (pure . go) p <> [go e]) steps <> [go final])
+  go e0@(EMaybe _ steps final) = foldl (<>.) (f e0) (concatMap (\(p, e) -> maybe [] (pure . go) p <> [go e]) steps <> [go final])
   -- go other = f other
 
   go e0@(EVar {}) = f e0

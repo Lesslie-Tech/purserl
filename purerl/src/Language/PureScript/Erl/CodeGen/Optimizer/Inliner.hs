@@ -7,6 +7,7 @@ module Language.PureScript.Erl.CodeGen.Optimizer.Inliner
     inlineCommonOperators,
     inlineCommonFnsM,
     flattenFailureCases,
+    mergeHandlerCases,
     evaluateIifes,
     etaConvert,
     singleBegin,
@@ -507,7 +508,7 @@ inlineAltChain expr = case flattenCall expr of
         let index f = read (T.unpack (T.drop 1 (runAtom f))) :: Int
             operands = map snd (sortOn (index . fst) fields)
         steps <- traverse (altStep k) (init operands)
-        pure (EMaybe steps (last operands))
+        pure (EMaybe ExitsOnSuccess steps (last operands))
   _ -> pure expr
   where
     atom = EAtomLiteral . Atom Nothing
@@ -738,14 +739,23 @@ fnNs =
   where
     name prefix n = atomPS $ mkString $ prefix <> T.pack (show n)
 
+-- | Three forms handle the values of these monads, and each is kept apart:
+--
+--  * An alt chain is a `maybe` block that matches failures; the first value that
+--    isn't one ends it (`ExitsOnSuccess`). It is never merged into another block.
+--  * A chain of binds is a `maybe` block that matches successes; a failure ends it
+--    (`ExitsOnFailure`). This function builds those from the cases below.
+--  * `on` is a case on a failure label, with an arm per handler (`mergeHandlerCases`).
+--
 -- | `case E of Pat -> Rest; X -> X end`, where a value that doesn't match is
--- returned as it is, is one step of a `maybe` block. The binds of a do-block
--- are such a chain, and become one flat block.
+-- returned as it is and `Pat` is the success case, is one step of a `maybe`
+-- block. The binds of a do-block are such a chain, and become one flat block.
+-- A case on a failure, like `on`, stays a case.
 flattenFailureCases :: Erl -> Erl
 flattenFailureCases = everywhereOnErl $ \case
   ECaseOf scrut [(EBinder p1, b1), (EBinder p2, b2)]
-    | p2 == b2 -> maybeStep p1 scrut b1
-    | p1 == b1, not (isEVar p1) -> maybeStep p2 scrut b2
+    | p2 == b2, success p1 -> maybeStep p1 scrut b1
+    | p1 == b1, success p2 -> maybeStep p2 scrut b2
   other -> other
   where
     maybeStep pat scrut rest =
@@ -759,11 +769,11 @@ flattenFailureCases = everywhereOnErl $ \case
             _ -> (pat, stmts)
           steps = step pat' scrut <> map ((,) Nothing) stmts'
        in plain . unused $ case final of
-            EMaybe more final' -> EMaybe (steps <> more) final'
-            _ -> EMaybe steps final
+            EMaybe ExitsOnFailure more final' -> EMaybe ExitsOnFailure (steps <> more) final'
+            _ -> EMaybe ExitsOnFailure steps final
 
     -- With no step left that can fail, the block is just its statements.
-    plain (EMaybe steps final)
+    plain (EMaybe _ steps final)
       | all (isNothing . fst) steps = foldr (link . snd) final steps
       where
         link s@(EBind _ _) acc = ELet s acc
@@ -771,7 +781,7 @@ flattenFailureCases = everywhereOnErl $ \case
     plain e = e
 
     -- Variables a pattern binds but nothing after it reads.
-    unused (EMaybe steps0 final) = EMaybe (go (fuse steps0)) final
+    unused (EMaybe kind steps0 final) = EMaybe kind (go (fuse steps0)) final
       where
         -- `Val = E, X = Val` is `X = E`, keeping the name from the source.
         fuse ((Nothing, EBind (EVar v) e) : (Nothing, EBind (EVar a) (EVar v')) : rest)
@@ -788,21 +798,16 @@ flattenFailureCases = everywhereOnErl $ \case
         go [] = []
     unused e = e
 
-    -- A match against a freshly built value is just its bindings, and a
-    -- `maybe` block that is matched hands over its steps: it either fails the
-    -- same way or yields the value that is matched. That holds only for a
-    -- success pattern, which a failure can't match; `on` matches failures.
+    -- A match against a freshly built value is just its bindings, and a chain
+    -- of binds that is matched hands over its steps: it either fails the same
+    -- way or yields the value that is matched. An alt chain does not: it
+    -- returns the first value that is not a failure, which must be matched.
     step pat = \case
-      EMaybe inner final | success pat -> inner <> step pat final
+      EMaybe ExitsOnFailure inner final -> inner <> step pat final
       scrut@(EMapLiteral fields)
         | Just binds <- staticMatch pat fields -> map ((,) Nothing) binds
         | otherwise -> [(Just pat, scrut)]
       scrut -> [(Just pat, scrut)]
-
-    success = \case
-      EMapPattern pats -> any (\p -> p == (Atom Nothing "type", EStringLiteral (mkString "_"))) pats
-      ETupleLiteral (EAtomLiteral (Atom Nothing tag) : _) -> tag `elem` ["just", "right"]
-      _ -> False
 
     staticMatch (EMapPattern pats) fields = concat <$> traverse bindField pats
       where
@@ -819,6 +824,37 @@ flattenFailureCases = everywhereOnErl $ \case
       e -> [e]
 
     unsnoc' es = (init es, last es)
+
+-- | The success case of a Veither, Maybe or Either.
+success :: Erl -> Bool
+success = \case
+  EMapPattern pats -> any (== (Atom Nothing "type", EStringLiteral (mkString "_"))) pats
+  ETupleLiteral (EAtomLiteral (Atom Nothing tag) : _) -> tag `elem` ["just", "right"]
+  _ -> False
+
+-- | Chained `on` handlers, `case (case E of A -> ok(..); X -> X end) of B -> ..; Y -> Y end`,
+-- are one case with an arm per handler. A handled value is ok, which no later arm
+-- matches, so the arms can follow each other. The arm of an `onThen` can return an
+-- error that a later handler has to see, so only arms that return an ok value are
+-- merged into what comes after them.
+mergeHandlerCases :: Erl -> Erl
+mergeHandlerCases = everywhereOnErl $ \case
+  ECaseOf (ECaseOf scrut inner) outer
+    | Just (innerArms, _) <- handlers inner,
+      all (ok . snd) innerArms,
+      Just (outerArms, passthrough) <- handlers outer ->
+      ECaseOf scrut (innerArms <> outerArms <> [passthrough])
+  other -> other
+  where
+    -- The arms that match an error label, then the one that returns the rest as it is.
+    handlers alts = case reverse alts of
+      pass@(EBinder (EVar x), EVar y) : arms@(_ : _) | x == y, all (errorLabel . fst) arms -> Just (reverse arms, pass)
+      _ -> Nothing
+    errorLabel (EBinder (EMapPattern pats)) = not (success (EMapPattern pats)) && any (isType . fst) pats
+    errorLabel _ = False
+    isType = (== Atom Nothing "type")
+    ok (EMapLiteral fields) = (Atom Nothing "type", EStringLiteral (mkString "_")) `elem` fields
+    ok _ = False
 
 -- | Push a curried application chain into the @let@s, single-argument
 -- functions and thunks at its head in one go, instead of one argument per

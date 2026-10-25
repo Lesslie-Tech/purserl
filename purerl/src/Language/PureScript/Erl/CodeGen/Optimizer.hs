@@ -19,7 +19,8 @@ import Language.PureScript.Erl.CodeGen.Optimizer.Inliner
       inlineCommonValuesBottomUp,
       specialize,
       inlineCommonFnsM,
-      flattenFailureCases )
+      flattenFailureCases,
+      mergeHandlerCases )
 
 import qualified Language.PureScript.Erl.CodeGen.Constants as EC
 import Data.Map (Map)
@@ -60,6 +61,7 @@ optimize exports es = do
       & inlineCommonValuesTopDown id -- expander
       & inlineCommonValuesBottomUp id -- expander
       & flattenFailureCases
+      & mergeHandlerCases
       -- Compilation took 107841 ms -- only topdown
       -- Compilation took 104441 ms -- only topdown
       -- Compilation took 102926 ms -- only bottomup

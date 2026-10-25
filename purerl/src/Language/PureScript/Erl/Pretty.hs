@@ -322,7 +322,7 @@ render ind = go
   go (ELet a b) = renderBlock (flattenSeq a b)
   go (EBlock es) = renderBlock es
 
-  go (EMaybe steps final) =
+  go (EMaybe _ steps final) =
     "maybe\n" <> mintercalate ",\n" (map step steps <> [sp (ind + 2) <> render (ind + 2) final]) <> "\n" <> sp ind <> "end"
     where
       step (Just pat, e) = sp (ind + 2) <> render (ind + 2) pat <> " ?= " <> render (ind + 2) e
