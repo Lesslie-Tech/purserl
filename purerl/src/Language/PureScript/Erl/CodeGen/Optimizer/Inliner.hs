@@ -790,13 +790,19 @@ flattenFailureCases = everywhereOnErl $ \case
 
     -- A match against a freshly built value is just its bindings, and a
     -- `maybe` block that is matched hands over its steps: it either fails the
-    -- same way or yields the value that is matched.
+    -- same way or yields the value that is matched. That holds only for a
+    -- success pattern, which a failure can't match; `on` matches failures.
     step pat = \case
-      EMaybe inner final | not (isEVar pat) -> inner <> step pat final
+      EMaybe inner final | success pat -> inner <> step pat final
       scrut@(EMapLiteral fields)
         | Just binds <- staticMatch pat fields -> map ((,) Nothing) binds
         | otherwise -> [(Just pat, scrut)]
       scrut -> [(Just pat, scrut)]
+
+    success = \case
+      EMapPattern pats -> any (\p -> p == (Atom Nothing "type", EStringLiteral (mkString "_"))) pats
+      ETupleLiteral (EAtomLiteral (Atom Nothing tag) : _) -> tag `elem` ["just", "right"]
+      _ -> False
 
     staticMatch (EMapPattern pats) fields = concat <$> traverse bindField pats
       where

@@ -436,6 +436,7 @@ test-suite tests
     TestCst
     TestEmptyClassDictElision
     TestDiscard
+    TestErlFlatten
     TestGraph
     TestHierarchy
     TestIde
