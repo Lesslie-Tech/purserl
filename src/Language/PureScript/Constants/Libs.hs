@@ -49,14 +49,6 @@ pattern P_semigroupoidFn :: forall a. (Eq a, IsString a) => (ModuleName, a)
 pattern P_semigroupoidFn = (ModuleName "Control.Semigroupoid", "semigroupoidFn")
 
 -- Data.Bounded
-pattern P_bottom :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_bottom = (ModuleName "Data.Bounded", "bottom")
-
-pattern P_top :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_top = (ModuleName "Data.Bounded", "top")
-
-pattern P_boundedBoolean :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_boundedBoolean = (ModuleName "Data.Bounded", "boundedBoolean")
 
 -- Data.Eq
 pattern Eq :: Qualified (ProperName 'ClassName)
@@ -85,9 +77,6 @@ pattern P_notEq = (ModuleName "Data.Eq", "notEq")
 
 pattern P_eqBoolean :: forall a. (Eq a, IsString a) => (ModuleName, a)
 pattern P_eqBoolean = (ModuleName "Data.Eq", "eqBoolean")
-
-pattern P_eqChar :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_eqChar = (ModuleName "Data.Eq", "eqChar")
 
 pattern P_eqInt :: forall a. (Eq a, IsString a) => (ModuleName, a)
 pattern P_eqInt = (ModuleName "Data.Eq", "eqInt")
@@ -233,9 +222,6 @@ pattern P_lessThanOrEq = (ModuleName "Data.Ord", "lessThanOrEq")
 
 pattern P_ordBoolean :: forall a. (Eq a, IsString a) => (ModuleName, a)
 pattern P_ordBoolean = (ModuleName "Data.Ord", "ordBoolean")
-
-pattern P_ordChar :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_ordChar = (ModuleName "Data.Ord", "ordChar")
 
 pattern P_ordInt :: forall a. (Eq a, IsString a) => (ModuleName, a)
 pattern P_ordInt = (ModuleName "Data.Ord", "ordInt")

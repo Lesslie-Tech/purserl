@@ -22,7 +22,6 @@ effectDictionaries = EffectDictionaries
   , edFunctor = "functorEffect"
   }
 
-
 -- Modules
 
 effect :: forall a. (IsString a) => a
@@ -33,9 +32,6 @@ controlApplicative = "control_applicative@ps"
 
 controlBind :: forall a. (IsString a) => a
 controlBind = "control_bind@ps"
-
-dataBounded :: forall a. (IsString a) => a
-dataBounded = "data_bounded@ps"
 
 dataSemigroup :: forall a. (IsString a) => a
 dataSemigroup = "data_semigroup@ps"
@@ -72,9 +68,6 @@ dataUnit = "data_unit@ps"
 
 erlAtom :: forall a. (IsString a) => a
 erlAtom = "erl_atom@ps"
-
-erlDataListTypes :: forall a. (IsString a) => a
-erlDataListTypes = "erl_data_list_types@ps"
 
 erlDataTuple :: forall a. (IsString a) => a
 erlDataTuple = "erl_data_tuple@ps"
@@ -151,5 +144,3 @@ tuple = "tuple"
 
 -- Typeclass Dictionary names
 
-semigroupList :: forall a. (IsString a) => a
-semigroupList = "semigroupList"

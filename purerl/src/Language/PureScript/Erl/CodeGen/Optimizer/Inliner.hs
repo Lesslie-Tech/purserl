@@ -154,8 +154,6 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
           | isDict semiringNumber dict && isUncurriedFn fnZero fn -> ENumericLiteral (Right 0.0)
           | isDict semiringInt dict && isUncurriedFn fnOne fn -> EIntLit 1
           | isDict semiringNumber dict && isUncurriedFn fnOne fn -> ENumericLiteral (Right 1.0)
-          | isDict boundedBoolean dict && isUncurriedFn fnBottom fn -> EAtomLiteral $ Atom Nothing "false"
-          | isDict boundedBoolean dict && isUncurriedFn fnTop fn -> EAtomLiteral $ Atom Nothing "true"
 
         -- drathier added, functions rather than dicts
         EApp _ fn [a]
@@ -261,8 +259,6 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
 
     fnZero = (EC.dataSemiring, snd C.P_zero)
     fnOne = (EC.dataSemiring, snd C.P_one)
-    fnBottom = (EC.dataBounded, snd C.P_bottom)
-    fnTop = (EC.dataBounded, snd C.P_top)
 
 inlineCommonValuesTopDown :: (Erl -> Erl) -> Erl -> Erl
 inlineCommonValuesTopDown expander = everywhereOnErlTopDown convert
@@ -433,17 +429,10 @@ specialize = everywhereOnErl onErl
         EApp2 "data_semigroup@ps" "append" "data_semigroup@ps" inst a b | isInst inst "semigroupArray" -> EBinary ArrayConcat a b
         EApp3 "data_semigroup@ps" "append" "data_semigroup@ps" inst a b | isInst inst "semigroupArray" -> EBinary ArrayConcat a b
 
-        -- List
-        EApp1 "data_semigroup@ps" "append" "erl_data_list_types@ps" inst a b | isInst inst "semigroupList" -> EBinary ListConcat a b
-        EApp2 "data_semigroup@ps" "append" "erl_data_list_types@ps" inst a b | isInst inst "semigroupList" -> EBinary ListConcat a b
-        EApp3 "data_semigroup@ps" "append" "erl_data_list_types@ps" inst a b | isInst inst "semigroupList" -> EBinary ListConcat a b
-
         other -> other
 
     fnZero = (EC.dataSemiring, snd C.P_zero)
     fnOne = (EC.dataSemiring, snd C.P_one)
-    fnBottom = (EC.dataBounded, snd C.P_bottom)
-    fnTop = (EC.dataBounded, snd C.P_top)
 
 isInst inst prefix = T.isPrefixOf prefix inst
 
@@ -726,11 +715,10 @@ data FnNRes = MkFnN Int ([Text] -> Erl -> Erl) | RunFnN Int (Erl -> [Erl] -> Erl
 fnNs :: Map.Map (Text, Text) FnNRes
 fnNs =
   Map.fromList $
-    [ fn | i <- [0 .. 10], fn <-
-                             [ ((EC.dataFunctionUncurried, name C.S_mkFn i), MkFnN i $ \args e -> EFunN Nothing args e),
-                               ((EC.effectUncurried, name (snd C.P_mkEffectFn) i), MkFnN i $ \args e -> EFunN Nothing args (EApp RegularApp e []))
-                             ]
+    [ ((EC.dataFunctionUncurried, name C.S_mkFn i), MkFnN i $ \args e -> EFunN Nothing args e) | i <- [0 .. 10]
     ]
+      ++ [ ((EC.effectUncurried, name (snd C.P_mkEffectFn) i), MkFnN i $ \args e -> EFunN Nothing args (EApp RegularApp e [])) | i <- [1 .. 10]
+         ]
       ++ [ fn | i <- [1 .. 10], fn <-
                                   [ ((EC.dataFunctionUncurried, name C.S_runFn i), RunFnN i (EApp RegularApp)),
                                     ((EC.effectUncurried, name (snd C.P_runEffectFn) i), RunFnN i $ \fn acc -> EFun0 Nothing (EApp RegularApp fn acc))
@@ -918,7 +906,7 @@ onTupleN = \case
 tupleNs :: Map.Map (Text, Text) Int
 tupleNs =
   Map.fromList $
-    [ fn i | i <- [0 .. 10]
+    [ fn i | i <- [1 .. 10]
     ]
   where
     fn i = ((EC.erlDataTuple, name EC.tuple i), i)
@@ -931,8 +919,7 @@ binaryOperators =
       <$> ( [ Binary euclideanRingNumber opDiv FDivide,
               -- [drathier]: Purescript euclidian integer division is not the same division as erlang division, so we can't inline it as `div` here. See data_euclideanRing@foreign:intDiv and https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/divmodnote-letter.pdf for the various kinds of division.
               Binary heytingAlgebraBoolean opConj AndAlso,
-              Binary heytingAlgebraBoolean opDisj OrElse,
-              Binary semigroupList opAppend ListConcat
+              Binary heytingAlgebraBoolean opDisj OrElse
             ]
               ++ concatMap
                 ( \(semi, ring) ->
@@ -948,7 +935,7 @@ binaryOperators =
                       Binary eq opNotEq NotIdenticalTo
                     ]
                 )
-                [eqNumber, eqInt, eqString, eqChar, eqBoolean]
+                [eqNumber, eqInt, eqString, eqBoolean]
               ++ concatMap
                 ( \ord ->
                     [ Binary ord opLessThan LessThan,
@@ -959,7 +946,7 @@ binaryOperators =
                       BinaryFn ord opMax (\x y -> EApp RegularApp erlangMax [x, y])
                     ]
                 )
-                [ordBoolean, ordChar, ordInt, ordNumber, ordString]
+                [ordBoolean, ordInt, ordNumber, ordString]
           )
   where
     conv (Binary (dmod, dfn) (omod, ofn) result) = (((dmod, atomPS dfn), (omod, atomPS ofn)), Left result)
@@ -998,9 +985,6 @@ eqInt = (EC.dataEq, snd C.P_eqInt)
 eqString :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 eqString = (EC.dataEq, snd C.P_eqString)
 
-eqChar :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-eqChar = (EC.dataEq, snd C.P_eqChar)
-
 eqBoolean :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 eqBoolean = (EC.dataEq, snd C.P_eqBoolean)
 
@@ -1016,20 +1000,11 @@ ordInt = (EC.dataOrd, snd C.P_ordInt)
 ordString :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 ordString = (EC.dataOrd, snd C.P_ordString)
 
-ordChar :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-ordChar = (EC.dataOrd, snd C.P_ordChar)
-
 -- semigroupString :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 -- semigroupString = (EC.dataSemigroup, snd $ C.P_semigroupString)
 
-boundedBoolean :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-boundedBoolean = (EC.dataBounded, snd C.P_boundedBoolean)
-
 heytingAlgebraBoolean :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 heytingAlgebraBoolean = (EC.dataHeytingAlgebra, snd C.P_heytingAlgebraBoolean)
-
-semigroupList :: forall a b. (IsString a, IsString b) => (a, b)
-semigroupList = (EC.erlDataListTypes, EC.semigroupList)
 
 -- semigroupoidFn :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 -- semigroupoidFn = (EC.controlSemigroupoid, snd $ C.P_semigroupoidFn)
