@@ -75,7 +75,7 @@ import System.Clock (getTime, Clock (..), toNanoSecs)
 --
 -- This function is used for fast-rebuild workflows (PSCi and psc-ide are examples).
 rebuildModule
-  :: MakeActions Make
+  :: MakeActions
   -> [ExternsFile]
   -> Module
   -> Make ExternsFile
@@ -84,7 +84,7 @@ rebuildModule actions externs m = do
   rebuildModule' actions env externs m
 
 rebuildModule'
-  :: MakeActions Make
+  :: MakeActions
   -> Env
   -> [ExternsFile]
   -> Module
@@ -123,7 +123,7 @@ realTime = liftIO $ fmap toNanoSecs (liftIO (getTime Realtime))
 -- (phase B, see `rebuildModuleCodegen`), since that doesn't affect `exts` and
 -- can safely be deferred so dependent modules aren't blocked on it.
 rebuildModuleTypecheck
-  :: MakeActions Make
+  :: MakeActions
   -> Env
   -> [ExternsFile]
   -> Module
@@ -208,7 +208,7 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
 -- the NOTE at its call site about grabbing a copy of the old externs file
 -- before running this if you want to diff them.
 rebuildModuleCodegen
-  :: MakeActions Make
+  :: MakeActions
   -> ModuleName
   -> ModuleCheckResult
   -> Make ()
@@ -224,7 +224,7 @@ rebuildModuleCodegen MakeActions{..} moduleName ModuleCheckResult{..} = do
 -- e.g. the REPL and psc-ide's fast-rebuild workflows, which rebuild one
 -- module at a time outside of any `BuildPlan`.
 rebuildModuleWithIndex
-  :: MakeActions Make
+  :: MakeActions
   -> Env
   -> [ExternsFile]
   -> Module
@@ -240,7 +240,7 @@ rebuildModuleWithIndex ma exEnv externs m@(Module _ _ moduleName _ _) moduleInde
 --
 -- If timestamps or hashes have not changed, existing externs files can be used to provide upstream modules' types without
 -- having to typecheck those modules again.
-make :: MakeActions Make
+make :: MakeActions
      -> [CST.PartialResult Module]
      -> Make [ExternsFile]
 make ma@MakeActions{..} ms = do

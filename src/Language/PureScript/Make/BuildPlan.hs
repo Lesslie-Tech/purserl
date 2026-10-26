@@ -45,6 +45,7 @@ import Language.PureScript.Externs
 import qualified Language.PureScript.Make.Actions as Actions
 import Language.PureScript.Make.Actions (MakeActions(..), RebuildPolicy(..), ProgressMessage(..))
 import Language.PureScript.Make.Cache (CacheDb, CacheInfo, checkChanged)
+import Language.PureScript.Make.Monad (Make)
 import Language.PureScript.Names (ModuleName, runModuleName)
 import Language.PureScript.Sugar.Names.Env (Env, primEnv)
 import System.Directory (getCurrentDirectory)
@@ -115,12 +116,11 @@ data BuildJobResult
 -- 'markExternsComplete' for publishing the ExternsFile to dependents earlier,
 -- right after typechecking.
 markComplete
-  :: (MonadBaseControl IO m)
-  => MakeActions m
+  :: MakeActions
   -> BuildPlan
   -> ModuleName
   -> BuildJobResult
-  -> m ()
+  -> Make ()
 markComplete _ma buildPlan moduleName result = do
   liftBase $ case result of
       BuildJobSucceeded _ _ ->
@@ -142,13 +142,12 @@ markComplete _ma buildPlan moduleName result = do
 -- (via 'markComplete2') since that decision is likewise purely a function of
 -- typecheck output.
 markExternsComplete
-  :: (MonadBaseControl IO m)
-  => MakeActions m
+  :: MakeActions
   -> BuildPlan
   -> ModuleName
   -> Maybe ExternsFile
   -> BuildJobResult
-  -> m ()
+  -> Make ()
 markExternsComplete ma buildPlan moduleName oldExt result = do
   let BuildJob { bjExterns = eVar } = fromMaybe (internalError "make: markExternsComplete no barrier") $ M.lookup moduleName (bpBuildJobs buildPlan)
   putMVar eVar result
@@ -160,13 +159,12 @@ markExternsComplete ma buildPlan moduleName oldExt result = do
 -- publishes the same result to both 'bjExterns' and 'bjResult' (plus
 -- 'bpCacheResult') immediately.
 markCompleteImmediate
-  :: (MonadBaseControl IO m)
-  => MakeActions m
+  :: MakeActions
   -> BuildPlan
   -> ModuleName
   -> Maybe ExternsFile
   -> BuildJobResult
-  -> m ()
+  -> Make ()
 markCompleteImmediate ma buildPlan moduleName oldExt result = do
   markExternsComplete ma buildPlan moduleName oldExt result
   markComplete ma buildPlan moduleName result
@@ -175,13 +173,12 @@ markCompleteImmediate ma buildPlan moduleName oldExt result = do
 -- | Called when we finished compiling a module and want to report back the
 -- compilation result, as well as any potential errors that were thrown.
 markComplete2
-  :: (MonadBaseControl IO m)
-  => MakeActions m
+  :: MakeActions
   -> BuildPlan
   -> ModuleName
   -> Maybe ExternsFile
   -> BuildJobResult
-  -> m ()
+  -> Make ()
 markComplete2 ma@MakeActions{..} buildPlan moduleName oldExt result = do
 --  liftBase $ putStrLn $ case result of
 --      BuildJobSucceeded _ _ ->
@@ -227,9 +224,8 @@ needsRebuild bp moduleName = M.member moduleName (bpBuildJobs bp)
 -- block until all build jobs are finished. Prebuilt modules always return no
 -- warnings.
 collectResults
-  :: (MonadBaseControl IO m)
-  => BuildPlan
-  -> m (M.Map ModuleName BuildJobResult)
+  :: BuildPlan
+  -> Make (M.Map ModuleName BuildJobResult)
 collectResults buildPlan = do
   let prebuiltResults = M.map (BuildJobSucceeded (MultipleErrors []) . pbExternsFile) (bpPrebuilt buildPlan)
   barrierResults <- traverse (readMVar . bjResult) $ bpBuildJobs buildPlan
@@ -245,11 +241,10 @@ data ResultTiming = Early | Final
 -- | Gets the the build result for a given module name independent of whether it
 -- was rebuilt or prebuilt. Prebuilt modules always return no warnings.
 getResult
-  :: (MonadBaseControl IO m)
-  => ResultTiming
+  :: ResultTiming
   -> BuildPlan
   -> ModuleName
-  -> m BuildJobResult
+  -> Make BuildJobResult
 getResult timing buildPlan moduleName = do
   case M.lookup moduleName (bpPrebuilt buildPlan) of
     Just es ->
@@ -260,7 +255,7 @@ getResult timing buildPlan moduleName = do
         Early -> bjExterns
         Final -> bjResult
 
-fetchMissingExtern :: Show meta => MonadBaseControl IO m => ResultTiming -> meta -> MakeActions m -> BuildPlan -> ModuleName -> m BuildJobResult
+fetchMissingExtern :: Show meta => ResultTiming -> meta -> MakeActions -> BuildPlan -> ModuleName -> Make BuildJobResult
 fetchMissingExtern timing meta ma'@MakeActions{..} buildPlan moduleName = do
   mExts <- getResult timing buildPlan moduleName
   case mExts of
@@ -275,7 +270,7 @@ fetchMissingExtern timing meta ma'@MakeActions{..} buildPlan moduleName = do
 -- | Fills in the externs mvar of a cache-hit module from its on-disk externs
 -- file, returning 'Nothing' (and leaving the mvar empty) if the file is
 -- missing, corrupt or from another compiler version.
-loadCachedExtern :: Show meta => MonadBaseControl IO m => meta -> MakeActions m -> BuildPlan -> ModuleName -> m (Maybe ExternsFile)
+loadCachedExtern :: Show meta => meta -> MakeActions -> BuildPlan -> ModuleName -> Make (Maybe ExternsFile)
 loadCachedExtern _meta MakeActions{..} buildPlan moduleName = do
   let mvar = fromMaybe (internalError "BuildPlan: loadCachedExtern") $ M.lookup moduleName (bpExterns buildPlan)
   -- NOTE: we take `mvar`, emptying it, so only one thread decodes the file. If
@@ -292,7 +287,7 @@ loadCachedExtern _meta MakeActions{..} buildPlan moduleName = do
         putMVar mvar mextern
         pure mextern
 
-fetchMissingExterns :: Show meta => MonadBaseControl IO m => ResultTiming -> meta -> MakeActions m -> BuildPlan -> [ModuleName] -> m (M.Map ModuleName BuildJobResult)
+fetchMissingExterns :: Show meta => ResultTiming -> meta -> MakeActions -> BuildPlan -> [ModuleName] -> Make (M.Map ModuleName BuildJobResult)
 fetchMissingExterns timing meta ma buildPlan deps =
   M.fromList <$> traverse (\dep -> (dep,) <$> fetchMissingExtern timing meta ma buildPlan dep) deps
 
@@ -345,7 +340,7 @@ getCacheFilesAvailable buildPlan moduleName =
   fromMaybe
   SourceChanged (M.lookup moduleName (bpDirtyExterns buildPlan))
 
-getExternFromLastSuccessfulPreviousBuild :: Monad m => MakeActions m -> BuildPlan -> ModuleName -> m (Maybe ExternsFile)
+getExternFromLastSuccessfulPreviousBuild :: MakeActions -> BuildPlan -> ModuleName -> Make (Maybe ExternsFile)
 getExternFromLastSuccessfulPreviousBuild MakeActions{..} _buildPlan moduleName = do
   snd <$> readExterns moduleName
 
@@ -354,7 +349,7 @@ getExternFromLastSuccessfulPreviousBuild MakeActions{..} _buildPlan moduleName =
 -- Doesn't check dependencies -- used to decide, up front, whether every
 -- module in the project is up to date so 'construct2' can take its fast
 -- path.
-getRebuildStatusIsUpToDate :: forall m. MonadBaseControl IO m => MakeActions m -> CacheDb -> ModuleName -> m Bool
+getRebuildStatusIsUpToDate :: MakeActions -> CacheDb -> ModuleName -> Make Bool
 getRebuildStatusIsUpToDate MakeActions{..} cacheDb moduleName = do
   inputInfo <- getInputTimestampsAndHashes moduleName
   case inputInfo of
@@ -367,7 +362,7 @@ getRebuildStatusIsUpToDate MakeActions{..} cacheDb moduleName = do
       (_newCacheInfo, isUpToDate) <- checkChanged cacheDb moduleName cwd cacheInfo
       pure isUpToDate
 
-anyDepChanged :: forall m. (MonadBaseControl IO m) => ModuleName -> [(ModuleName, [ModuleName])] -> BuildPlan -> m RebuildInstructions
+anyDepChanged :: ModuleName -> [(ModuleName, [ModuleName])] -> BuildPlan -> Make RebuildInstructions
 anyDepChanged moduleName graph buildPlan = do
   let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup moduleName graph)
   let f things =
@@ -396,11 +391,10 @@ anyDepChanged moduleName graph buildPlan = do
 -- externs file a second time at the end of the build, when nothing needed
 -- rebuilding in the first place.
 construct2
-  :: forall m. MonadBaseControl IO m
-  => MakeActions m
+  :: MakeActions
   -> CacheDb
   -> ([CST.PartialResult Module], [(ModuleName, [ModuleName])])
-  -> m (BuildPlan, CacheDb)
+  -> Make (BuildPlan, CacheDb)
 construct2 ma@MakeActions{..} cacheDb (sorted, graph) = do
   let sortedModuleNames = map (getModuleName . CST.resPartial) sorted
   env <- C.newMVar primEnv

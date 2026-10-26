@@ -153,7 +153,7 @@ rebuildFileSync fp fp' ts = rebuildFile fp fp' ts syncRun
 -- inside the rebuild cache
 rebuildModuleOpen
   :: (Ide m, MonadLogger m)
-  => P.MakeActions P.Make
+  => P.MakeActions
   -> [P.ExternsFile]
   -> P.Module
   -> m ()
@@ -169,12 +169,12 @@ rebuildModuleOpen makeEnv externs m = void $ runExceptT do
       cacheRebuild result
 
 -- | Shuts the compiler up about progress messages
-shushProgress :: Monad m => P.MakeActions m -> P.MakeActions m
+shushProgress :: P.MakeActions -> P.MakeActions
 shushProgress ma =
   ma { P.progress = \_ -> pure () }
 
 -- | Stops any kind of codegen
-shushCodegen :: Monad m => P.MakeActions m -> P.MakeActions m
+shushCodegen :: P.MakeActions -> P.MakeActions
 shushCodegen ma =
   ma { P.codegen = \_ _ _ -> pure ()
      , P.ffiCodegen = \_ -> pure ()
@@ -184,8 +184,8 @@ shushCodegen ma =
 enableForeignCheck
   :: M.Map P.ModuleName FilePath
   -> S.Set P.CodegenTarget
-  -> P.MakeActions P.Make
-  -> P.MakeActions P.Make
+  -> P.MakeActions
+  -> P.MakeActions
 enableForeignCheck foreigns _codegenTargets ma =
   ma { P.ffiCodegen = ffiCodegen' foreigns Nothing
      }

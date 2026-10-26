@@ -142,12 +142,12 @@ renderProgressMessage infx (CompilingModule mn mi causedByModule) =
 -- * The particular backend being used (JavaScript, C++11, etc.)
 --
 -- * The details of how files are read/written etc.
-data MakeActions m = MakeActions
-  { getInputTimestampsAndHashes :: ModuleName -> m (Either RebuildPolicy (M.Map FilePath (UTCTime, m ContentHash)))
+data MakeActions = MakeActions
+  { getInputTimestampsAndHashes :: ModuleName -> Make (Either RebuildPolicy (M.Map FilePath (UTCTime, Make ContentHash)))
   -- ^ Get the timestamps and content hashes for the input files for a module.
   -- The content hash is returned as a monadic action so that the file does not
   -- have to be read if it's not necessary.
-  , getOutputTimestamp :: ModuleName -> m (Maybe UTCTime)
+  , getOutputTimestamp :: ModuleName -> Make (Maybe UTCTime)
   -- ^ Get the time this module was last compiled, provided that all of the
   -- requested codegen targets were also produced then. The defaultMakeActions
   -- implementation uses the modification time of the externs file, because the
@@ -155,22 +155,22 @@ data MakeActions m = MakeActions
   -- externs file, or if any of the requested codegen targets were not produced
   -- the last time this module was compiled, this function must return Nothing;
   -- this indicates that the module will have to be recompiled.
-  , touchOutputTimestamp :: ModuleName -> m (Maybe ())
+  , touchOutputTimestamp :: ModuleName -> Make (Maybe ())
   -- ^ Set the time this module was last compiled to the current time. Similar
   -- to and used with getOutputTimestamp.
-  , readExterns :: ModuleName -> m (FilePath, Maybe ExternsFile)
+  , readExterns :: ModuleName -> Make (FilePath, Maybe ExternsFile)
   -- ^ Read the externs file for a module as a string and also return the actual
   -- path for the file.
-  , codegen :: Environment -> CF.Module CF.Ann -> ExternsFile -> SupplyT m ()
+  , codegen :: Environment -> CF.Module CF.Ann -> ExternsFile -> SupplyT Make ()
   -- ^ Run the code generator for the module and write any required output files.
-  , ffiCodegen :: CF.Module CF.Ann -> m ()
+  , ffiCodegen :: CF.Module CF.Ann -> Make ()
   -- ^ Check ffi and print it in the output directory.
-  , progress :: ProgressMessage -> m ()
+  , progress :: ProgressMessage -> Make ()
   -- ^ Respond to a progress update.
-  , readCacheDb :: m CacheDb
+  , readCacheDb :: Make CacheDb
   -- ^ Read the cache database (which contains timestamps and hashes for input
   -- files) from some external source, e.g. a file on disk.
-  , writeCacheDb :: CacheDb -> m ()
+  , writeCacheDb :: CacheDb -> Make ()
   -- ^ Write the given cache database to some external source (e.g. a file on
   -- disk).
   }
@@ -215,7 +215,7 @@ buildMakeActions
   -- ^ Generate a prefix comment?
   -> Maybe ExternsMemCache
   -- ^ Optional memcache of already parsed externs files, for repeated builds
-  -> MakeActions Make
+  -> MakeActions
 buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
     MakeActions getInputTimestampsAndHashes getOutputTimestamp touchOutputTimestamp readExterns codegen ffiCodegen progress readCacheDb writeCacheDb
   where
