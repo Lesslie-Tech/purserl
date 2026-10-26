@@ -46,11 +46,13 @@ import Language.PureScript.Environment
 import Language.PureScript.TypeClassDictionaries (NamedDict, TypeClassDictionaryInScope(..))
 -- import Language.PureScript.Types (SourceConstraint, SourceType, srcInstanceType)
 import Language.PureScript.Types
+import Language.PureScript.PSString (hashPSString)
+import Language.PureScript.Label (Label(..))
 
 import Debug.Trace
 import PrettyPrint
 import Control.Monad.Trans.State.Strict hiding (get, put, modify, modify')
-import Control.Monad.Trans.Reader (ReaderT, runReaderT, ask)
+import Control.Monad.Trans.Class (lift)
 import Control.Monad.State.Class (modify, modify')
 import Control.Monad
 import Data.Bifunctor (second)
@@ -58,7 +60,6 @@ import Data.Function ((&))
 import Data.Functor ((<&>), ($>))
 import Data.Monoid
 import Data.Semigroup
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import GHC.Exts qualified as GHCExts
 import Unsafe.Coerce (unsafeCoerce)
 import Language.PureScript.Names
@@ -69,7 +70,8 @@ import Language.PureScript.Interning (Intern(..))
 import qualified Data.ByteString.UTF8 as BS8
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString as BS
-import Data.Hashable (hashWithSalt)
+import Data.Hashable (hash, hashWithSalt)
+import Data.IntMap.Strict qualified as IM
 import qualified Data.ByteArray.Encoding as BAE
 
 import System.IO.Unsafe (unsafePerformIO)
@@ -493,99 +495,91 @@ instance Semigroup ToCSDBInner where
 instance Monoid ToCSDBInner where
   mempty = ToCSDBInner mempty mempty mempty mempty mempty mempty
 
--- | An ephemeral, non-persisted memoization cache, used only to speed up
--- 'storeTypeRefs's traversal of a declaration's (often heavily reused, e.g.
--- a big record row threaded through many binds of a do-block) referenced
--- types. This must never become part of 'ToCSDB' itself: 'ToCSDB' is
--- 'Binary'-serialized straight into the persisted cache-shape hash, and a
--- mutable 'IORef' has no meaningful serialized form there.
+-- | The nodes a 'toCS' run has already walked, so a type that is shared many times inside
+-- one declaration (e.g. a big record threaded through a do-block) is only walked once. It is
+-- not part of 'ToCSDB', which is serialized into the cache-shape hash, and every run starts
+-- with an empty one. Nodes are compared by pointer identity ('ptrEq'), never structurally: that
+-- stays O(1) on shared subtrees, and a miss only means walking the node again.
 --
--- Scoping this correctly matters for two independent reasons:
---
--- 1. purs rebuilds multiple modules concurrently (see the 'C.QSem'-bounded
---    'C.fork' pool in "Language.PureScript.Make"), so a single global cache
---    shared across modules would race.
--- 2. Each top-level declaration in a module gets its own freshly-'mempty'd
---    'DB'/'ToCSDB' accumulator (see 'findDeps'); a cache hit only ever
---    means "skip re-walking this subtree", which is safe *within* the one
---    accumulator that subtree's references need to land in, but would
---    silently drop references from a *later* declaration's own (separate)
---    accumulator if the same physical type node had already been marked
---    "seen" while processing an *earlier* declaration.
---
--- So a fresh 'TypeRefsMemo' is created once per top-level declaration (see
--- its call site in 'findDeps') and threaded through every 'ToCS'
--- computation done on that one declaration's behalf, including into any
--- declarations nested inside it (e.g. via 'DataBindingGroupDeclaration') --
--- those aren't given their own separate accumulator, so sharing the memo
--- with them is exactly as safe as sharing it within any other part of
--- processing that same outer declaration.
--- | A plain list of erased pointers to nodes already seen, compared via
--- 'ptrEq'. Deliberately NOT 'StableName'-based: 'makeStableName' interns
--- into GHC's single, process-wide stable-name table, which turned out to be
--- both much slower per-call and to scale terribly under real concurrency
--- (measured: ~14x slower single-threaded than plain
--- 'reallyUnsafePtrEquality#', and essentially flat past 8 threads instead of
--- scaling with core count -- ~58x slower overall at the concurrency this
--- compiler actually runs at).
---
--- The size is capped at 'typeRefsMemoCapLimit': past that many DISTINCT
--- entries, 'checkAndMarkSeen' always reports "not seen" (a safe miss, see
--- its docs) rather than keep scanning/growing an unbounded list. A plain
--- uncapped list is quadratic in the number of distinct nodes a declaration
--- touches (measured: 4s at 50,000 distinct nodes vs. 0.04s capped/bucketed),
--- and while the intended target (a several-hundred-field record decoder
--- chain) is comfortably under the cap, nothing guarantees every declaration
--- in every module is that small. Capping bounds the worst case to a small
--- fixed constant (roughly @typeRefsMemoCapLimit^2@ comparisons total) no
--- matter how large a declaration gets, at the cost of only memoizing the
--- first 'typeRefsMemoCapLimit' distinct nodes it touches -- for anything
--- past that, we simply fall back to the same behaviour as if this memo
--- didn't exist for the remainder of that one declaration.
+-- Entries are bucketed by 'shallowKey', so a lookup compares against the few nodes that share a
+-- key. The size is capped at 'typeRefsMemoCapLimit': past it nothing more is recorded, which
+-- bounds memory and the worst case where many nodes share a key. A larger cap than 8192 measured
+-- no faster.
 typeRefsMemoCapLimit :: Int
-typeRefsMemoCapLimit = 1024
+typeRefsMemoCapLimit = 8192
 
-data TypeRefsMemoState = TypeRefsMemoState {-# UNPACK #-} !Int [GHCExts.Any]
+data TypeRefsMemo = TypeRefsMemo {-# UNPACK #-} !Int !(IM.IntMap [GHCExts.Any])
 
-type TypeRefsMemo = IORef TypeRefsMemoState
+emptyTypeRefsMemo :: TypeRefsMemo
+emptyTypeRefsMemo = TypeRefsMemo 0 IM.empty
 
--- | Create a fresh, empty memo cache. The 'unsafePerformIO' body must mention
--- the argument, or full laziness floats it into one shared global 'IORef'
--- (racy across threads, and it made the cache-shape hashes nondeterministic).
-newTypeRefsMemo :: a -> TypeRefsMemo
-newTypeRefsMemo x = unsafePerformIO (x `seq` newIORef (TypeRefsMemoState 0 []))
-{-# NOINLINE newTypeRefsMemo #-}
+-- | Has this exact node already been walked? If not, record it. The node is forced first:
+-- 'ptrEq' compares addresses, so an unforced thunk would never match the value it becomes.
+checkAndMarkSeen :: Type a -> TypeRefsMemo -> (Bool, TypeRefsMemo)
+checkAndMarkSeen !t memo@(TypeRefsMemo sz seen)
+  | sz >= typeRefsMemoCapLimit = (False, memo)
+  | any (ptrEq t') bucket = (True, memo)
+  | otherwise = (False, TypeRefsMemo (sz + 1) (IM.insert key (t' : bucket) seen))
+  where
+    t' = unsafeCoerce t :: GHCExts.Any
+    key = shallowKey t
+    bucket = IM.findWithDefault [] key seen
 
--- | Has this exact (by pointer identity, not structural equality) node
--- already been fully processed under this memo? If so, mark nothing
--- further to do; if not, record it as seen from now on (unless the cap has
--- been reached, in which case this always reports "not seen" without
--- touching the list further -- see 'typeRefsMemoCapLimit').
---
--- This is purely a performance heuristic riding on 'storeTypeRefs' being
--- idempotent: a "miss" always just means we (re)do the work, and a "hit"
--- is always safe to skip, since inserting the same references into the
--- ambient 'ToCSDB' a second time would be a no-op anyway (they land in
--- @Map k ()@-shaped fields). The argument is forced before comparing --
--- 'ptrEq' does not evaluate its arguments, so comparing against an unforced
--- thunk would compare the thunk's address, not the value it reduces to,
--- silently defeating the memo.
-checkAndMarkSeen :: TypeRefsMemo -> Type a -> Bool
-checkAndMarkSeen memoRef !t = unsafePerformIO $ do
-  let t' = unsafeCoerce t :: GHCExts.Any
-  TypeRefsMemoState sz seen <- readIORef memoRef
-  if sz >= typeRefsMemoCapLimit
-    then pure False
-    else if any (ptrEq t') seen
-      then pure True
-      else do
-        writeIORef memoRef (TypeRefsMemoState (sz + 1) (t' : seen))
-        pure False
-{-# NOINLINE checkAndMarkSeen #-}
+-- | A hash of a node's constructor and its immediate names and children, in O(1). Pointer-equal
+-- nodes get equal keys, so it only narrows down which entries 'checkAndMarkSeen' compares.
+shallowKey :: Type a -> Int
+shallowKey = \case
+  TUnknown _ n -> mix 0 n
+  TypeVar _ v -> mix 1 (hash v)
+  TypeLevelString _ s -> mix 2 (hashPSString s)
+  TypeLevelInt _ i -> mix 3 (fromIntegral i)
+  TypeWildcard {} -> 4
+  TypeConstructor _ q -> mix 5 (hash (runProperName (disqualify q)))
+  TypeOp {} -> 6
+  TypeApp _ f x -> mix (mix 7 (leaf f)) (leaf x)
+  KindApp _ f x -> mix (mix 8 (leaf f)) (leaf x)
+  ForAll _ _ v _ b _ -> mix (mix 9 (hash v)) (leaf b)
+  ConstrainedType _ _ b -> mix 10 (leaf b)
+  Skolem _ v _ n _ -> mix (mix 11 (hash v)) n
+  REmpty _ -> 12
+  RCons _ l x r -> mix (mix (mix 13 (hashPSString (runLabel l))) (leaf x)) (leaf r)
+  KindedType _ x k -> mix (mix 14 (leaf x)) (leaf k)
+  BinaryNoParensType {} -> 15
+  ParensInType {} -> 16
+  where
+    mix = hashWithSalt
+    -- One level of a child: its name if it has one, else its constructor.
+    leaf = \case
+      TypeConstructor _ q -> hash (runProperName (disqualify q))
+      TypeVar _ v -> hash v
+      TypeApp _ f _ -> mix 7 (head' f)
+      RCons _ l _ _ -> mix 13 (hashPSString (runLabel l))
+      other -> constructorTag other
+    head' = \case
+      TypeConstructor _ q -> hash (runProperName (disqualify q))
+      TypeVar _ v -> hash v
+      other -> constructorTag other
+    constructorTag = \case
+      TUnknown {} -> 0
+      TypeVar {} -> 1
+      TypeLevelString {} -> 2
+      TypeLevelInt {} -> 3
+      TypeWildcard {} -> 4
+      TypeConstructor {} -> 5
+      TypeOp {} -> 6
+      TypeApp {} -> 7
+      KindApp {} -> 8
+      ForAll {} -> 9
+      ConstrainedType {} -> 10
+      Skolem {} -> 11
+      REmpty {} -> 12
+      RCons {} -> 13
+      KindedType {} -> 14
+      BinaryNoParensType {} -> 15
+      ParensInType {} -> 16
 
--- | The monad 'ToCS' runs in: an ambient, per-declaration 'TypeRefsMemo'
--- (see above) on top of the actual accumulated 'ToCSDB' state.
-type CS = ReaderT TypeRefsMemo (State ToCSDB)
+-- | The monad 'ToCS' runs in: the 'TypeRefsMemo' of the current run on top of the accumulated 'ToCSDB'.
+type CS = StateT TypeRefsMemo (State ToCSDB)
 
 -- NOTE[drathier]: yes, I know Language.PureScript.AST.Traversals exists, but since not all things are newtype wrapped, I would've missed some cases using that, e.g. kind signatures
 class ToCS a b | a -> b where
@@ -736,19 +730,19 @@ instance ToCS [Declaration] () where
 
 instance ToCS DB () where
   toCS (DB dataOrNewtypeDeclsTypeOnly dataOrNewtypeDeclsWithCtors ctorTypes typeSynonymDecls valueDecls externDecls externDataDecls opFixity ctorFixity tyOpFixity tyClassDecls tyClassInstanceDecls _exports) = do
-    dataOrNewtypeDeclsTypeOnly & traverse_ (traverse_ (\(csdb, _) -> modify (<> csdb)))
-    dataOrNewtypeDeclsWithCtors & traverse_ (traverse_ (\(csdb, _) -> modify (<> csdb)))
-    typeSynonymDecls & traverse_ (traverse_ (\(CSTypeSynonymDeclaration _ _ _ csdb _) -> modify (<> csdb)))
-    valueDecls & traverse_ (traverse_ (\(CSValueDeclaration _ _ _ csdb) -> modify (<> csdb)))
-    externDecls & traverse_ (traverse_ (\(CSExternDeclaration csdb) -> modify (<> csdb)))
-    externDataDecls & traverse_ (traverse_ (\(CSExternDataDeclaration csdb) -> modify (<> csdb)))
+    dataOrNewtypeDeclsTypeOnly & traverse_ (traverse_ (\(csdb, _) -> addCSDB (<> csdb)))
+    dataOrNewtypeDeclsWithCtors & traverse_ (traverse_ (\(csdb, _) -> addCSDB (<> csdb)))
+    typeSynonymDecls & traverse_ (traverse_ (\(CSTypeSynonymDeclaration _ _ _ csdb _) -> addCSDB (<> csdb)))
+    valueDecls & traverse_ (traverse_ (\(CSValueDeclaration _ _ _ csdb) -> addCSDB (<> csdb)))
+    externDecls & traverse_ (traverse_ (\(CSExternDeclaration csdb) -> addCSDB (<> csdb)))
+    externDataDecls & traverse_ (traverse_ (\(CSExternDataDeclaration csdb) -> addCSDB (<> csdb)))
     tyClassDecls & traverse_ (traverse_ (\(CSTypeClassDeclaration _ (_, csdb) _ tyDeps) ->
       do
-        modify (<> csdb)
-        tyDeps & traverse_ (\(CSTypeDeclaration _ _ csdb) -> modify (<> csdb))
+        addCSDB (<> csdb)
+        tyDeps & traverse_ (\(CSTypeDeclaration _ _ csdb) -> addCSDB (<> csdb))
       ))
     tyClassInstanceDecls & traverse_ (traverse_ (\(CSTypeInstanceDeclaration _ csdb1 _ csdb2 (_, csdb3)) ->
-        modify (<> csdb1 <> csdb2 <> csdb3)
+        addCSDB (<> csdb1 <> csdb2 <> csdb3)
       ))
 
 instance ToCS (Type SourceAnn) () where
@@ -847,9 +841,13 @@ csdbPutValueOp =
    )
 
 
+-- | Merge another accumulator into the current one.
+addCSDB :: (ToCSDB -> ToCSDB) -> CS ()
+addCSDB = lift . modify
+
 csdbPutHelper :: (ToCSDBInner -> t -> ToCSDBInner) -> Qualified t -> CS ()
 csdbPutHelper f (Qualified qBy ref) =
-  modify'
+  lift $ modify'
     (\(ToCSDB outer) ->
       ToCSDB $
       case qBy of
@@ -1029,8 +1027,7 @@ dbPutTypeInstanceDeclaration ident csTypeInstanceDeclaration =
 
 storeTypeRefs :: Type a -> CS ()
 storeTypeRefs t = do
-  memo <- ask
-  let alreadySeen = checkAndMarkSeen memo t
+  alreadySeen <- state (checkAndMarkSeen t)
   unless alreadySeen $ storeTypeRefsGo t
 
 storeTypeRefsGo :: Type a -> CS ()
@@ -1310,10 +1307,7 @@ findDeps mn env decls =
       M.lookup tname rolesMap
   in
   otherDs
-    <&> (\a -> do
-      let memo = newTypeRefsMemo a
-      (a, mempty & execState (findDepsImpl getKind getRole mn env memo a))
-     )
+    <&> (\a -> (a, mempty & execState (findDepsImpl getKind getRole mn env a)))
     & filter (\(_, db) -> db /= mempty)
 
 findDepsImpl
@@ -1321,15 +1315,14 @@ findDepsImpl
   -> (ProperName 'TypeName -> Maybe CSRoleDeclaration)
   -> ModuleName
   -> Environment
-  -> TypeRefsMemo
   -> Declaration
   -> State DB ()
-findDepsImpl getKind getRole mn env memo d =
+findDepsImpl getKind getRole mn env d =
   -- data Declaration
   case d of
     -- DataDeclaration SourceAnn DataDeclType (ProperName 'TypeName) [(Text, Maybe SourceType)] [DataConstructorDeclaration]
     DataDeclaration _ dataOrNewtype tname targs ctors -> do
-      let (nctorsValue, nctorsDB) = mempty & runState (runReaderT (traverse toCS ctors) memo)
+      let (nctorsValue, nctorsDB) = mempty & runState (evalStateT (traverse toCS ctors) emptyTypeRefsMemo)
 
       let mkind =
             case dataOrNewtype of
@@ -1346,14 +1339,14 @@ findDepsImpl getKind getRole mn env memo d =
     -- DataBindingGroupDeclaration (NEL.NonEmpty Declaration)
     DataBindingGroupDeclaration decls ->
       -- rarely used here, but used by e.g. Data.Void
-      traverse_ (findDepsImpl getKind getRole mn env memo) decls
+      traverse_ (findDepsImpl getKind getRole mn env) decls
 
     -- TypeSynonymDeclaration SourceAnn (ProperName 'TypeName) [(Text, Maybe SourceType)] SourceType
     TypeSynonymDeclaration _ tname targs stype -> do
       -- TODO[drathier]: KindedType.purs has a "Just SourceType" targ. I don't know how to handle it here. Right now I'm just storing it as-is.
       let nstype = stype $> ()
       let ntargs = targs <&> fmap (fmap void)
-      let nstypeDB = stype & replaceTypeSynonyms (types env) (typeSynonyms env <&> snd) & (`runReaderT` memo) & flip execState mempty
+      let nstypeDB = stype & replaceTypeSynonyms (types env) (typeSynonyms env <&> snd) & (`evalStateT` emptyTypeRefsMemo) & flip execState mempty
       dbPutTypeSynonymDeclaration tname (CSTypeSynonymDeclaration tname ntargs nstype nstypeDB (getKind TypeSynonymSig tname))
 
     -- KindDeclaration SourceAnn KindSignatureFor (ProperName 'TypeName) SourceType
@@ -1370,7 +1363,7 @@ findDepsImpl getKind getRole mn env memo d =
     -- ValueDeclaration {-# UNPACK #-} !(ValueDeclarationData [GuardedExpr])
     ValueDeclaration (ValueDeclarationData _ ident namekind binders exprs) -> do
       -- TODO[drathier]: do we really need expr in here too? Yes, we need to know what modules its value and type refers to at least.
-      let !(_, nexprDB) = mempty & runState (runReaderT (traverse_ toCS exprs) memo)
+      let !(_, nexprDB) = mempty & runState (evalStateT (traverse_ toCS exprs) emptyTypeRefsMemo)
       let tipe = case M.lookup (Qualified (ByModuleName mn) ident) (names env) of
                     Nothing -> internalError "drathier1"
                     Just (ty, _, _) -> void ty
@@ -1382,18 +1375,18 @@ findDepsImpl getKind getRole mn env memo d =
     -- BindingGroupDeclaration (NEL.NonEmpty ((SourceAnn, Ident), NameKind, Expr))
     BindingGroupDeclaration decls ->
       -- rarely used here, but used by e.g. instance HeytingAlgebra Boolean, since its type class function implementations call eachother (implies calls not)
-      traverse_ (findDepsImpl getKind getRole mn env memo . (\((sourceAnn, ident), nameKind, expr) ->
+      traverse_ (findDepsImpl getKind getRole mn env . (\((sourceAnn, ident), nameKind, expr) ->
           ValueDeclaration (ValueDeclarationData sourceAnn ident nameKind [] [GuardedExpr [] expr])
         )) decls
 
     -- ExternDeclaration SourceAnn Ident SourceType
     ExternDeclaration _ ident sourceType -> do
-      let !(_, ntypeDB) = mempty & runState (runReaderT (toCS sourceType) memo)
+      let !(_, ntypeDB) = mempty & runState (evalStateT (toCS sourceType) emptyTypeRefsMemo)
       dbPutExternDeclaration ident (CSExternDeclaration ntypeDB)
 
     -- ExternDataDeclaration SourceAnn (ProperName 'TypeName) SourceType
     ExternDataDeclaration _ tname sourceType -> do
-      let !(_, ntypeDB) = mempty & runState (runReaderT (toCS sourceType) memo)
+      let !(_, ntypeDB) = mempty & runState (evalStateT (toCS sourceType) emptyTypeRefsMemo)
       dbPutExternDataDeclaration tname (CSExternDataDeclaration ntypeDB)
 
     -- FixityDeclaration SourceAnn (Either ValueFixity TypeFixity)
@@ -1417,14 +1410,14 @@ findDepsImpl getKind getRole mn env memo d =
     TypeClassDeclaration _ className targs constraints fnDeps decls -> do
       ndecls <- decls & traverse (\case
           TypeDeclaration (TypeDeclarationData _ ident tipe) -> do
-            let (ntipe, ntipeDB) = mempty & runState (runReaderT (toCS tipe) memo)
+            let (ntipe, ntipeDB) = mempty & runState (evalStateT (toCS tipe) emptyTypeRefsMemo)
             pure $ CSTypeDeclaration ident (void tipe) ntipeDB
           v -> error ("ASSUMPTION[drathier]: The inner declarations in the type class declaration are just TypeDeclarations." ++ show v)
         )
 
       -- TODO[drathier]: test the constraintKindArgs and constraintData fields of Constraint. I couldn't figure out a source input that would put anything in those fields.
 
-      let (_, nconstraintsdb) = mempty & runState (runReaderT (traverse toCS constraints) memo)
+      let (_, nconstraintsdb) = mempty & runState (evalStateT (traverse toCS constraints) emptyTypeRefsMemo)
       let nconstraints = void <$> constraints
       let ntargs = targs <&> second ((<$>) void)
       let !_ = nconstraints <&>
@@ -1436,9 +1429,9 @@ findDepsImpl getKind getRole mn env memo d =
 
     -- TypeInstanceDeclaration SourceAnn SourceAnn ChainId Integer (Either Text Ident) [SourceConstraint] (Qualified (ProperName 'ClassName)) [SourceType] TypeInstanceBody
     TypeInstanceDeclaration _ _ chainId chainIdIndex eitherTextIdentInstanceName dependencySourceConstraints className instanceSourceTypes derivedNewtypeExplicit -> do
-      let !(_, ndependencySourceConstraintsDB) = mempty & runState (runReaderT (traverse toCS dependencySourceConstraints) memo)
-      let !(_, ninstanceSourceTypesDB) = mempty & runState (runReaderT (traverse toCS instanceSourceTypes) memo)
-      let !(nderivedNewtypeExplicitNoDecls, nderivedNewtypeExplicit) = mempty & runState (runReaderT (
+      let !(_, ndependencySourceConstraintsDB) = mempty & runState (evalStateT (traverse toCS dependencySourceConstraints) emptyTypeRefsMemo)
+      let !(_, ninstanceSourceTypesDB) = mempty & runState (evalStateT (traverse toCS instanceSourceTypes) emptyTypeRefsMemo)
+      let !(nderivedNewtypeExplicitNoDecls, nderivedNewtypeExplicit) = mempty & runState (evalStateT (
                 case derivedNewtypeExplicit of
                   DerivedInstance -> pure CSDerivedInstance
                   NewtypeInstance -> pure CSNewtypeInstance
@@ -1446,7 +1439,7 @@ findDepsImpl getKind getRole mn env memo d =
                     do
                       toCS decls
                       pure CSExplicitInstance
-                ) memo)
+                ) emptyTypeRefsMemo)
       let !_ = dependencySourceConstraints <&>
             (\case
               Constraint _ _ [] _ _ -> ()
@@ -1645,7 +1638,7 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
   let exportedThings = findExportedThings exports in
   let findDepsRes = if not shouldCache then [] else findDeps mn env decls in
   let dbDeps = foldl (<>) (mempty { _exports = exportedThings }) (snd <$> findDepsRes) in
-  let csdbDeps = flip execState mempty $ runReaderT (toCS dbDeps) (newTypeRefsMemo dbDeps) in
+  let csdbDeps = flip execState mempty $ evalStateT (toCS dbDeps) emptyTypeRefsMemo in
   let efOurCacheShapes = dbDeps & dbToOpaque & dbOpaqueIsctExports ("self", mn) upstreamDBs exportedThings in
   -- let efUpstreamReExports = buildEfUpstreamReExports upstream exports mempty mempty in
   -- let !_ = trace (sShow ("###moduleToExternsFile findExportedThings", mn, exportedThings)) () in

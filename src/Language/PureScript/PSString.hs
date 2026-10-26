@@ -1,6 +1,7 @@
 module Language.PureScript.PSString
   ( PSString
   , toUTF16CodeUnits
+  , hashPSString
   , decodeString
   , decodeStringEither
   , decodeStringWithReplacement
@@ -25,6 +26,7 @@ import Data.Text qualified as T
 import Data.Word (Word16)
 import Numeric (showHex)
 import Data.Aeson qualified as A
+import Data.Hashable (hash)
 
 -- |
 -- Strings in PureScript are, per the language spec, sequences of UTF-16 code
@@ -79,6 +81,10 @@ charToUTF16 c
          ]
   | otherwise = [fromIntegral n]
   where n = Char.ord c
+
+-- | A cheap hash of the string, for bucketing; not stable across versions.
+hashPSString :: PSString -> Int
+hashPSString (PSString t) = hash t
 
 toUTF16CodeUnits :: PSString -> [Word16]
 toUTF16CodeUnits (PSString t) = concatMap charToUTF16 (T.unpack t)
