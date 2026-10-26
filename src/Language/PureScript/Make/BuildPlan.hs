@@ -11,6 +11,7 @@ module Language.PureScript.Make.BuildPlan
   , RebuildInstructions(..)
   , getResult
   , fetchMissingExtern
+  , loadCachedExtern
   , fetchMissingExterns
   , collectResults
   , markComplete
@@ -260,7 +261,7 @@ getResult timing buildPlan moduleName = do
         Final -> bjResult
 
 fetchMissingExtern :: Show meta => MonadBaseControl IO m => ResultTiming -> meta -> MakeActions m -> BuildPlan -> ModuleName -> m BuildJobResult
-fetchMissingExtern timing meta MakeActions{..} buildPlan moduleName = do
+fetchMissingExtern timing meta ma'@MakeActions{..} buildPlan moduleName = do
   mExts <- getResult timing buildPlan moduleName
   case mExts of
     BuildJobSucceeded warns v -> pure mExts
@@ -268,34 +269,28 @@ fetchMissingExtern timing meta MakeActions{..} buildPlan moduleName = do
     -- TODO[drathier]: perhaps put BuildJobSkippedFullCacheHit externs into bjResult? Optional externs field?
     BuildJobSkipped -> pure mExts
     BuildJobSkippedFullCacheHit -> do
-      let mvar = fromMaybe (internalError "BuildPlan: fetchMissingExtern") $ M.lookup moduleName (bpExterns buildPlan)
-      e <- readMVar mvar
-      -- read mvar, it's probably already filled and we don't want to interrupt anyone
-      case e of
-        -- Maybe wrapped value instead of tryReadMVar so that we don't have two threads decoding the same externs file, wasting work
-        Just ext -> pure (BuildJobSucceeded (MultipleErrors []) ext)
-        Nothing -> do
-          -- oops, better fill in the mvar
-          mv <- takeMVar mvar
-          case mv of
-            -- nope, someone did it before us
-            Just extern -> do
-              putMVar mvar mv
-              pure (BuildJobSucceeded (MultipleErrors []) extern)
+      mextern <- loadCachedExtern meta ma' buildPlan moduleName
+      pure (BuildJobSucceeded (MultipleErrors []) (fromMaybe (internalError (show ("BuildPlan readExterns", moduleName, meta))) mextern))
 
-            Nothing -> do
-              -- fill it in
-              -- NOTE: we've already taken `mvar` above, emptying it. If anything
-              -- below throws (e.g. the dependency genuinely failed to produce
-              -- externs, so `readExterns`/the internalError below fires), we
-              -- must restore it before rethrowing -- otherwise any other thread
-              -- reading this same mvar would block on it forever.
-              (do
-                mextern <- snd <$> readExterns moduleName
-                let extern = fromMaybe (internalError (show ("BuildPlan readExterns", moduleName, meta))) mextern
-                putMVar mvar (Just extern)
-                pure (BuildJobSucceeded (MultipleErrors []) extern)
-                ) `onException` putMVar mvar Nothing
+-- | Fills in the externs mvar of a cache-hit module from its on-disk externs
+-- file, returning 'Nothing' (and leaving the mvar empty) if the file is
+-- missing, corrupt or from another compiler version.
+loadCachedExtern :: Show meta => MonadBaseControl IO m => meta -> MakeActions m -> BuildPlan -> ModuleName -> m (Maybe ExternsFile)
+loadCachedExtern _meta MakeActions{..} buildPlan moduleName = do
+  let mvar = fromMaybe (internalError "BuildPlan: loadCachedExtern") $ M.lookup moduleName (bpExterns buildPlan)
+  -- NOTE: we take `mvar`, emptying it, so only one thread decodes the file. If
+  -- reading throws we must restore it, otherwise other readers block forever.
+  filled <- readMVar mvar
+  case filled of
+    Just _ -> pure filled
+    Nothing -> do
+     mv <- takeMVar mvar
+     case mv of
+      Just _ -> putMVar mvar mv >> pure mv
+      Nothing -> do
+        mextern <- (snd <$> readExterns moduleName) `onException` putMVar mvar Nothing
+        putMVar mvar mextern
+        pure mextern
 
 fetchMissingExterns :: Show meta => MonadBaseControl IO m => ResultTiming -> meta -> MakeActions m -> BuildPlan -> [ModuleName] -> m (M.Map ModuleName BuildJobResult)
 fetchMissingExterns timing meta ma buildPlan deps =

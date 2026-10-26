@@ -33,7 +33,7 @@ import Data.Function (on)
 import Data.Foldable (fold, for_)
 import Data.List (foldl', sortOn)
 import Data.List.NonEmpty qualified as NEL
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Map qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -292,6 +292,7 @@ make ma@MakeActions{..} ms = do
     -- do I need to rebuild myself?
     -- did my source files change?
     inputInfo <- getInputTimestampsAndHashes moduleName
+    let isRealSource = either (/= RebuildNever) (const True) inputInfo
     areMyOwnFilesUpToDate <-
       case inputInfo of
         Left RebuildNever -> do
@@ -328,13 +329,26 @@ make ma@MakeActions{..} ms = do
           -- goBuild/buildModule) is handled by the `onException` wrapped around
           -- the entire forked action below, not here.
 
-    case areMyOwnFilesUpToDate of
+    -- A cache hit is only valid if the previous build's externs and output are
+    -- still usable (not deleted, corrupt, or written by another compiler version).
+    previousBuildUsable <-
+      if areMyOwnFilesUpToDate && isRealSource
+        then do
+          mExterns <- BuildPlan.loadCachedExtern ("mod", "own", moduleName) ma buildPlan moduleName
+          mOutput <- getOutputTimestamp moduleName
+          pure (isJust mExterns && isJust mOutput)
+        else pure areMyOwnFilesUpToDate
+    case previousBuildUsable of
       False -> do
         -- progress $ CompileMeta (T.pack $ show (moduleName, "-- DR.3.1", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate)))
         oldExterns <- BuildPlan.getExternFromLastSuccessfulPreviousBuild ma buildPlan moduleName
         mResults <- BuildPlan.fetchMissingExterns BuildPlan.Early ("mod", "b", moduleName) ma buildPlan deps
         case assertAllExternsExists mResults of
-          Left bjRes -> bumpCompilationCounter >> BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing bjRes
+          Left bjRes -> do
+            -- Never built from its current source, so don't record it as built.
+            when (not areMyOwnFilesUpToDate) $
+              modifyMVar_ newCacheDbMVar (pure . Cache.removeModules (S.singleton moduleName))
+            bumpCompilationCounter >> BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing bjRes
           Right results -> goBuild oldExterns results SourceChangedOrDependencyFailedToBuildInPreviousCompilationOrSomethingElse
       True -> do
         -- -- progress $ CompileMeta (T.pack $ show (moduleName, -- DR.3.2", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate)))
