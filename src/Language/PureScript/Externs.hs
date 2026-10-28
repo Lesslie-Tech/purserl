@@ -1025,10 +1025,21 @@ dbPutTypeInstanceDeclaration ident csTypeInstanceDeclaration =
       }
    )
 
+-- | Only nodes with children go through the sharing memo; recording a leaf is as cheap as
+-- looking it up.
 storeTypeRefs :: Type a -> CS ()
-storeTypeRefs t = do
-  alreadySeen <- state (checkAndMarkSeen t)
-  unless alreadySeen $ storeTypeRefsGo t
+storeTypeRefs t = case t of
+  TUnknown {} -> pure ()
+  TypeVar {} -> pure ()
+  TypeLevelString {} -> pure ()
+  TypeLevelInt {} -> pure ()
+  TypeWildcard {} -> pure ()
+  REmpty {} -> pure ()
+  TypeConstructor _ refType -> csdbPutType refType
+  TypeOp _ refTypeOp -> csdbPutTypeOp refTypeOp
+  _ -> do
+    alreadySeen <- state (checkAndMarkSeen t)
+    unless alreadySeen $ storeTypeRefsGo t
 
 storeTypeRefsGo :: Type a -> CS ()
 storeTypeRefsGo t =
