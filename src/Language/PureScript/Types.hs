@@ -1008,6 +1008,48 @@ everywhereOnTypesM f = go where
     pure $! if ptrEq t new then t else new
 
 
+-- | Apply a monadic function to the immediate children of a type, giving back
+-- the same type (pointer-equal) if none of them changed.
+{-# INLINABLE mapTypeChildrenSharedM #-}
+mapTypeChildrenSharedM :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
+mapTypeChildrenSharedM f t = case t of
+  TypeApp ann t1 t2 -> do
+    !t1' <- f t1
+    !t2' <- f t2
+    pure $! if ptrEq t1' t1 && ptrEq t2' t2 then t else TypeApp ann t1' t2'
+  KindApp ann t1 t2 -> do
+    !t1' <- f t1
+    !t2' <- f t2
+    pure $! if ptrEq t1' t1 && ptrEq t2' t2 then t else KindApp ann t1' t2'
+  ForAll ann vis arg mbK ty sco -> do
+    !mbK' <- mapMaybeTypeSharedM f mbK
+    !ty' <- f ty
+    pure $! if ptrEq mbK' mbK && ptrEq ty' ty then t else ForAll ann vis arg mbK' ty' sco
+  ConstrainedType ann c ty -> do
+    !c' <- overConstraintArgsAllShared (mapListTypeSharedM f) c
+    !ty' <- f ty
+    pure $! if ptrEq c' c && ptrEq ty' ty then t else ConstrainedType ann c' ty'
+  Skolem ann name mbK i sc -> do
+    !mbK' <- mapMaybeTypeSharedM f mbK
+    pure $! if ptrEq mbK' mbK then t else Skolem ann name mbK' i sc
+  RCons ann name ty rest -> do
+    !ty' <- f ty
+    !rest' <- f rest
+    pure $! if ptrEq ty' ty && ptrEq rest' rest then t else RCons ann name ty' rest'
+  KindedType ann ty k -> do
+    !ty' <- f ty
+    !k' <- f k
+    pure $! if ptrEq ty' ty && ptrEq k' k then t else KindedType ann ty' k'
+  BinaryNoParensType ann t1 t2 t3 -> do
+    !t1' <- f t1
+    !t2' <- f t2
+    !t3' <- f t3
+    pure $! if ptrEq t1' t1 && ptrEq t2' t2 && ptrEq t3' t3 then t else BinaryNoParensType ann t1' t2' t3'
+  ParensInType ann t1 -> do
+    !t1' <- f t1
+    pure $! if ptrEq t1' t1 then t else ParensInType ann t1'
+  other -> pure other
+
 {-# INLINABLE everywhereOnTypesTopDownM #-}
 everywhereOnTypesTopDownM :: Monad m => (Type a -> m (Type a)) -> Type a -> m (Type a)
 everywhereOnTypesTopDownM f = go <=< f where

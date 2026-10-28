@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE GADTs #-}
 
 -- |
@@ -20,7 +21,7 @@ import Language.PureScript.Environment (Environment(..), TypeKind)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), SourceSpan, errorMessage', safst)
 import Language.PureScript.Names (ProperName, ProperNameType(..), Qualified)
 import Language.PureScript.TypeChecker.Monad (Check, CheckState, getEnv)
-import Language.PureScript.Types (SourceType, Type(..), completeBinderList, everywhereOnTypesTopDownM, getAnnForType, replaceAllTypeVars)
+import Language.PureScript.Types (SourceType, Type(..), completeBinderList, getAnnForType, mapTypeChildrenSharedM, ptrEq, replaceAllTypeVars)
 
 -- | Type synonym information (arguments with kinds, aliased type), indexed by name
 type SynonymMap = M.Map (Qualified (ProperName 'TypeName)) ([(Text, Maybe SourceType)], SourceType)
@@ -32,8 +33,41 @@ replaceAllTypeSynonyms'
   -> KindMap
   -> SourceType
   -> Either MultipleErrors SourceType
-replaceAllTypeSynonyms' syns kinds = everywhereOnTypesTopDownM try
+replaceAllTypeSynonyms' syns kinds = top
   where
+  -- Top-down, sharing-preserving. A spine of applications can only be rewritten
+  -- (or rejected) through its head, so a spine whose head is not a synonym is
+  -- traversed for its arguments alone, without looking its head up per node.
+  top :: SourceType -> Either MultipleErrors SourceType
+  top t = case t of
+    TypeApp{} -> spine t
+    KindApp{} -> spine t
+    TypeConstructor{} -> spine t
+    _ -> mapTypeChildrenSharedM top t
+
+  spine :: SourceType -> Either MultipleErrors SourceType
+  spine t = case spineHead t of
+    TypeConstructor _ ctor | M.member ctor syns -> try t >>= mapTypeChildrenSharedM top
+    _ -> plain t
+
+  spineHead :: SourceType -> SourceType
+  spineHead (TypeApp _ f _) = spineHead f
+  spineHead (KindApp _ f _) = spineHead f
+  spineHead t = t
+
+  plain :: SourceType -> Either MultipleErrors SourceType
+  plain t = case t of
+    TypeApp ann f a -> do
+      !f' <- plain f
+      !a' <- top a
+      pure $! if ptrEq f' f && ptrEq a' a then t else TypeApp ann f' a'
+    KindApp ann f k -> do
+      !f' <- plain f
+      !k' <- top k
+      pure $! if ptrEq f' f && ptrEq k' k then t else KindApp ann f' k'
+    TypeConstructor{} -> pure t
+    _ -> top t
+
   try :: SourceType -> Either MultipleErrors SourceType
   try t = fromMaybe t <$> go (safst $ getAnnForType t) 0 [] [] t
 
