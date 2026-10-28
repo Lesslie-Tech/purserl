@@ -17,7 +17,7 @@ import Control.Monad.Error.Class (MonadError (..))
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.Supply.Class (MonadSupply (fresh), bumpToNextRoundNumber)
 import Language.PureScript.Erl.Make.Monad (Make)
-import Control.Monad.Writer (MonadWriter (..), WriterT (runWriterT))
+import Control.Monad.Writer.Strict (MonadWriter (..), WriterT (runWriterT))
 import Data.Either (fromRight)
 import Data.Foldable (find, traverse_, foldl')
 import Data.List (nub)
@@ -117,7 +117,7 @@ import qualified Language.PureScript.Types as P
 import Language.PureScript.Crash (internalError)
 --
 import Language.PureScript.CoreFn.Expr qualified as E
-import Control.Monad.State (StateT(..), runStateT, mapStateT, lift, get, put, modify)
+import Control.Monad.State.Strict (StateT(..), runStateT, mapStateT, lift, get, put, modify)
 
 import Language.PureScript.PSString qualified as PS
 import Language.PureScript.AST.SourcePos qualified as SS

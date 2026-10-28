@@ -5,7 +5,7 @@ module Language.PureScript.Renamer (renameInModule) where
 
 import Prelude
 
-import Control.Monad.State (MonadState(..), State, gets, modify, runState)
+import Control.Monad.State.Strict (MonadState(..), State, gets, modify, runState)
 import Control.Monad ((>=>))
 
 import Data.Functor ((<&>))

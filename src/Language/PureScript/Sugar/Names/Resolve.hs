@@ -13,7 +13,7 @@ import Prelude
 
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Except (ExceptT, runExceptT)
-import Control.Monad.Writer (Writer, runWriter, MonadWriter(..))
+import Control.Monad.Writer.Strict (Writer, runWriter, MonadWriter(..))
 
 import Language.PureScript.Errors (MultipleErrors)
 

@@ -9,7 +9,7 @@ import Control.Applicative (Alternative)
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Reader (MonadReader, MonadTrans)
 import Control.Monad (MonadPlus)
-import Control.Monad.State (StateT(..), runStateT, mapStateT)
+import Control.Monad.State.Strict (StateT(..), runStateT, mapStateT)
 import Control.Monad.Writer (MonadWriter, lift)
 import Control.Monad.IO.Class (liftIO, MonadIO)
 

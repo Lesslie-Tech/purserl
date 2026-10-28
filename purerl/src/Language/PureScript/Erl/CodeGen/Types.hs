@@ -11,7 +11,7 @@ import Language.PureScript.Types
 import Data.Text (Text)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Control.Monad.State (State, runState, modify, get)
+import Control.Monad.State.Strict (State, runState, modify, get)
 import qualified Language.PureScript.Environment as E
 -- import Language.PureScript (ModuleName, Qualified (Qualified), ProperName (ProperName), nullSourceAnn, Ident, Environment, tyRecord)
 import Debug.Trace (trace)

@@ -15,7 +15,7 @@ import Protolude (sortOn, swap, foldl')
 import Control.Arrow (first, second, (&&&))
 import Control.Monad (when, (>=>))
 import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.State.Lazy (MonadState, StateT(..), gets, modify)
+import Control.Monad.State.Strict (MonadState, StateT(..), gets, modify)
 
 import Data.List.NonEmpty qualified as NEL
 import Data.Maybe (fromMaybe, mapMaybe)

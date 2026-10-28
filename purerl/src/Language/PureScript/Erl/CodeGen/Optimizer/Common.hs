@@ -2,7 +2,7 @@ module Language.PureScript.Erl.CodeGen.Optimizer.Common where
 
 import Control.Arrow (second)
 import Control.Monad (when, (<=<))
-import Control.Monad.State (MonadState (..), State, StateT, evalStateT, gets, modify, put, runState)
+import Control.Monad.State.Strict (MonadState (..), State, StateT, evalStateT, gets, modify, put, runState)
 import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (..))
 import Data.Maybe (fromMaybe)

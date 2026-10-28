@@ -11,6 +11,7 @@ import Control.Monad.State (StateT)
 import Control.Monad.State.Strict qualified as Strict
 import Control.Monad.Supply (SupplyT(..))
 import Control.Monad.Writer (WriterT)
+import Control.Monad.Writer.Strict qualified as Strict
 import Data.Text (Text, pack)
 
 class Monad m => MonadSupply m where
@@ -24,13 +25,14 @@ class Monad m => MonadSupply m where
 instance Monad m => MonadSupply (SupplyT m) where
   fresh = SupplyT $ do
     n <- get
-    put (n + 1)
+    put $! n + 1
     return n
   peek = SupplyT get
 
 instance MonadSupply m => MonadSupply (StateT s m)
 instance MonadSupply m => MonadSupply (Strict.StateT s m)
 instance (Monoid w, MonadSupply m) => MonadSupply (WriterT w m)
+instance (Monoid w, MonadSupply m) => MonadSupply (Strict.WriterT w m)
 instance (Monoid w, MonadSupply m) => MonadSupply (RWST r w s m)
 
 freshName :: MonadSupply m => m Text
