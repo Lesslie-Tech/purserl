@@ -22,7 +22,7 @@ import Language.PureScript.CoreFn.Expr (Bind(..), CaseAlternative(..), Expr(..),
 import Language.PureScript.CoreFn.Meta (ConstructorType(..), Meta(..))
 import Language.PureScript.CoreFn.Module (Module(..))
 import Language.PureScript.Crash (internalError)
-import Language.PureScript.Environment (DataDeclType(..), Environment(..), NameKind(..), isDictTypeName, lookupConstructor, lookupValue)
+import Language.PureScript.Environment (DataDeclType(..), Environment(..), NameKind(..), TypeKind(..), isDictTypeName, lookupConstructor, lookupValue)
 import Language.PureScript.Label (Label(..))
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName, ProperName(..), ProperNameType(..), Qualified(..), QualifiedBy(..), getQual)
 import Language.PureScript.PSString (PSString)
@@ -208,21 +208,19 @@ moduleToCoreFn env (A.Module modSS coms mn decls (Just exps)) =
   getConstructorMeta ctor =
     case lookupConstructor env ctor of
       (Newtype, _, _, _) -> IsNewtype
-      dc@(Data, _, _, fields) ->
-        let constructorType = if numConstructors (ctor, dc) == 1 then ProductType else SumType
-        in IsConstructor constructorType fields
+      (Data, tyName, _, fields) ->
+        IsConstructor (if hasSingleConstructor tyName then ProductType else SumType) fields
     where
 
-    numConstructors
-      :: (Qualified (ProperName 'ConstructorName), (DataDeclType, ProperName 'TypeName, SourceType, [Ident]))
-      -> Int
-    numConstructors ty = length $ filter (((==) `on` typeConstructor) ty) $ M.toList $ dataConstructors env
-
-    typeConstructor
-      :: (Qualified (ProperName 'ConstructorName), (DataDeclType, ProperName 'TypeName, SourceType, [Ident]))
-      -> (ModuleName, ProperName 'TypeName)
-    typeConstructor (Qualified (ByModuleName mn') _, (_, tyCtor, _, _)) = (mn', tyCtor)
-    typeConstructor _ = internalError "Invalid argument to typeConstructor"
+    -- Matching @[_]@ looks at the first cell only; @length ctors == 1@ would walk the whole list.
+    hasSingleConstructor :: ProperName 'TypeName -> Bool
+    hasSingleConstructor tyName = case ctor of
+      Qualified qb@(ByModuleName _) _
+        | Just (_, DataType _ _ ctors) <- M.lookup (Qualified qb tyName) (types env) ->
+            case ctors of
+              [_] -> True
+              _ -> False
+      _ -> internalError "getConstructorMeta: data type not found for constructor"
 
 -- | Find module names from qualified references to values. This is used to
 -- ensure instances are imported from any module that is referenced by the
