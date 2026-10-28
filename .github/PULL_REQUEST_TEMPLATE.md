@@ -6,7 +6,6 @@ Clearly and concisely describe the purpose of the pull request. If this PR relat
 
 **Checklist:**
 
-- [ ] Added a file to CHANGELOG.d for this PR (see CHANGELOG.d/README.md)
 - [ ] Added myself to CONTRIBUTORS.md (if this is my first contribution)
 - [ ] Linked any existing issues or proposals that this pull request should close
 - [ ] Updated or added relevant documentation

@@ -25,7 +25,6 @@ on:
       - Setup.hs
       - stack.yaml
       - stack.yaml.lock
-      - update-changelog.hs
       - weeder.toml
 
 defaults:

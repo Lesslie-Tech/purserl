@@ -29,7 +29,6 @@ tags
 TAGS
 
 # Gather source map files from golden tests
-.source-maps
 
 # Profiling related
 *.aux
