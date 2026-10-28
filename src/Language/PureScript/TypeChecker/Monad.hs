@@ -53,6 +53,10 @@ data CheckRefs = CheckRefs
   { crState :: !(IORef CheckState)
   , crSupply :: !(IORef Integer)
   , crWarnings :: !(IORef MultipleErrors)
+  , crHints :: !(IORef [ErrorMessageHint])
+  -- ^ The current error message hint stack. It has its own reference because
+  -- every check, inference and unification pushes a hint, which would
+  -- otherwise copy the whole 'CheckState' twice.
   }
 
 newtype CheckFailure = CheckFailure MultipleErrors
@@ -94,12 +98,14 @@ instance MonadError MultipleErrors Check where
   catchError (Check m) h = Check $ \r -> do
     s <- readIORef (crState r)
     n <- readIORef (crSupply r)
+    hs <- readIORef (crHints r)
     res <- try (m r)
     case res of
       Right a -> pure a
       Left (CheckFailure e) -> do
         writeIORef (crState r) s
         writeIORef (crSupply r) n
+        writeIORef (crHints r) hs
         unCheck (h e) r
 
 instance MonadWriter MultipleErrors Check where
@@ -136,7 +142,8 @@ runCheckInMake st (Check m) = do
     stRef <- newIORef st
     supplyRef <- newIORef n
     warningsRef <- newIORef mempty
-    res <- try (m (CheckRefs stRef supplyRef warningsRef) >>= \a -> (,) a <$> readIORef stRef)
+    hintsRef <- newIORef []
+    res <- try (m (CheckRefs stRef supplyRef warningsRef hintsRef) >>= \a -> (,) a <$> readIORef stRef)
     (,,) res <$> readIORef supplyRef <*> readIORef warningsRef
   lift (tell warnings)
   case res of
@@ -151,7 +158,8 @@ runCheckPure st (Check m) = unsafePerformIO $ do
   stRef <- newIORef st
   supplyRef <- newIORef 0
   warningsRef <- newIORef mempty
-  try (m (CheckRefs stRef supplyRef warningsRef) >>= \a -> (,) a <$> readIORef stRef) >>= \case
+  hintsRef <- newIORef []
+  try (m (CheckRefs stRef supplyRef warningsRef hintsRef) >>= \a -> (,) a <$> readIORef stRef) >>= \case
     Left (CheckFailure e) -> pure (Left e)
     Right r -> pure (Right r)
 {-# NOINLINE runCheckPure #-}
@@ -224,11 +232,6 @@ data CheckState = CheckState
   -- they are actually defined in or re-exported from the imported modules.
   , checkSubstitution :: Substitution
   -- ^ The current substitution
-  , checkHints :: [ErrorMessageHint]
-  -- ^ The current error message hint stack.
-  -- This goes into state, rather than using 'rethrow',
-  -- since this way, we can provide good error messages
-  -- during instance resolution.
   , checkConstructorImportsForCoercible :: S.Set (ModuleName, Qualified (ProperName 'ConstructorName))
   -- ^ Newtype constructors imports required to solve Coercible constraints.
   -- We have to keep track of them so that we don't emit unused import warnings.
@@ -239,7 +242,7 @@ data CheckState = CheckState
 
 -- | Create an empty @CheckState@
 emptyCheckState :: Environment -> CheckState
-emptyCheckState env = CheckState env 0 0 0 Nothing [] emptySubstitution [] mempty mempty
+emptyCheckState env = CheckState env 0 0 0 Nothing [] emptySubstitution mempty mempty
 
 -- | Unification variables
 type Unknown = Int
@@ -290,18 +293,21 @@ withErrorMessageHint
   :: ErrorMessageHint
   -> Check a
   -> Check a
-withErrorMessageHint hint action = do
-  orig <- get
-  modify $ \st -> st { checkHints = hint : checkHints st }
-  -- Need to use 'rethrow' anyway, since we have to handle regular errors
-  a <- rethrow (addHint hint) action
-  modify $ \st -> st { checkHints = checkHints orig }
-  return a
+withErrorMessageHint hint (Check action) = Check $ \r -> do
+  orig <- readIORef (crHints r)
+  writeIORef (crHints r) (hint : orig)
+  -- The hint stack is kept both for errors, which get the hint added, and for
+  -- 'getHints', which gives good error messages during instance resolution. On
+  -- failure the stack is restored by the 'catchError' that handles the error.
+  res <- try (action r)
+  case res of
+    Right a -> writeIORef (crHints r) orig >> pure a
+    Left (CheckFailure e) -> throwIO (CheckFailure (addHint hint e))
 
 -- | These hints are added at the front, so the most nested hint occurs
 -- at the front, but the simplifier assumes the reverse order.
 getHints :: Check [ErrorMessageHint]
-getHints = gets (reverse . checkHints)
+getHints = Check $ \r -> reverse <$> readIORef (crHints r)
 
 rethrowWithPositionTC
   :: SourceSpan
