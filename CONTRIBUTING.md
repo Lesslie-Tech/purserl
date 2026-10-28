@@ -41,9 +41,9 @@ Passing tests may produce warnings. Tests in `tests/purs/warning/` can ensure no
 
 ### Running Tests
 
-Run all test suites with `stack test`. You will need `npm`, `bower` and `node` on your PATH to run the tests.
+Run all test suites with `stack test`.
 
-You can run individual test suites using `stack test --test-arguments="--match PATTERN"` where `PATTERN` is one of `compiler`, `repl`, `ide`, `docs`, `corefn`, or `hierarchy`. You can also build and run a specific test in `tests/purs/passing/` or `tests/purs/failing/` by using the test's filename as the pattern, e.g.:
+You can run individual test suites using `stack test --test-arguments="--match PATTERN"` where `PATTERN` is one of `cst`, `ast`, `ide`, `make`, `unify`, `corefn`, `hierarchy`, or `graph` (see `tests/Main.hs`). You can also build and run a specific test in `tests/purs/passing/` or `tests/purs/failing/` by using the test's filename as the pattern, e.g.:
 
 ```
 stack test --fast --test-arguments="--match 1110.purs"
@@ -99,7 +99,7 @@ Run `stack exec bash` to launch a subshell (substitute `bash` with your preferre
 > purs --version
 0.14.2
 > which purs
-~/.nvm/versions/node/v14.9.0/bin/purs
+~/.local/bin/purs
 
 > stack exec bash
 
@@ -115,7 +115,7 @@ If you plan on using your patched version of `purs` for a while (for example, wh
 stack install
 ```
 
-Note that other installed version (e.g. what npm installs) may still have priority depending on how your `PATH` is configured. `stack install` should warn about other higher-priority versions, and you can always use `which purs` as a sanity check. Uninstall by simply deleting the `purs` binary (location can be found with `which purs`).
+Note that other installed version (e.g. a release bundle) may still have priority depending on how your `PATH` is configured. `stack install` should warn about other higher-priority versions, and you can always use `which purs` as a sanity check. Uninstall by simply deleting the `purs` binary (location can be found with `which purs`).
 
 ### Profiling
 
