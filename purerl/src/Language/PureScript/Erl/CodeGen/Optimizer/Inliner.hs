@@ -8,12 +8,6 @@ module Language.PureScript.Erl.CodeGen.Optimizer.Inliner
     inlineCommonFnsM,
     flattenFailureCases,
     mergeHandlerCases,
-    evaluateIifes,
-    etaConvert,
-    singleBegin,
-    beginBinds,
-    collectLists,
-    replaceAppliedFunRefs,
   )
 where
 
@@ -22,7 +16,6 @@ import Control.Monad.Supply.Class (MonadSupply (fresh))
 import qualified Data.Map as Map
 import Data.List (sortOn)
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
-import qualified Data.Set as Set
 import Data.String (IsString)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -43,104 +36,6 @@ import Debug.Trace qualified as Debug
 -- contents as they are, so the template can contain any escaped atom.
 rawTemplate :: PSString -> Text
 rawTemplate fmt = fromMaybe (PS.prettyPrintString fmt & T.drop 1 & T.dropEnd 1) (PS.decodeString fmt)
-
-isEVar :: Erl -> Bool
-isEVar (EVar _) = True
-isEVar _ = False
-
-unEVar :: Erl -> Maybe Text
-unEVar (EVar x) = Just x
-unEVar _ = Nothing
-
--- inline as we generate this for FFI calls
--- begin X = E, X(A)(B)... end
-singleBegin :: Erl -> Erl
-singleBegin = everywhereOnErl convert
-  where
-    convert :: Erl -> Erl
-    convert (EBlock [EVarBind x e, e2])
-      | happy x e2 =
-        replaceIdents [(x, e)] e2
-    convert e = e
-
-    happy x (EVar x') | x == x' = True
-    happy x (EApp _ e [EVar y]) | x /= y = happy x e
-    happy _ _ = False
-
-beginBinds :: Erl -> Erl
-beginBinds = everywhereOnErl convert
-  where
-    convert :: Erl -> Erl
-    convert (EApp meta (EBlock es) args)
-      | e : evars <- reverse es,
-        all (okBind args) evars =
-        EBlock (reverse evars ++ [EApp meta e args])
-    convert other = other
-
-    okBind args ebind =
-      all isEVar args
-        && ( case ebind of
-               (EVarBind x e) ->
-                 not (x `Set.member` argVars)
-                   && all (\y -> not $ occurs y e) argVars
-               _ -> False
-           )
-      where
-        argVars = Set.fromList $ mapMaybe unEVar args
-
--- (begin X1 = E1, ... Xn = En, F end)(X)
--- to
--- begin X1 = E1, ... Xn = En, F(X) end
--- X /= Xi, X \notin FV(Ei)
-
-etaConvert :: Erl -> Supply Erl
-etaConvert = everywhereOnErlTopDownM convert
-  where
-    convert :: Erl -> Supply Erl
-    -- TODO ported from JS, but this seems to be beta-reduction and the iife below is eta...?
-    convert (EApp _ (EFunN _ xs e) args)
-      | all isEVar args,
-        xs `disjoint` mapMaybe unEVar args,
-        not (any (`isRebound` e) xs),
-        not (any (`isReboundE` e) args) =
-        renameBoundVars $ replaceIdents (zip xs args) e
-    convert e = pure e
-
-    disjoint l1 l2 =
-      Set.null $ s1 `Set.intersection` s2
-      where
-        s1 = Set.fromList l1
-        s2 = Set.fromList l2
-
-    isReboundE (EVar x) e = isRebound x e
-    isReboundE _ _ = False
-
--- TODO: That's not iifes
--- \x. (f x) --eta--> f  (x \notelem FV(f))
--- -- fun (X) -> fun {body} end(X) end  --> fun {body} end
-evaluateIifes :: Erl -> Erl
-evaluateIifes = everywhereOnErl convert
-  where
-    convert :: Erl -> Erl
-    convert (EFun1 Nothing x (EApp _ fun@EFunFull {} [EVar x'])) | x == x', not (occurs x fun) = fun
-    convert e = e
-
-collectLists :: Erl -> Erl
-collectLists = everywhereOnErl go
-  where
-    go (EListCons xs (EListLiteral ys)) = EListLiteral (xs <> ys)
-    go (EListCons xs (EListCons ys z)) = EListCons (xs <> ys) z
-    go (EBinary ListConcat (EListLiteral xs) (EListLiteral ys)) = EListLiteral (xs <> ys)
-    go (EBinary ListConcat (EListLiteral xs) (EListCons ys z)) = EListCons (xs <> ys) z
-    go other = other
-
-replaceAppliedFunRefs :: Erl -> Erl
-replaceAppliedFunRefs = everywhereOnErl go
-  where
-    go (EApp meta (EFunRef name arity) args)
-      | length args == arity =
-        EApp meta (EAtomLiteral name) args
-    go other = other
 
 
 inlineCommonValuesBottomUp :: (Erl -> Erl) -> Erl -> Erl
@@ -1038,9 +933,6 @@ opMin = (EC.dataOrd, EC.min)
 
 opMax :: forall a b. (IsString a, IsString b) => (a, b)
 opMax = (EC.dataOrd, EC.max)
-
-opAppend :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opAppend = (EC.dataSemigroup, snd C.P_append)
 
 opSub :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 opSub = (EC.dataRing, snd C.P_sub)

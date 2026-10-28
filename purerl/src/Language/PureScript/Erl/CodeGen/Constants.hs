@@ -30,11 +30,6 @@ effect = "effect@ps"
 controlApplicative :: forall a. (IsString a) => a
 controlApplicative = "control_applicative@ps"
 
-controlBind :: forall a. (IsString a) => a
-controlBind = "control_bind@ps"
-
-dataSemigroup :: forall a. (IsString a) => a
-dataSemigroup = "data_semigroup@ps"
 
 dataHeytingAlgebra :: forall a. (IsString a) => a
 dataHeytingAlgebra = "data_heytingAlgebra@ps"

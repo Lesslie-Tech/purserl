@@ -511,12 +511,3 @@ checkFixityExports m@(Module ss _ mn ds (Just exps)) =
     :: ((ProperName 'TypeName, Maybe [ProperName 'ConstructorName]) -> Bool)
     -> Bool
   anyTypeRef f = any (maybe False f . getTypeRef) exps
-
-usingPredicate
-  :: forall f a
-   . Applicative f
-  => (a -> Bool)
-  -> (a -> f a)
-  -> (a -> f a)
-usingPredicate p f x =
-  if p x then f x else pure x

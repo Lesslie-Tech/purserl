@@ -56,7 +56,6 @@ import Text.PrettyPrint.Boxes qualified as Box
 import Witherable (wither)
 
 -- purserl
-import qualified Language.PureScript.Erl.Errors.Types
 
 --
 
@@ -160,7 +159,6 @@ data SimpleErrorMessage
   | DuplicateImport ModuleName ImportDeclarationType (Maybe ModuleName)
   | DuplicateImportRef Name
   | DuplicateExportRef Name
-  | IntOutOfRange Integer Text Integer Integer
   | ImplicitQualifiedImport ModuleName ModuleName [DeclarationRef]
   | ImplicitQualifiedImportReExport ModuleName ModuleName [DeclarationRef]
   | ImplicitImport ModuleName [DeclarationRef]
@@ -195,8 +193,6 @@ data SimpleErrorMessage
   | CannotDeriveInvalidConstructorArg (Qualified (ProperName 'ClassName)) [Qualified (ProperName 'ClassName)] Bool
   | CannotSkipTypeApplication SourceType
   | CannotApplyExpressionOfTypeOnType SourceType SourceType
-  -- pureserl
-  | PurerlError Language.PureScript.Erl.Errors.Types.SimpleErrorMessage
   deriving (Show, Generic, NFData)
 
 data ErrorMessage = ErrorMessage
@@ -330,7 +326,6 @@ errorCode em = case unwrapErrorMessage em of
   DuplicateImport{} -> "DuplicateImport"
   DuplicateImportRef{} -> "DuplicateImportRef"
   DuplicateExportRef{} -> "DuplicateExportRef"
-  IntOutOfRange{} -> "IntOutOfRange"
   ImplicitQualifiedImport{} -> "ImplicitQualifiedImport"
   ImplicitQualifiedImportReExport{} -> "ImplicitQualifiedImportReExport"
   ImplicitImport{} -> "ImplicitImport"
@@ -359,7 +354,6 @@ errorCode em = case unwrapErrorMessage em of
   CannotDeriveInvalidConstructorArg{} -> "CannotDeriveInvalidConstructorArg"
   CannotSkipTypeApplication{} -> "CannotSkipTypeApplication"
   CannotApplyExpressionOfTypeOnType{} -> "CannotApplyExpressionOfTypeOnType"
-  PurerlError{} -> "PurerlError"
 
 -- | A stack trace for an error
 newtype MultipleErrors = MultipleErrors
@@ -1205,10 +1199,6 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
     renderSimpleErrorMessage (DuplicateExportRef name) =
       line $ "Export list contains multiple references to " <> printName (Qualified ByNullSourcePos name)
 
-    renderSimpleErrorMessage (IntOutOfRange value backend lo hi) =
-      paras [ line $ "Integer value " <> markCode (T.pack (show value)) <> " is out of range for the " <> backend <> " backend."
-            , line $ "Acceptable values fall within the range " <> markCode (T.pack (show lo)) <> " to " <> markCode (T.pack (show hi)) <> " (inclusive)." ]
-
     renderSimpleErrorMessage msg@(ImplicitQualifiedImport importedModule asModule _) =
       paras [ line $ "Module " <> markCode (runModuleName importedModule) <> " was imported as " <> markCode (runModuleName asModule) <> " with unspecified imports."
             , line $ "As there are multiple modules being imported as " <> markCode (runModuleName asModule) <> ", consider using the explicit form:"
@@ -1408,12 +1398,6 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
       typeVariable = case tyFn of
         ForAll _ _ v _ _ _ -> v
         _ -> internalError "renderSimpleErrorMessage: Impossible!"
-
-    renderSimpleErrorMessage (PurerlError err) =
-      paras
-        [  line "Purerl error:"
-        , line $ T.pack $ show err
-        ]
 
 
     renderHint :: ErrorMessageHint -> Box.Box -> Box.Box

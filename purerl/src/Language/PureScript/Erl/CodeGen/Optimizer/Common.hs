@@ -1,13 +1,9 @@
 module Language.PureScript.Erl.CodeGen.Optimizer.Common where
 
 import Control.Arrow (second)
-import Control.Monad (when, (<=<))
-import Control.Monad.State.Strict (MonadState (..), State, StateT, evalStateT, gets, modify, put, runState)
-import Control.Monad.Supply (Supply)
-import Control.Monad.Supply.Class (MonadSupply (..))
+import Control.Monad.State.Strict (State, put, runState)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import qualified Data.Text as T
 import Language.PureScript.Erl.CodeGen.AST
 import Language.PureScript.Erl.CodeGen.Common (atomPS)
 import Language.PureScript.PSString (PSString)
@@ -42,9 +38,6 @@ isUncurriedFn' _ _ = False
 applyAll :: [a -> a] -> a -> a
 applyAll = foldl1 (.)
 
-{-# INLINE applyAllM #-}
-applyAllM :: Monad m => [a -> m a] -> a -> m a
-applyAllM = foldl1 (<=<)
 
 -- Check if var x occurs in expression
 occurs :: Text -> Erl -> Bool
@@ -57,27 +50,6 @@ occurs x =
       pure e
     go e = pure e
 
--- Check if var x is (possibly) rebound in expression
-isRebound :: Text -> Erl -> Bool
-isRebound x =
-  snd . flip runState False . everywhereOnErlTopDownM go
-  where
-    go :: Erl -> State Bool Erl
-    -- go e@(EFunFull _ args) = do
-    --   when (any matchBinder args) $ put True
-    --   pure e
-    go e@(EVarBind x' _) | x == x' = do
-      put True
-      pure e
-    go e@(ECaseOf _ binds) = do
-      when (any (matchCaseBinder . fst) binds) $ put True
-      pure e
-    go e = pure e
-
-    -- matchBinder (EFunBinder es _, _) = any (occurs x) es
-
-    matchCaseBinder (EBinder e) = occurs x e
-    -- matchCaseBinder (EGuardedBinder e _) = occurs x e
 
 -- TODO figure this into generic traversal with context pattern
 replaceIdents :: [(Text, Erl)] -> Erl -> Erl
@@ -129,24 +101,6 @@ replaceIdents unfilteredVars = go
         g' = (\(Guard eg) -> Just $ Guard $ replaceIdents vars' eg) =<< g
 -}
 
--- Rename bound vars in preparation for hoisting expression into a parent scope when the expression may bind same variables as a sibling
--- Super restricted, only renames top level X = e bindings (possibly in a begin/end block) as this is what we generate
--- For general code would have to go down
-renameBoundVars :: Erl -> Supply Erl
-renameBoundVars = (`evalStateT` []) . go
-  where
-    go :: Erl -> StateT [(Text, Erl)] Supply Erl
-    -- TODO[drathier]: this isn't quite general enough; we might EBind without it being an EVarBind.
-    go (EVarBind x e) = do
-      n <- fresh
-      let x' = x <> "@" <> T.pack (show n)
-      res <- gets (EVarBind x' . (`replaceIdents` e))
-      modify ((x, EVar x') :)
-      pure res
-    go (EBlock es) = EBlock <$> traverse go es
-    go (ELet b es) = ELet <$> go b <*> go es
-    go (EAndThen b es) = ELet <$> go b <*> go es
-    go e = gets (`replaceIdents` e)
 
 collect :: Int -> Erl -> Erl
 collect n e = go e []
