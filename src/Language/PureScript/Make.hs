@@ -98,13 +98,6 @@ data ModuleCheckResult = ModuleCheckResult
     -- deliberately *not* `env'` (the post-typecheck environment including
     -- this module's own declarations); `codegen` only ever consumed the
     -- upstream one, even before this split.
-  , mcrCheckedEnv :: Environment
-    -- ^ `env'`, the post-typecheck environment including this module's own
-    -- declarations -- only needed for docs conversion (phase B); NOT the
-    -- same value `codegen` itself is given (see `mcrUpstreamEnv`).
-  , mcrOriginalModule :: Module
-  , mcrExternsInput :: [ExternsFile]
-  , mcrExEnv :: Env
   , mcrRenamed :: CF.Module CF.Ann
   , mcrExterns :: ExternsFile
   , mcrNextVar :: Integer
@@ -193,10 +186,6 @@ rebuildModuleTypecheck MakeActions{..} exEnv externs m@(Module _ _ moduleName _ 
 
   pure ModuleCheckResult
     { mcrUpstreamEnv = env
-    , mcrCheckedEnv = env'
-    , mcrOriginalModule = m
-    , mcrExternsInput = externs
-    , mcrExEnv = exEnv
     , mcrRenamed = renamed
     , mcrExterns = exts
     , mcrNextVar = nextVar''
