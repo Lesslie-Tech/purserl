@@ -14,6 +14,7 @@ where
 import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (fresh))
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import Data.List (sortOn)
 import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.String (IsString)
@@ -107,6 +108,10 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         EBinary ArrayConcat (EArrayLiteral a) (EArrayLiteral b) -> EArrayLiteral (a <> b)
         EBinary BinaryConcat (EStringLiteral a) (EStringLiteral b) -> EStringLiteral (a <> b)
 
+        -- A map built from a literal list of literal pairs is a map literal.
+        EApp _ fn [EArrayLiteral es] | isMapBuilder "fromArray" fn, Just m <- mapFromPairs es -> m
+        EApp _ fn [EListLiteral es] | isMapBuilder "fromList" fn, Just m <- mapFromPairs es -> m
+
         EBinary Add (EIntLit a) (EIntLit b) -> EIntLit (a+b)
         EBinary Subtract (EIntLit a) (EIntLit b) -> EIntLit (a-b)
         EBinary Multiply (EIntLit a) (EIntLit b) -> EIntLit (a*b)
@@ -136,6 +141,14 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         EBinary OrElse _ ETrue -> ETrue
 
         other -> other
+
+    isMapBuilder name fn = isFn ("map@ps", name) fn || isUncurriedFn' ("map@ps", name) fn
+
+    mapFromPairs :: [Erl] -> Maybe Erl
+    mapFromPairs es = mapLiteral <$> traverse pair es
+      where
+        pair (ETupleLiteral [EAtomLiteral (Atom Nothing "tuple"), k, v]) = Just (k, v)
+        pair _ = Nothing
 
     floatAssocInt op a b c =
       let noop = EBinary op (EBinary op a b) c
@@ -1037,6 +1050,37 @@ flattenCall = go []
       EApp _ fn args -> go (args <> acc) fn
       _ -> Nothing
 
+-- | A key that erlc can see is a constant, which is when it warns about a repeated key.
+data LitKey = LitStr PSString | LitInt Integer | LitNum Double | LitAtom Atom | LitTuple [LitKey]
+  deriving (Eq, Ord)
+
+litKey :: Erl -> Maybe LitKey
+litKey = \case
+  EStringLiteral s -> Just (LitStr s)
+  EIntLit n -> Just (LitInt n)
+  ENumLit n -> Just (LitNum n)
+  EAtomLiteral a -> Just (LitAtom a)
+  ETupleLiteral es -> LitTuple <$> traverse litKey es
+  _ -> Nothing
+
+-- | A map literal with arbitrary key expressions (`EMapLiteral` only takes atom keys). Later pairs win,
+-- as in `#{K => V || {tuple, K, V} <- Pairs}`; a repeated constant key is dropped up front because erlc warns about it.
+mapLiteral :: [(Erl, Erl)] -> Erl
+mapLiteral pairs = case kept of
+  [] -> EMapLiteral []
+  _ ->
+    let name c i = AtomPS Nothing (mkString (c <> T.pack (show i)))
+        names = [(name "k" i, name "v" i) | i <- [0 .. length kept - 1]]
+        fields = T.intercalate ", " ["$" <> runAtom kn <> " => $" <> runAtom vn | (kn, vn) <- names]
+     in ERawErlangSource ("#{" <> fields <> "}") (concat [[(kn, k), (vn, v)] | ((kn, vn), (k, v)) <- zip names kept])
+  where
+    kept = reverse (go Set.empty (reverse pairs))
+    go _ [] = []
+    go seen (p@(k, _) : rest) = case litKey k of
+      Just lk | lk `Set.member` seen -> go seen rest
+              | otherwise -> p : go (Set.insert lk seen) rest
+      Nothing -> p : go seen rest
+
 -- | What a monad wraps around its base type, outermost first.
 data Wrapper = Reader | Thunk
 
@@ -1215,6 +1259,7 @@ libRules =
           k <- freshName "Key"
           v <- freshName "Val"
           pure (app erlangMapsMap [EFunN Nothing [k, v] (app (app f [EVar k]) [EVar v]), m])),
+        (("map@ps", "singleton"), r2 $ \k v -> pure (mapLiteral [(k, v)])),
         (("map@ps", "insert"), r3 $ \k v m -> pure (app erlangMapsPut [k, v, m])),
         (("map@ps", "unsafeUpdate"), r3 $ \k v m -> pure (app erlangMapsUpdate [k, v, m])),
         -- Argument order swap preserved from Map's own FFI: maps:merge/2 is right-biased, but Map.union is left-biased.
