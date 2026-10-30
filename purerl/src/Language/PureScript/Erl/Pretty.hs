@@ -72,18 +72,32 @@ flattenSeq arg1 arg2 = go (EAndThen arg1 arg2) []
     go (ELet a b) acc = go b (a : acc)
     go e acc = reverse (e : acc)
 
+-- | A statement sequence with nested blocks spliced in. `begin ... end` doesn't scope variables, so
+-- `A, begin B, C end, D` is the same program as `A, B, C, D`, and likewise for a block that is the
+-- right-hand side of a match or the scrutinee of a case, which are evaluated before anything else
+-- in their statement.
+spliceStmts :: [Erl] -> [Erl]
+spliceStmts = concatMap go
+  where
+    go = \case
+      EAndThen a b -> spliceStmts (flattenSeq a b)
+      ELet a b -> spliceStmts (flattenSeq a b)
+      EBlock es -> spliceStmts es
+      EBind p e | Just (pre, lst) <- unsnoc' (go e), not (null pre) -> pre <> [EBind p lst]
+      ECaseOf e bs | Just (pre, lst) <- unsnoc' (go e), not (null pre) -> pre <> [ECaseOf lst bs]
+      e -> [e]
+    unsnoc' [] = Nothing
+    unsnoc' xs = Just (init xs, last xs)
+
 -- | The body of a `begin ... end`\/case-branch\/function clause: each
 -- statement on its own line, all sharing one indent, joined by ",\n".
 blockBody :: Int -> [Erl] -> Builder
-blockBody ind es = sp ind <> mintercalate (",\n" <> sp ind) (map (render ind) es)
+blockBody ind es = sp ind <> mintercalate (",\n" <> sp ind) (map (render ind) (spliceStmts es))
 
 -- | Render `e` as a function\/case\/fun clause body, handling the implicit
 -- flattening of EAndThen\/ELet chains into a plain statement list.
 clauseBody :: Int -> Erl -> Builder
-clauseBody ind (EAndThen a b) = blockBody ind (flattenSeq a b)
-clauseBody ind (ELet a b) = blockBody ind (flattenSeq a b)
-clauseBody ind (EBlock es) = blockBody ind es
-clauseBody ind e = sp ind <> render ind e
+clauseBody ind e = blockBody ind [e]
 
 -- | Literals and variables, which fit on the line of the `fun` they are the body of.
 isLeaf :: Erl -> Bool
@@ -323,10 +337,15 @@ render ind = go
   go (EBlock es) = renderBlock es
 
   go (EMaybe _ steps final) =
-    "maybe\n" <> mintercalate ",\n" (map step steps <> [sp (ind + 2) <> render (ind + 2) final]) <> "\n" <> sp ind <> "end"
+    "maybe\n" <> mintercalate ",\n" (concatMap step steps <> [clauseBody (ind + 2) final]) <> "\n" <> sp ind <> "end"
     where
-      step (Just pat, e) = sp (ind + 2) <> render (ind + 2) pat <> " ?= " <> render (ind + 2) e
-      step (Nothing, e) = sp (ind + 2) <> render (ind + 2) e
+      -- A block before a `?=` is spliced out like one before a `=`.
+      step (Just pat, e) = case spliceStmts [EBind pat e] of
+        [EBind pat' e'] -> [sp (ind + 2) <> render (ind + 2) pat' <> " ?= " <> render (ind + 2) e']
+        stmts -> map (\st -> sp (ind + 2) <> render (ind + 2) st) (init stmts) <> [sp (ind + 2) <> matchStmt (last stmts)]
+      step (Nothing, e) = [clauseBody (ind + 2) e]
+      matchStmt (EBind pat' e') = render (ind + 2) pat' <> " ?= " <> render (ind + 2) e'
+      matchStmt other = render (ind + 2) other
 
   go (ERawErlangSource fmt binds) =
     let (p1 : parts) = T.splitOn "$" fmt
@@ -372,7 +391,7 @@ render ind = go
     where
       prettyPrintBinder (EBinder eb, e') =
         sp (ind + 2) <> render (ind + 2) eb <> " ->\n"
-        <> sp (ind + 4) <> render (ind + 4) e'
+        <> clauseBody (ind + 4) e'
 
   go (EAttribute name text) = case (decodeString name, decodeString text) of
     (Just name', Just text') -> "-" <> B.fromText name' <> "(" <> B.fromText text' <> ")"
