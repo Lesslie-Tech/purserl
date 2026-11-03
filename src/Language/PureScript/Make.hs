@@ -33,7 +33,7 @@ import Data.Function (on)
 import Data.Foldable (fold, for_)
 import Data.List (foldl', sortOn)
 import Data.List.NonEmpty qualified as NEL
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Map qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -307,6 +307,16 @@ make ma@MakeActions{..} ms = do
 
 
     let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup moduleName graph)
+
+    -- A module skipped because a dependency failed was not checked against the dependencies'
+    -- current exports. Without a mark it would stay "up to date" once the dependency is fixed some
+    -- other way, and never learn what it lost; with one, the next build diffs its recorded
+    -- dependency shapes, so it only rebuilds if they really changed.
+    let recheckSkippedModule =
+          modifyMVar_ newCacheDbMVar (pure . Cache.markNeedsRecheck moduleName)
+    -- A module whose current source was never built can't be kept at all.
+    let forgetSkippedModule =
+          modifyMVar_ newCacheDbMVar (pure . Cache.removeModules (S.singleton moduleName))
     let goBuild oldExterns results recompileReason = do
           -- progress $ CompileMeta (T.pack $ show (moduleName, "-- DR.4.3"))
           buildModule lock buildPlan moduleName totalModuleCount oldExterns results recompileReason
@@ -334,17 +344,21 @@ make ma@MakeActions{..} ms = do
         mResults <- BuildPlan.fetchMissingExterns BuildPlan.Early ("mod", "b", moduleName) ma buildPlan deps
         case assertAllExternsExists mResults of
           Left bjRes -> do
-            -- Never built from its current source, so don't record it as built.
-            when (not areMyOwnFilesUpToDate) $
-              modifyMVar_ newCacheDbMVar (pure . Cache.removeModules (S.singleton moduleName))
+            forgetSkippedModule
             bumpCompilationCounter >> BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing bjRes
           Right results -> goBuild oldExterns results SourceChangedOrDependencyFailedToBuildInPreviousCompilationOrSomethingElse
       True -> do
         -- -- progress $ CompileMeta (T.pack $ show (moduleName, -- DR.3.2", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate)))
         -- did any of my deps change?
         anyDepChanged <- BuildPlan.anyDepChanged moduleName graph buildPlan
-        case anyDepChanged of
+        let anyDepChangedOrRecheck =
+              case anyDepChanged of
+                BuildPlan.FullDepsCacheHit | Cache.needsRecheck moduleName cacheDb ->
+                  BuildPlan.DepsChangedPleaseRebuildIfNeeded (fromMaybe moduleName (listToMaybe deps))
+                other -> other
+        case anyDepChangedOrRecheck of
           BuildPlan.FailRebuildDepsFailed causedByModule -> do
+            recheckSkippedModule
             -- progress $ CompileMeta (T.pack $ show (moduleName, "-- DR.3.2.1", ("areMyOwnFilesUpToDate", areMyOwnFilesUpToDate), "FailRebuildDepsFailed", causedByModule))
             bumpCompilationCounter
             BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing BuildJobSkipped
@@ -361,7 +375,7 @@ make ma@MakeActions{..} ms = do
             oldExterns <- BuildPlan.getExternFromLastSuccessfulPreviousBuild ma buildPlan moduleName
             mResults <- BuildPlan.fetchMissingExterns BuildPlan.Early ("mod", "a", moduleName) ma buildPlan deps
             case assertAllExternsExists mResults of
-              Left bjRes -> bumpCompilationCounter >> BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing bjRes
+              Left bjRes -> recheckSkippedModule >> bumpCompilationCounter >> BuildPlan.markCompleteImmediate ma buildPlan moduleName Nothing bjRes
               Right results ->
                 case BuildPlan.needsRebuildEvenAfterDiffingCacheShapes oldExterns (fmap snd results) of
                   BuildPlan.NoRebuildNeeded -> do

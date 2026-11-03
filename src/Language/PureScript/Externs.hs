@@ -33,6 +33,7 @@ import Data.Text qualified as T
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as M
 import Data.Map.Merge.Strict qualified as M
+import Data.Set qualified as S
 import Language.PureScript.Erl qualified as Purserl
 import Language.PureScript.Make.Cache qualified as Cache
 import GHC.Generics (Generic)
@@ -408,13 +409,18 @@ instance Binary CSTypeDeclaration where
   -- The first @SourceAnn@ serves as the annotation for the entire
   -- declaration, while the second @SourceAnn@ serves as the
   -- annotation for the type class and its arguments.
-data CSTypeInstanceDeclaration = CSTypeInstanceDeclaration (ChainId, Integer) ToCSDB (Qualified (ProperName 'ClassName)) ToCSDB (CSTypeInstanceBody, ToCSDB)
+  --
+  -- The ToCSDBs only name what the head mentions, so the last field keeps its structure; without it,
+  -- instances differing only in e.g. a type-level string hash alike. The chain id's source position is
+  -- left out so moving a chain doesn't rebuild its users.
+  --
+data CSTypeInstanceDeclaration = CSTypeInstanceDeclaration Integer ToCSDB (Qualified (ProperName 'ClassName)) ToCSDB (CSTypeInstanceBody, ToCSDB) ([Constraint ()], [Type ()])
   deriving (Show, Generic, Eq, NFData)
 
 
 instance Binary CSTypeInstanceDeclaration where
-  put (CSTypeInstanceDeclaration a b c d e) = put a >> put b >> put c >> put d >> put e
-  get = CSTypeInstanceDeclaration <$> get <*> get <*> get <*> get <*> get
+  put (CSTypeInstanceDeclaration a b c d e f) = put a >> put b >> put c >> put d >> put e >> put f
+  get = CSTypeInstanceDeclaration <$> get <*> get <*> get <*> get <*> get <*> get
 
 data CSTypeInstanceBody
   = CSDerivedInstance
@@ -741,7 +747,7 @@ instance ToCS DB () where
         addCSDB (<> csdb)
         tyDeps & traverse_ (\(CSTypeDeclaration _ _ csdb) -> addCSDB (<> csdb))
       ))
-    tyClassInstanceDecls & traverse_ (traverse_ (\(CSTypeInstanceDeclaration _ csdb1 _ csdb2 (_, csdb3)) ->
+    tyClassInstanceDecls & traverse_ (traverse_ (\(CSTypeInstanceDeclaration _ csdb1 _ csdb2 (_, csdb3) _) ->
         addCSDB (<> csdb1 <> csdb2 <> csdb3)
       ))
 
@@ -1019,7 +1025,8 @@ dbPutTypeInstanceDeclaration ident csTypeInstanceDeclaration =
       {
         _tyClassInstanceDecls =
            M.insertWith (<>)
-            (toRunIdent ident)
+            -- not 'toRunIdent': that drops the number of a generated name, which is part of the name others see
+            (RunIdent (runIdent ident))
             [csTypeInstanceDeclaration]
             (_tyClassInstanceDecls db)
       }
@@ -1146,8 +1153,8 @@ withoutValueBodyRefs :: CSValueDeclaration -> CSValueDeclaration
 withoutValueBodyRefs (CSValueDeclaration nk arity ty _) = CSValueDeclaration nk arity ty mempty
 
 withoutInstanceBodyRefs :: CSTypeInstanceDeclaration -> CSTypeInstanceDeclaration
-withoutInstanceBodyRefs (CSTypeInstanceDeclaration chain csdb1 cls csdb2 (body, _)) =
-  CSTypeInstanceDeclaration chain csdb1 cls csdb2 (body, mempty)
+withoutInstanceBodyRefs (CSTypeInstanceDeclaration chain csdb1 cls csdb2 (body, _) shape) =
+  CSTypeInstanceDeclaration chain csdb1 cls csdb2 (body, mempty) shape
 
 data DBOpaque
   = DBOpaque
@@ -1229,7 +1236,7 @@ instance Binary CacheShapeHash where
   get = CacheShapeHash <$> get
 
 dbOpaqueIsctExports :: Show meta => meta -> M.Map ModuleName DBOpaque -> ExportSummary -> DBOpaque -> DBOpaque
-dbOpaqueIsctExports meta upstreamDBs (ExportSummary valueName typeName typeOpName typeClass typeClassInstance valueOpName reExportedRefs) (DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
+dbOpaqueIsctExports meta upstreamDBs (ExportSummary valueName typeName typeOpName typeClass typeClassInstance valueOpName reExportedRefs _) (DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13) =
   let
     upstreamReExports =
       M.intersectionWith
@@ -1275,17 +1282,36 @@ dbOpaqueDiffDiffIgnoringExportsListChanges (DBOpaque a1 a2 a3 a4 a5 a6 a7 a8 a9 
       , _tyOpFixity_opaque = M.differenceWith (\x y -> if x == y then Nothing else Just x) a10 b10
       , _tyClassDecls_opaque = M.differenceWith (\x y -> if x == y then Nothing else Just x) a11 b11
       , _tyClassInstanceDecls_opaque = M.differenceWith (\x y -> if x == y then Nothing else Just x) a12 b12
-      -- NOTE: this field is unfiltered (see `_exports_opaque = a13` in both
-      -- `dbOpaqueIsctExports` and `efUpstreamCacheShapes`'s construction), so
-      -- comparing it for full equality made *any* addition/removal anywhere in
-      -- an upstream module's export list (even of declarations a downstream
-      -- module never references) look like a change, forcing needless
-      -- downstream rebuilds. Actual removals/renames of declarations a
-      -- downstream module does use are already caught by the per-field diffs
-      -- above (a used key goes missing via `M.differenceWith`), so this field
-      -- can be ignored here, matching this function's name.
-      , _exports_opaque = mempty
+      -- Only the names a module kept from the upstream export list (see 'efUpstreamCacheShapes'),
+      -- so unrelated additions and removals don't force downstream rebuilds.
+      , _exports_opaque = exportSummaryDiff a13 b13
       }
+
+-- | What changed in an upstream module's exports, as far as a module that kept the summary @old@
+-- cares: names it needs that are gone, plus (for a whole-module re-export) names that appeared.
+-- Instances are left out; they aren't imported or re-exported by name.
+exportSummaryDiff :: ExportSummary -> ExportSummary -> ExportSummary
+exportSummaryDiff old new =
+  let gone = exportSummaryMinus old new
+      added = if _wholeModule old then exportSummaryMinus new old else mempty
+  in gone <> added
+
+-- | The part of an upstream module's export list that a module importing it keeps in its cache
+-- shapes: the names it asked for, or all of them (minus instances) for a whole-module re-export.
+neededExports :: ExportSummary -> ExportSummary -> ExportSummary
+neededExports wanted upstream
+  | _wholeModule wanted = upstream { _refTypeClassInstance = mempty, _reExportRef = mempty, _wholeModule = True }
+  | otherwise = wanted
+
+exportSummaryMinus :: ExportSummary -> ExportSummary -> ExportSummary
+exportSummaryMinus (ExportSummary a1 a2 a3 a4 _ a6 _ _) (ExportSummary b1 b2 b3 b4 _ b6 _ _) =
+  mempty
+    { _refValue = a1 M.\\ b1
+    , _refTypeName = a2 M.\\ b2
+    , _refTypeOpName = a3 M.\\ b3
+    , _refTypeClass = a4 M.\\ b4
+    , _refOpName = a6 M.\\ b6
+    }
 
 
 findDeps :: ModuleName -> Environment -> [Declaration] -> [(Declaration, DB)]
@@ -1460,7 +1486,7 @@ findDepsImpl getKind getRole mn env d =
             case eitherTextIdentInstanceName of
               Left _ -> internalError "ASSUMPTION[drathier]: we'll never get a Text value here; even generated instances have Idents"
               Right v -> v
-      dbPutTypeInstanceDeclaration instanceName (CSTypeInstanceDeclaration (chainId, chainIdIndex) ndependencySourceConstraintsDB className ninstanceSourceTypesDB (nderivedNewtypeExplicitNoDecls, nderivedNewtypeExplicit))
+      dbPutTypeInstanceDeclaration instanceName (CSTypeInstanceDeclaration chainIdIndex ndependencySourceConstraintsDB className ninstanceSourceTypesDB (nderivedNewtypeExplicitNoDecls, nderivedNewtypeExplicit) (void <$> dependencySourceConstraints, void <$> instanceSourceTypes))
 
 
 replaceTypeSynonyms
@@ -1494,20 +1520,23 @@ data ExportSummary =
     , _refOpName :: M.Map (OpName 'ValueOpName) ()
     -- [drathier]: re-exports of whole modules are desugared to one-by-one export refs, so we don't have to handle them here
     , _reExportRef :: M.Map ModuleName ExportSummary
+    -- | In the summary a module keeps of an upstream module's exports: every export matters (we
+    -- re-export it with @module X@), not just the listed names, so additions count as changes too.
+    , _wholeModule :: Bool
     } deriving (Show, Eq, Ord, Generic, NFData)
 
 instance Intern ExportSummary
 
 instance Binary ExportSummary where
-  put (ExportSummary a1 a2 a3 a4 a5 a6 a7) =
-    put a1 >> put a2 >> put a3 >> put a4 >> put a5 >> put a6 >> put a7
-  get = ExportSummary <$> get <*> get <*> get <*> get <*> get <*> get <*> get
+  put (ExportSummary a1 a2 a3 a4 a5 a6 a7 a8) =
+    put a1 >> put a2 >> put a3 >> put a4 >> put a5 >> put a6 >> put a7 >> put a8
+  get = ExportSummary <$> get <*> get <*> get <*> get <*> get <*> get <*> get <*> get
 
 instance Monoid ExportSummary where
-  mempty = ExportSummary mempty mempty mempty mempty mempty mempty mempty
+  mempty = ExportSummary mempty mempty mempty mempty mempty mempty mempty False
 
 instance Semigroup ExportSummary where
-  ExportSummary a1 a2 a3 a4 a5 a6 a7 <> ExportSummary b1 b2 b3 b4 b5 b6 b7 = ExportSummary (a1 <> b1) (a2 <> b2) (a3 <> b3) (a4 <> b4) (a5 <> b5) (a6 <> b6) (a7 <> b7)
+  ExportSummary a1 a2 a3 a4 a5 a6 a7 a8 <> ExportSummary b1 b2 b3 b4 b5 b6 b7 b8 = ExportSummary (a1 <> b1) (a2 <> b2) (a3 <> b3) (a4 <> b4) (a5 <> b5) (a6 <> b6) (a7 <> b7) (a8 || b8)
 
 exsumPutTypeOpName ref v =
   v {
@@ -1646,9 +1675,34 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
         <&> (,())
         & M.fromList
   in
-  let exportedThings = findExportedThings exports in
+  -- What we need from each imported module's export list: the names an import list mentions, and
+  -- every export of a module we re-export as a whole (`module X`) through an open import. Without
+  -- this a name that vanishes from (or appears in) the list is missed when nothing in our
+  -- declarations mentions it.
+  let reExportedQualifiers :: S.Set ModuleName
+      reExportedQualifiers = S.fromList [m | ModuleRef _ m <- exports]
+      importedExports :: M.Map ModuleName ExportSummary
+      importedExports =
+        M.fromListWith (<>)
+          [ (modu, wanted)
+          | ImportDeclaration _ modu importType mAlias <- decls
+          , let reExportedWhole = fromMaybe modu mAlias `S.member` reExportedQualifiers
+                wanted = case importType of
+                  Implicit -> mempty { _wholeModule = reExportedWhole }
+                  Explicit refs -> findExportedThings refs
+                  Hiding refs -> findExportedThings refs <> mempty { _wholeModule = reExportedWhole }
+          ]
+  in
+  -- Other modules refer to a generated instance name by the renamed name from the externs, so key ours the same way.
+  let renamedInstanceKeys = M.fromList [(RunIdent (runIdent k), toRunIdent v) | (k, v) <- M.toList renamedIdents, not (isPlainIdent k)] in
+  let renameInstanceRef = \case
+        TypeInstanceRef ss' ident ns -> TypeInstanceRef ss' (lookupRenamedIdent ident) ns
+        other -> other
+  in
+  let exportedThings = findExportedThings (map renameInstanceRef exports) in
   let findDepsRes = if not shouldCache then [] else findDeps mn env decls in
-  let dbDeps = foldl (<>) (mempty { _exports = exportedThings }) (snd <$> findDepsRes) in
+  let dbDeps0 = foldl (<>) (mempty { _exports = exportedThings }) (snd <$> findDepsRes) in
+  let dbDeps = dbDeps0 { _tyClassInstanceDecls = M.mapKeysWith (<>) (\k -> M.findWithDefault k k renamedInstanceKeys) (_tyClassInstanceDecls dbDeps0) } in
   let csdbDeps = flip execState mempty $ evalStateT (toCS dbDeps) emptyTypeRefsMemo in
   let efOurCacheShapes = dbDeps & dbToOpaque & dbOpaqueIsctExports ("self", mn) upstreamDBs exportedThings in
   -- let efUpstreamReExports = buildEfUpstreamReExports upstream exports mempty mempty in
@@ -1773,7 +1827,7 @@ moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) en
                       (M.intersectionWith (\_ b -> b) typeOp (_tyOpFixity_opaque up))
                       (M.intersectionWith (\_ b -> b) typeClasses (_tyClassDecls_opaque up))
                       (M.intersectionWith (\_ b -> b) values (_tyClassInstanceDecls_opaque up))
-                      (_exports_opaque up)
+                      (neededExports (M.findWithDefault mempty mnDep importedExports) (_exports_opaque up))
               )
             )
             upstreamDBs

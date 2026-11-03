@@ -5,6 +5,8 @@ module Language.PureScript.Make.Cache
   , CacheInfo(..)
   , checkChanged
   , removeModules
+  , markNeedsRecheck
+  , needsRecheck
   , normaliseForCache
   ) where
 
@@ -96,7 +98,7 @@ checkChanged
   -> m (CacheInfo, Bool)
 checkChanged cacheDb mn basePath currentInfo = do
 
-  let dbInfo = unCacheInfo $ fromMaybe mempty (Map.lookup mn cacheDb)
+  let dbInfo = Map.delete recheckKey $ unCacheInfo $ fromMaybe mempty (Map.lookup mn cacheDb)
   (newInfo, isUpToDate) <-
     fmap mconcat $
       for (Map.toList (align dbInfo currentInfo)) $ \(normaliseForCache basePath -> fp, aligned) -> do
@@ -133,6 +135,18 @@ checkChanged cacheDb mn basePath currentInfo = do
 -- they failed to build.
 removeModules :: Set ModuleName -> CacheDb -> CacheDb
 removeModules = flip Map.withoutKeys
+
+-- | A pseudo input file in a module's entry saying: the module's own files are up to date, but it was
+-- skipped because a dependency failed, so its dependencies' exports must be re-checked next build.
+-- 'checkChanged' never returns it, so it's cleared whenever the module's entry is refreshed.
+recheckKey :: FilePath
+recheckKey = "\0needs-recheck"
+
+markNeedsRecheck :: ModuleName -> CacheDb -> CacheDb
+markNeedsRecheck = Map.adjust (CacheInfo . Map.insert recheckKey (UTCTime (ModifiedJulianDay 0) 0, ContentHash (0, 0)) . unCacheInfo)
+
+needsRecheck :: ModuleName -> CacheDb -> Bool
+needsRecheck mn = maybe False (Map.member recheckKey . unCacheInfo) . Map.lookup mn
 
 -- | 1. Any path that is beneath our current working directory will be
 -- stored as a normalised relative path

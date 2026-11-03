@@ -44,7 +44,7 @@ import Language.PureScript.Errors (MultipleErrors(..))
 import Language.PureScript.Externs
 import qualified Language.PureScript.Make.Actions as Actions
 import Language.PureScript.Make.Actions (MakeActions(..), RebuildPolicy(..), ProgressMessage(..))
-import Language.PureScript.Make.Cache (CacheDb, CacheInfo, checkChanged)
+import Language.PureScript.Make.Cache (CacheDb, CacheInfo, checkChanged, needsRecheck)
 import Language.PureScript.Make.Monad (Make)
 import Language.PureScript.Names (ModuleName, runModuleName)
 import Language.PureScript.Sugar.Names.Env (Env, primEnv)
@@ -360,7 +360,8 @@ getRebuildStatusIsUpToDate MakeActions{..} cacheDb moduleName = do
     Right cacheInfo -> do
       cwd <- liftBase getCurrentDirectory
       (_newCacheInfo, isUpToDate) <- checkChanged cacheDb moduleName cwd cacheInfo
-      pure isUpToDate
+      -- a module skipped by an earlier failure needs its dependencies re-checked, so it gets a job
+      pure (isUpToDate && not (needsRecheck moduleName cacheDb))
 
 anyDepChanged :: ModuleName -> [(ModuleName, [ModuleName])] -> BuildPlan -> Make RebuildInstructions
 anyDepChanged moduleName graph buildPlan = do

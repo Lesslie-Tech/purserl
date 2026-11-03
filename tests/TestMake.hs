@@ -9,6 +9,7 @@ import Language.PureScript qualified as P
 import Language.PureScript.CST qualified as CST
 
 import Control.Monad (guard, void)
+import Data.Either (isLeft)
 import Control.Exception (tryJust)
 import Control.Monad.Error.Class (liftEither)
 import Control.Monad.IO.Class (liftIO)
@@ -31,11 +32,12 @@ utcMidnightOnDate :: Integer -> Int -> Int -> UTCTime
 utcMidnightOnDate year month day = UTCTime (fromGregorian year month day) (secondsToDiffTime 0)
 
 -- ASSUMPTION[drathier]: we're assuming A < B < C < ... etc in the tests below
-timestampA, timestampB, timestampC, timestampD :: UTCTime
+timestampA, timestampB, timestampC, timestampD, timestampE :: UTCTime
 timestampA = utcMidnightOnDate 2019 1 1
 timestampB = utcMidnightOnDate 2019 1 2
 timestampC = utcMidnightOnDate 2019 1 3
 timestampD = utcMidnightOnDate 2019 1 4
+timestampE = utcMidnightOnDate 2019 1 5
 
 -- stack test --fast --ta '-m asdf'
 
@@ -471,6 +473,197 @@ spec = do
 
       -- no changes when rebuilding
       compile modulePaths `shouldReturn` moduleNames []
+
+    it "asdf rebuilds a module re-exporting `module A` when a re-exported name is removed" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          moduleCPath = sourcesDir </> "C.purs"
+          modulePaths = [moduleAPath, moduleBPath, moduleCPath]
+          moduleAContent1 = "module A where\nfoo :: Int\nfoo = 1\nbar :: Int\nbar = 2\n"
+          moduleAContent2 = "module A where\nbar :: Int\nbar = 2\n"
+          moduleBContent = "module B (module A) where\nimport A\n"
+          moduleCContent1 = "module C where\nimport B\nx :: Int\nx = bar\n"
+          moduleCContent2 = "module C where\nimport B\nx :: Int\nx = foo\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent1
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      writeFileWithTimestamp moduleCPath timestampC moduleCContent1
+      compile modulePaths `shouldReturn` moduleNames ["A", "B", "C"]
+
+      -- B's export list changed; C only uses `bar`, so it doesn't have to rebuild
+      writeFileWithTimestamp moduleAPath timestampD moduleAContent2
+      compile modulePaths `shouldReturn` moduleNames ["A", "B"]
+      compile modulePaths `shouldReturn` moduleNames []
+
+      -- a user of the removed name must see that it's gone from B's exports
+      writeFileWithTimestamp moduleCPath timestampD moduleCContent2
+      (result, recompiled) <- compileWithResult modulePaths
+      isLeft result `shouldBe` True
+      recompiled `shouldBe` moduleNames ["C"]
+
+    it "asdf rebuilds a module re-exporting `module A` when A gains a name" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          moduleCPath = sourcesDir </> "C.purs"
+          modulePaths = [moduleAPath, moduleBPath, moduleCPath]
+          moduleAContent1 = "module A where\nfoo :: Int\nfoo = 1\n"
+          moduleAContent2 = "module A where\nfoo :: Int\nfoo = 1\nbaz :: Int\nbaz = 2\n"
+          moduleBContent = "module B (module A) where\nimport A\n"
+          moduleCContent1 = "module C where\nimport B\nx :: Int\nx = foo\n"
+          moduleCContent2 = "module C where\nimport B\nx :: Int\nx = baz\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent1
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      writeFileWithTimestamp moduleCPath timestampC moduleCContent1
+      compile modulePaths `shouldReturn` moduleNames ["A", "B", "C"]
+
+      writeFileWithTimestamp moduleAPath timestampD moduleAContent2
+      writeFileWithTimestamp moduleCPath timestampD moduleCContent2
+      compile modulePaths `shouldReturn` moduleNames ["A", "B", "C"]
+      compile modulePaths `shouldReturn` moduleNames []
+
+    it "asdf doesn't rebuild a module re-exporting `module A` through an import list when A gains a name" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          modulePaths = [moduleAPath, moduleBPath]
+          moduleAContent1 = "module A where\nfoo :: Int\nfoo = 1\n"
+          moduleAContent2 = "module A where\nfoo :: Int\nfoo = 1\nbaz :: Int\nbaz = 2\n"
+          moduleBContent = "module B (module A) where\nimport A (foo)\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent1
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      compile modulePaths `shouldReturn` moduleNames ["A", "B"]
+
+      writeFileWithTimestamp moduleAPath timestampD moduleAContent2
+      compile modulePaths `shouldReturn` moduleNames ["A"]
+
+    it "asdf rebuilds a module whose import list names a removed value" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          modulePaths = [moduleAPath, moduleBPath]
+          moduleAContent1 = "module A where\nfoo :: Int\nfoo = 1\nbar :: Int\nbar = 2\n"
+          moduleAContent2 = "module A where\nbar :: Int\nbar = 2\n"
+          -- `foo` is imported but never used
+          moduleBContent = "module B where\nimport A (foo, bar)\nx :: Int\nx = bar\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent1
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      compile modulePaths `shouldReturn` moduleNames ["A", "B"]
+
+      writeFileWithTimestamp moduleAPath timestampD moduleAContent2
+      (result, recompiled) <- compileWithResult modulePaths
+      isLeft result `shouldBe` True
+      recompiled `shouldBe` moduleNames ["A", "B"]
+
+    it "asdf rebuilds a module whose import list names a removed type class" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          modulePaths = [moduleAPath, moduleBPath]
+          moduleAContent1 = "module A where\nclass TC a where\n  tc :: a -> Int\nfoo :: Int\nfoo = 1\n"
+          moduleAContent2 = "module A where\nfoo :: Int\nfoo = 1\n"
+          moduleBContent = "module B where\nimport A (class TC, foo)\nx :: Int\nx = foo\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent1
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      compile modulePaths `shouldReturn` moduleNames ["A", "B"]
+
+      writeFileWithTimestamp moduleAPath timestampD moduleAContent2
+      (result, recompiled) <- compileWithResult modulePaths
+      isLeft result `shouldBe` True
+      recompiled `shouldBe` moduleNames ["A", "B"]
+
+    it "asdf rebuilds a user of an instance chain member when the member is removed and the next one takes over its generated name" $ do
+      let moduleKPath = sourcesDir </> "K.purs"
+          moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          modulePaths = [moduleKPath, moduleAPath, moduleBPath]
+          cls = "TCWithAVeryLongNameIndeedTruncated"
+          moduleKContent = T.unlines ["module K where", "class " <> cls <> " m x where", "  tc :: m -> x -> Int", "data P (s :: Symbol) = P"]
+          moduleAContent heads = T.unlines $ "module A where" : "import K" : "data Mode = Mode"
+            : zipWith (\kw h -> kw <> " " <> cls <> " Mode (P \"" <> h <> "\") where\n  tc _ _ = 1") ("instance" : repeat "else instance") heads
+          moduleBContent = "module B where\nimport K\nimport A\nbx :: Int\nbx = tc Mode (P :: P \"a\")\n"
+
+      writeFileWithTimestamp moduleKPath timestampA moduleKContent
+      writeFileWithTimestamp moduleAPath timestampA (moduleAContent ["a", "b", "c"])
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      compile modulePaths `shouldReturn` moduleNames ["K", "A", "B"]
+
+      -- the generated names are cut off before the type-level strings, so they're positional: the first name now belongs to the "b" instance
+      writeFileWithTimestamp moduleAPath timestampD (moduleAContent ["b", "c"])
+      (result, recompiled) <- compileWithResult modulePaths
+      isLeft result `shouldBe` True
+      recompiled `shouldBe` moduleNames ["A", "B"]
+
+    it "asdf doesn't rebuild users of an instance chain when the chain only moves down the file" $ do
+      let moduleKPath = sourcesDir </> "K.purs"
+          moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          modulePaths = [moduleKPath, moduleAPath, moduleBPath]
+          cls = "TCWithAVeryLongNameIndeedTruncated"
+          moduleKContent = T.unlines ["module K where", "class " <> cls <> " m x where", "  tc :: m -> x -> Int", "data P (s :: Symbol) = P"]
+          moduleAContent extra = T.unlines $ ["module A where", "import K", "data Mode = Mode"] <> extra
+            <> ["instance " <> cls <> " Mode (P \"a\") where\n  tc _ _ = 1", "else instance " <> cls <> " Mode (P \"b\") where\n  tc _ _ = 2"]
+          moduleBContent = "module B where\nimport K\nimport A\nbx :: Int\nbx = tc Mode (P :: P \"a\")\n"
+
+      writeFileWithTimestamp moduleKPath timestampA moduleKContent
+      writeFileWithTimestamp moduleAPath timestampA (moduleAContent [])
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      compile modulePaths `shouldReturn` moduleNames ["K", "A", "B"]
+
+      writeFileWithTimestamp moduleAPath timestampD (moduleAContent ["extra :: Int", "extra = 1", ""])
+      compile modulePaths `shouldReturn` moduleNames ["A"]
+
+    it "asdf doesn't rebuild modules that were skipped because a dependency failed, once the dependency is restored" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          moduleCPath = sourcesDir </> "C.purs"
+          modulePaths = [moduleAPath, moduleBPath, moduleCPath]
+          moduleAContent1 = "module A where\nax :: Int\nax = 1\n"
+          moduleAContent2 = "module A where\nax :: Int\nax = \"x\"\n"
+          moduleBContent = "module B where\nimport A\nbx :: Int\nbx = ax\n"
+          moduleCContent = "module C where\nimport B\ncx :: Int\ncx = bx\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent1
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent
+      writeFileWithTimestamp moduleCPath timestampC moduleCContent
+      compile modulePaths `shouldReturn` moduleNames ["A", "B", "C"]
+
+      -- A breaks; B and C are skipped
+      writeFileWithTimestamp moduleAPath timestampD moduleAContent2
+      (result1, _) <- compileWithResult modulePaths
+      isLeft result1 `shouldBe` True
+
+      -- A is restored; its exports are what B and C last saw, so only A needs to build
+      writeFileWithTimestamp moduleAPath timestampE moduleAContent1
+      compile modulePaths `shouldReturn` moduleNames ["A"]
+      compile modulePaths `shouldReturn` moduleNames []
+
+    it "asdf rechecks a module that was skipped because a dependency failed, once the dependency is fixed another way" $ do
+      let moduleAPath = sourcesDir </> "A.purs"
+          moduleBPath = sourcesDir </> "B.purs"
+          moduleCPath = sourcesDir </> "C.purs"
+          modulePaths = [moduleAPath, moduleBPath, moduleCPath]
+          moduleAContent1 = "module A where\nclass TC a where\n  tc :: a -> Int\ndata T = T\ninstance tcT :: TC T where\n  tc _ = 1\n"
+          moduleAContent2 = "module A where\nclass TC a where\n  tc :: a -> Int\ndata T = T\n"
+          moduleBContent1 = "module B where\nimport A\nbx :: Int\nbx = tc T\n"
+          moduleBContent2 = "module B where\nbx :: Int\nbx = 5\n"
+          moduleCContent = "module C where\nimport A\nimport B\ncx :: Int\ncx = tc T\ncy :: Int\ncy = bx\n"
+
+      writeFileWithTimestamp moduleAPath timestampA moduleAContent1
+      writeFileWithTimestamp moduleBPath timestampB moduleBContent1
+      writeFileWithTimestamp moduleCPath timestampC moduleCContent
+      compile modulePaths `shouldReturn` moduleNames ["A", "B", "C"]
+
+      -- removing the instance breaks B; C is skipped because B failed
+      writeFileWithTimestamp moduleAPath timestampD moduleAContent2
+      (result1, _) <- compileWithResult modulePaths
+      isLeft result1 `shouldBe` True
+
+      -- B stops using the instance, but C still needs it and must be told
+      writeFileWithTimestamp moduleBPath timestampD moduleBContent2
+      (result2, recompiled) <- compileWithResult modulePaths
+      isLeft result2 `shouldBe` True
+      recompiled `shouldBe` moduleNames ["B", "C"]
 
     it "asdf changing an unexported declaration doesn't trigger downstream recompiles" $ do
       -- first, type class without type arguments
