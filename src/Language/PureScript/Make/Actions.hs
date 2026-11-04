@@ -67,7 +67,7 @@ import qualified Build as Erl.Build
 import Data.Either (fromRight)
 import           Language.PureScript.Erl.Parser (parseFile)
 import           Data.List ((\\))
-import           Language.PureScript.Erl.CodeGen.Optimizer (optimize)
+import           Language.PureScript.Erl.CodeGen.Optimizer (optimize, OwnModule (..))
 import           Language.PureScript.Erl.Pretty (prettyPrintErl)
 import           Language.PureScript.Erl.CodeGen.Common (erlModuleName, erlModuleNameBase, atomModuleName, atom, ModuleType(..), runAtom)
 
@@ -412,8 +412,9 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
           True -> pure $ unsafePerformIO $ writeFile ("ast/" <> T.unpack (runModuleName mn) <> ".corefn.txt") (T.unpack $ T.replace ",Rec" ",\nRec" $ T.replace ",NonRec" ",\nNonRec" $ T.pack $ show m)
           False -> pure ()
 -}
-      optimized <- SupplyT.liftSupply (optimize exports rawErl)
-      checked <- SupplyT.liftSupply (optimize checkedExports checkedRawErl)
+      let ownModule = OwnModule (atomModuleName mn PureScriptModule) (atomModuleName mn ForeignModule) (M.fromList foreignExports)
+      optimized <- SupplyT.liftSupply (optimize ownModule exports rawErl)
+      checked <- SupplyT.liftSupply (optimize ownModule checkedExports checkedRawErl)
 {-
       !_ <-
         case True of -- runModuleName mn == "Hex" of

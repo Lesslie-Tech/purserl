@@ -1096,18 +1096,27 @@ data LibRule = LibRule
     ruleBuild :: Maybe PSString -> [Erl] -> Supply Erl
   }
 
--- | Inline a call whose arguments are all present. A partial application is
--- eta-expanded over the missing arguments, so it becomes a closure with the
--- inlined body instead of a call into the generic function.
+-- | Inline a call whose arguments are all present. A partial application, or a
+-- reference to the function itself, is eta-expanded over the missing
+-- arguments, so it becomes a closure with the inlined body instead of a call
+-- into the generic function.
 inlineLibFns :: (Erl -> Maybe PSString) -> Map.Map (Text, Text) LibRule -> Erl -> Supply Erl
-inlineLibFns symbolOf table expr@EApp {}
-  | Just (key, allArgs) <- flattenCall expr,
-    Just rule <- Map.lookup key table,
-    Just (label, args) <- splitLabel rule allArgs =
-    case compare (length args) (ruleArity rule) of
-      EQ -> ruleBuild rule label args
-      LT | isJust label || not (null args) -> etaExpand rule label args
-      _ -> pure expr
+inlineLibFns symbolOf table = \case
+  expr@EApp {}
+    | Just (key, allArgs) <- flattenCall expr,
+      Just rule <- Map.lookup key table,
+      Just (label, args) <- splitLabel rule allArgs ->
+      case compare (length args) (ruleArity rule) of
+        EQ -> ruleBuild rule label args
+        LT -> etaExpand rule label args
+        _ -> pure expr
+  -- `fun m:f/N` passed as a value.
+  EFunRef (Atom (Just m) f) n
+    | Just rule <- Map.lookup (m, f) table,
+      not (ruleLabelled rule),
+      ruleArity rule == n ->
+      etaExpand rule Nothing []
+  expr -> pure expr
   where
     splitLabel rule as
       | not (ruleLabelled rule) = Just (Nothing, as)
@@ -1129,7 +1138,6 @@ inlineLibFns symbolOf table expr@EApp {}
       EFunRef {} -> True
       EFunFull {} -> True
       _ -> False
-inlineLibFns _ _ expr = pure expr
 
 freshName :: Text -> Supply Text
 freshName prefix = do
