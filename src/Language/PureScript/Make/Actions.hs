@@ -76,6 +76,7 @@ import qualified Control.Monad.Trans.Reader as ReaderT
 import qualified Control.Monad.Supply as SupplyT
 import qualified Control.Monad.Logger as Logger
 import qualified Language.PureScript.Erl.Errors
+import qualified Language.PureScript.Erl.Errors.Types as Erl
 import qualified Language.PureScript.Erl.Make.Monad
 
 
@@ -386,17 +387,15 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
         --     , i)
         --   )
 
-        let f m =
-              liftIO $ do
-                (l, r) <-
+        let at = positionedError (CF.moduleSourceSpan m)
+            f erlM = do
+              (l, warnings) <-
+                liftIO $
                   Language.PureScript.Erl.Make.Monad.runMake
                     (Options False False codegenTargets)
-                    m
-
-                case (l, r) of
-                  -- TODO[drathier]: don't throw away purerl errors and warnings
-                  (Right a, _) -> pure a
-                  (Left lerrs, rerrs) -> internalError (show (Language.PureScript.Erl.Errors.runMultipleErrors lerrs, rerrs))
+                    erlM
+              tell (fromErlErrors [ErrorInModule mn, at] warnings)
+              either (throwError . fromErlErrors [at]) pure l
 
         SupplyT.mapSupplyT
           f
@@ -523,3 +522,17 @@ ffiCodegen' foreigns makeOutputPath m =
   where
   mn = CF.moduleName m
   requiresForeign = not . null . CF.moduleForeign
+
+-- | The extra hints (module, source span) are appended to each message's own hints.
+fromErlErrors :: [ErrorMessageHint] -> Language.PureScript.Erl.Errors.MultipleErrors -> MultipleErrors
+fromErlErrors extra = MultipleErrors . map convert . Language.PureScript.Erl.Errors.runMultipleErrors
+  where
+  convert (Erl.ErrorMessage hints err) = ErrorMessage (hints ++ extra) (simple err)
+  simple = \case
+    Erl.FileIOError what err -> FileIOError what err
+    Erl.InvalidFFIArity mn name implArity typeArity -> InvalidFFIArity mn name implArity typeArity
+    Erl.MissingFFIModule mn -> MissingFFIModule mn
+    Erl.UnnecessaryFFIModule mn path -> UnnecessaryFFIModule mn path
+    Erl.MissingFFIImplementations mn idents -> MissingFFIImplementations mn idents
+    Erl.UnusedFFIImplementations mn idents -> UnusedFFIImplementations mn idents
+    Erl.InternalError msg -> InternalCompilerError msg "Erlang code generation"

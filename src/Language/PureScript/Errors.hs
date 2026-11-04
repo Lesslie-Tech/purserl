@@ -67,6 +67,9 @@ data SimpleErrorMessage
   | WarningParsingCSTModule CST.ParserWarning
   | MissingFFIModule ModuleName
   | UnnecessaryFFIModule ModuleName FilePath
+  | InvalidFFIArity ModuleName Text Int Int -- ^ Module, foreign function name, arity of the implementation, arity of the declared type
+  | MissingFFIImplementations ModuleName [Ident]
+  | UnusedFFIImplementations ModuleName [Ident]
   | FileIOError Text Text -- ^ A description of what we were trying to do, and the error which occurred
   | InfiniteType SourceType
   | InfiniteKind SourceType
@@ -238,6 +241,9 @@ errorCode em = case unwrapErrorMessage em of
   WarningParsingCSTModule{} -> "WarningParsingModule"
   MissingFFIModule{} -> "MissingFFIModule"
   UnnecessaryFFIModule{} -> "UnnecessaryFFIModule"
+  InvalidFFIArity{} -> "InvalidFFIArity"
+  MissingFFIImplementations{} -> "MissingFFIImplementations"
+  UnusedFFIImplementations{} -> "UnusedFFIImplementations"
   FileIOError{} -> "FileIOError"
   InfiniteType{} -> "InfiniteType"
   InfiniteKind{} -> "InfiniteKind"
@@ -690,6 +696,18 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
       paras [ line $ "An unnecessary foreign module implementation was provided for module " <> markCode (runModuleName mn) <> ": "
             , indent . lineS $ path
             , line $ "Module " <> markCode (runModuleName mn) <> " does not contain any foreign import declarations, so a foreign module is not necessary."
+            ]
+    renderSimpleErrorMessage (InvalidFFIArity mn name implArity typeArity) =
+      paras [ line $ "The foreign import " <> markCode name <> " in module " <> markCode (runModuleName mn) <> " is implemented with arity " <> T.pack (show implArity) <> ", but its declared type only has arity " <> T.pack (show typeArity) <> "."
+            , line "Declare the import with a curried function type of the implementation's arity. Types such as Fn2 or EffectFn2 count as arity 0 here."
+            ]
+    renderSimpleErrorMessage (MissingFFIImplementations mn idents) =
+      paras [ line $ "The following foreign imports in module " <> markCode (runModuleName mn) <> " have no implementation:"
+            , indent . paras $ map (line . markCode . showIdent) idents
+            ]
+    renderSimpleErrorMessage (UnusedFFIImplementations mn idents) =
+      paras [ line $ "The foreign module of " <> markCode (runModuleName mn) <> " exports implementations that are not declared as foreign imports:"
+            , indent . paras $ map (line . markCode . showIdent) idents
             ]
     renderSimpleErrorMessage InvalidDoBind =
       line "The last statement in a 'do' block must be an expression, but this block ends with a binder."
