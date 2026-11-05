@@ -9,12 +9,11 @@ import Prelude
 
 import Control.Arrow (second)
 import Control.Monad.Error.Class (MonadError(..))
-import Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify)
+import Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify, put)
 import Control.Monad (forM_, guard, join, unless, when, (<=<))
 import Control.Exception (Exception, onException, throwIO, try)
 import System.IO.Unsafe (unsafePerformIO)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State.Strict (put)
 import Control.Monad.Supply (SupplyT(..))
 import Control.Monad.Supply.Class (MonadSupply(..))
 import Control.Monad.Trans.Class (lift)

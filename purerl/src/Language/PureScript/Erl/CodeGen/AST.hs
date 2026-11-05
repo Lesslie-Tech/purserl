@@ -14,6 +14,7 @@ import Data.Text qualified as T
 import Control.Monad ((>=>))
 import Control.Monad.Identity
 import Control.Arrow (second)
+import Data.Bifunctor (bimap)
 
 import Language.PureScript.PSString (PSString)
 import Language.PureScript.AST.SourcePos
@@ -421,7 +422,7 @@ everywhereOnErl f = go
       EAndThen a b -> f $ EAndThen (go a) (go b)
       ELet a b -> f $ ELet (go a) (go b)
       ERawErlangSource fmt binds -> f $ ERawErlangSource fmt $ map (second go) binds
-      EMaybe kind steps final -> f $ EMaybe kind (map (\(p, e) -> (fmap go p, go e)) steps) (go final)
+      EMaybe kind steps final -> f $ EMaybe kind (map (bimap (fmap go) go) steps) (go final)
 
       -- other -> error (show ("other", other))
 

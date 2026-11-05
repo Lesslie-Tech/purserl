@@ -2,6 +2,8 @@ module TestDiscard (spec) where
 
 import Prelude
 
+import Control.Monad (void)
+
 import Data.Map qualified as M
 import Data.Text qualified as T
 
@@ -23,7 +25,7 @@ typecheck src =
           makeActions = P.buildMakeActions ".test_modules/discard" filePathMap M.empty False Nothing
       (result, _) <- P.runMake P.defaultOptions $
         P.rebuildModuleTypecheck makeActions P.primEnv [] m Nothing P.UnknownRecompileReason
-      pure $ () <$ result
+      pure $ void result
 
 spec :: Spec
 spec =

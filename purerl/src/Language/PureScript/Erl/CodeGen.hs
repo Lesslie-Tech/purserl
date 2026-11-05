@@ -23,7 +23,7 @@ import Data.Foldable (find, traverse_, foldl')
 import Data.List (nub)
 import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -781,7 +781,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
           | otherwise =
               ECaseOf guard $
                 (EBinder ETrue, happy)
-                  : [(EBinder EFalse, guardsToErl failureCont restGuards) | not (null restGuards && failureCont == Nothing)]
+                  : [(EBinder EFalse, guardsToErl failureCont restGuards) | not (null restGuards && isNothing failureCont)]
 
         binderToErl :: Binder Ann -> StateT DB ErlW Erl
         binderToErl = \case

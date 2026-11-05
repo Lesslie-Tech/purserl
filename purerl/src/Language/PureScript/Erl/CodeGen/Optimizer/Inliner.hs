@@ -11,6 +11,7 @@ module Language.PureScript.Erl.CodeGen.Optimizer.Inliner
   )
 where
 
+import Control.Monad ((>=>))
 import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (fresh))
 import qualified Data.Map as Map
@@ -102,6 +103,7 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         fn
           | isFn (EC.dataUnit, EC.unit) fn -> EAtomLiteral $ Atom Nothing "unit"
           | isFn ("map@ps", "empty") fn -> EMapLiteral []
+          | isFn ("set@ps", "empty") fn -> EMapLiteral []
           | isFn ("list@ps", "empty") fn -> EListLiteral []
 
         -- [drathier]: constant folding
@@ -111,6 +113,9 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         -- A map built from a literal list of literal pairs is a map literal.
         EApp _ fn [EArrayLiteral es] | isMapBuilder "fromArray" fn, Just m <- mapFromPairs es -> m
         EApp _ fn [EListLiteral es] | isMapBuilder "fromList" fn, Just m <- mapFromPairs es -> m
+
+        -- A set (a version 2 `sets` set, which is a map to `[]`) built from a literal list is a map literal.
+        EApp _ fn [EListLiteral es, EListLiteral []] | fn == erlangMapsFromKeys -> setLiteral es
 
         EBinary Add (EIntLit a) (EIntLit b) -> EIntLit (a+b)
         EBinary Subtract (EIntLit a) (EIntLit b) -> EIntLit (a-b)
@@ -392,7 +397,7 @@ data Binary
 data Unary = Unary (Text, PSString) (Text, PSString) UnaryOperator
 
 inlineCommonFnsM :: (Erl -> Maybe PSString) -> Erl -> Supply Erl
-inlineCommonFnsM symbolOf = everywhereOnErlTopDownM (\e -> inlineAltChain e >>= inlineLibFns symbolOf libRules)
+inlineCommonFnsM symbolOf = everywhereOnErlTopDownM (inlineAltChain >=> inlineLibFns symbolOf libRules)
 
 -- | `CodeGen.altChain` over the operands of `<|>`: the first operand that
 -- isn't the instance's failure value, else the last one. A `maybe` block
@@ -663,7 +668,7 @@ flattenFailureCases = everywhereOnErl $ \case
                 v `notElem` concatMap varsInExpr (more <> [final]) ->
                 (replaceIdents [(v, EVar a)] pat, more)
             _ -> (pat, stmts)
-          steps = step pat' scrut <> map ((,) Nothing) stmts'
+          steps = step pat' scrut <> map (Nothing,) stmts'
        in plain . unused $ case final of
             EMaybe ExitsOnFailure more final' -> EMaybe ExitsOnFailure (steps <> more) final'
             _ -> EMaybe ExitsOnFailure steps final
@@ -701,7 +706,7 @@ flattenFailureCases = everywhereOnErl $ \case
     step pat = \case
       EMaybe ExitsOnFailure inner final -> inner <> step pat final
       scrut@(EMapLiteral fields)
-        | Just binds <- staticMatch pat fields -> map ((,) Nothing) binds
+        | Just binds <- staticMatch pat fields -> map (Nothing,) binds
         | otherwise -> [(Just pat, scrut)]
       scrut -> [(Just pat, scrut)]
 
@@ -724,7 +729,7 @@ flattenFailureCases = everywhereOnErl $ \case
 -- | The success case of a Veither, Maybe or Either.
 success :: Erl -> Bool
 success = \case
-  EMapPattern pats -> any (== (Atom Nothing "type", EStringLiteral (mkString "_"))) pats
+  EMapPattern pats -> (Atom Nothing "type", EStringLiteral (mkString "_")) `elem` pats
   ETupleLiteral (EAtomLiteral (Atom Nothing tag) : _) -> tag `elem` ["just", "right"]
   _ -> False
 
@@ -773,7 +778,7 @@ applySpine = go []
     -- into every arm, so only variables and literals, and only when every arm is a function.
     pushable alts as
       | all (null . snd) as = any (thunk . snd) alts
-      | otherwise = all trivial (concatMap snd as) && all (fun . snd) alts
+      | otherwise = all (all trivial . snd) as && all (fun . snd) alts
 
     trivial = \case
       EVar _ -> True
@@ -1027,6 +1032,24 @@ erlangMapsMerge = EAtomLiteral (Atom (Just "maps") "merge")
 erlangMapsMap :: Erl
 erlangMapsMap = EAtomLiteral (Atom (Just "maps") "map")
 
+erlangMapsFromKeys :: Erl
+erlangMapsFromKeys = EAtomLiteral (Atom (Just "maps") "from_keys")
+
+erlangSetsIsSubset :: Erl
+erlangSetsIsSubset = EAtomLiteral (Atom (Just "sets") "is_subset")
+
+erlangSetsUnion :: Erl
+erlangSetsUnion = EAtomLiteral (Atom (Just "sets") "union")
+
+erlangSetsSubtract :: Erl
+erlangSetsSubtract = EAtomLiteral (Atom (Just "sets") "subtract")
+
+erlangSetsFilter :: Erl
+erlangSetsFilter = EAtomLiteral (Atom (Just "sets") "filter")
+
+erlangIntegerToBinary :: Erl
+erlangIntegerToBinary = EAtomLiteral (Atom (Just "erlang") "integer_to_binary")
+
 erlangListsMap :: Erl
 erlangListsMap = EAtomLiteral (Atom (Just "lists") "map")
 
@@ -1051,7 +1074,7 @@ flattenCall = go []
       _ -> Nothing
 
 -- | A key that erlc can see is a constant, which is when it warns about a repeated key.
-data LitKey = LitStr PSString | LitInt Integer | LitNum Double | LitAtom Atom | LitTuple [LitKey]
+data LitKey = LitStr PSString | LitInt Integer | LitNum Double | LitAtom Atom | LitTuple [LitKey] | LitList [LitKey] | LitMap [(Atom, LitKey)]
   deriving (Eq, Ord)
 
 litKey :: Erl -> Maybe LitKey
@@ -1061,6 +1084,8 @@ litKey = \case
   ENumLit n -> Just (LitNum n)
   EAtomLiteral a -> Just (LitAtom a)
   ETupleLiteral es -> LitTuple <$> traverse litKey es
+  EListLiteral es -> LitList <$> traverse litKey es
+  EMapLiteral fs -> LitMap . sortOn fst <$> traverse (traverse litKey) fs
   _ -> Nothing
 
 -- | A map literal with arbitrary key expressions (`EMapLiteral` only takes atom keys). Later pairs win,
@@ -1080,6 +1105,10 @@ mapLiteral pairs = case kept of
       Just lk | lk `Set.member` seen -> go seen rest
               | otherwise -> p : go (Set.insert lk seen) rest
       Nothing -> p : go seen rest
+
+-- | A version 2 `sets` set of the given elements.
+setLiteral :: [Erl] -> Erl
+setLiteral es = mapLiteral [(e, EListLiteral []) | e <- es]
 
 -- | What a monad wraps around its base type, outermost first.
 data Wrapper = Reader | Thunk
@@ -1267,6 +1296,30 @@ libRules =
           k <- freshName "Key"
           v <- freshName "Val"
           pure (app erlangMapsMap [EFunN Nothing [k, v] (app (app f [EVar k]) [EVar v]), m])),
+        (("map@ps", "lookup"), r2 $ \k m -> do
+          v <- freshVar "Val"
+          pure $ ECaseOf (app erlangMapsFind [k, m]) [(EBinder (tagged "ok" [v]), just v), (EBinder (atom "error"), nothing)]),
+        (("int@ps", "toString"), r1 $ \x -> pure (app erlangIntegerToBinary [x])),
+        -- A set is a version 2 `sets` set: a map from each element to `[]`.
+        (("set@ps", "member"), r2 $ \x s -> pure (app erlangMapsIsKey [x, s])),
+        (("set@ps", "contains"), r2 $ \s x -> pure (app erlangMapsIsKey [x, s])),
+        (("set@ps", "insert"), r2 $ \x s -> pure (app erlangMapsPut [x, EListLiteral [], s])),
+        (("set@ps", "delete"), r2 $ \x s -> pure (app erlangMapsRemove [x, s])),
+        (("set@ps", "isEmpty"), r1 $ \s -> pure (EBinary EqualTo (EMapLiteral []) s)),
+        (("set@ps", "isNotEmpty"), r1 $ \s -> pure (EBinary NotEqualTo (EMapLiteral []) s)),
+        (("set@ps", "size"), r1 $ \s -> pure (app erlangMapsSize [s])),
+        (("set@ps", "toList"), r1 $ \s -> pure (app erlangMapsKeys [s])),
+        (("set@ps", "toArray"), r1 $ \s -> pure (app erlangArrayFromList [app erlangMapsKeys [s]])),
+        (("set@ps", "singleton"), r1 $ \x -> pure (setLiteral [x])),
+        (("set@ps", "fromList"), r1 $ \l -> pure (app erlangMapsFromKeys [l, EListLiteral []])),
+        (("set@ps", "fromArray"), r1 $ \a -> pure $ case a of
+          EArrayLiteral es -> app erlangMapsFromKeys [EListLiteral es, EListLiteral []]
+          _ -> app erlangMapsFromKeys [app erlangArrayToList [a], EListLiteral []]),
+        (("set@ps", "subset"), r2 $ \a b -> pure (app erlangSetsIsSubset [a, b])),
+        (("set@ps", "union"), r2 $ \a b -> pure (app erlangSetsUnion [a, b])),
+        (("set@ps", "unions"), r1 $ \l -> pure (app erlangSetsUnion [l])),
+        (("set@ps", "difference"), r2 $ \a b -> pure (app erlangSetsSubtract [a, b])),
+        (("set@ps", "keepIf"), r2 $ \p s -> pure (app erlangSetsFilter [p, s])),
         (("map@ps", "singleton"), r2 $ \k v -> pure (mapLiteral [(k, v)])),
         (("map@ps", "insert"), r3 $ \k v m -> pure (app erlangMapsPut [k, v, m])),
         (("map@ps", "unsafeUpdate"), r3 $ \k v m -> pure (app erlangMapsUpdate [k, v, m])),
