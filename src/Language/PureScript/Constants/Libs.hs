@@ -169,22 +169,6 @@ pattern C_Inl = Qualified (ByModuleName (ModuleName "Data.Generic.Rep")) (Proper
 pattern C_Inr :: Qualified (ProperName 'ConstructorName)
 pattern C_Inr = Qualified (ByModuleName (ModuleName "Data.Generic.Rep")) (ProperName "Inr")
 
--- Data.HeytingAlgebra
-pattern I_conj :: Qualified Ident
-pattern I_conj = Qualified (ByModuleName (ModuleName "Data.HeytingAlgebra")) (Ident "conj")
-
-pattern P_conj :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_conj = (ModuleName "Data.HeytingAlgebra", "conj")
-
-pattern P_disj :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_disj = (ModuleName "Data.HeytingAlgebra", "disj")
-
-pattern P_not :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_not = (ModuleName "Data.HeytingAlgebra", "not")
-
-pattern P_heytingAlgebraBoolean :: forall a. (Eq a, IsString a) => (ModuleName, a)
-pattern P_heytingAlgebraBoolean = (ModuleName "Data.HeytingAlgebra", "heytingAlgebraBoolean")
-
 -- Data.Monoid
 pattern I_mempty :: Qualified Ident
 pattern I_mempty = Qualified (ByModuleName (ModuleName "Data.Monoid")) (Ident "mempty")

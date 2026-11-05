@@ -174,8 +174,8 @@ binOpRank op = case op of
 
 unaryText :: UnaryOperator -> Builder
 unaryText Negate = "-"
-unaryText Not = "not"
-unaryText BitwiseNot = "bnot"
+unaryText Not = "not "
+unaryText BitwiseNot = "bnot "
 unaryText Positive = "+"
 
 binOpText :: BinaryOperator -> Builder

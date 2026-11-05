@@ -135,6 +135,12 @@ inlineCommonValuesBottomUp expander = everywhereOnErl convert
         EBinary Add (EBinary Add a b) c -> floatAssocInt Add a b c
         EBinary Multiply (EBinary Multiply a b) c -> floatAssocInt Multiply a b c
 
+        -- A scrutinee that is bound only to be tested first.
+        ELet (EBind (EVar v) a) (EBinary AndAlso (EVar v') b) | v == v', v `notElem` varsInExpr b -> EBinary AndAlso a b
+
+        -- `if a then b else false`
+        ECaseOf a [(EBinder ETrue, b), (EBinder pat, EFalse)] | pat == EFalse || pat == EVar "_" -> EBinary AndAlso a b
+
         EBinary AndAlso ETrue b -> b
         EBinary AndAlso a ETrue -> a
         EBinary AndAlso EFalse _ -> EFalse
@@ -323,14 +329,6 @@ specialize = everywhereOnErl onErl
         EApp2 "data_eq@ps" "eq" "data_eq@ps" inst a b | isInst inst "eqNumber" -> EBinary EqualTo a b
         EApp3 "data_eq@ps" "eq" "data_eq@ps" inst a b | isInst inst "eqNumber" -> EBinary EqualTo a b
         EApp _ (EAtomLiteral (Atom (Just "math@ps") "remainder")) [a,b] -> EBinary FRemainder a b
-
-        -- Boolean
-        EApp1 "data_heytingAlgebra@ps" "conj" "data_heytingAlgebra@ps" inst a b | isInst inst "heytingAlgebraBoolean" -> EBinary AndAlso a b
-        EApp2 "data_heytingAlgebra@ps" "conj" "data_heytingAlgebra@ps" inst a b | isInst inst "heytingAlgebraBoolean" -> EBinary AndAlso a b
-        EApp3 "data_heytingAlgebra@ps" "conj" "data_heytingAlgebra@ps" inst a b | isInst inst "heytingAlgebraBoolean" -> EBinary AndAlso a b
-        EApp1 "data_heytingAlgebra@ps" "disj" "data_heytingAlgebra@ps" inst a b | isInst inst "heytingAlgebraBoolean" -> EBinary OrElse a b
-        EApp2 "data_heytingAlgebra@ps" "disj" "data_heytingAlgebra@ps" inst a b | isInst inst "heytingAlgebraBoolean" -> EBinary OrElse a b
-        EApp3 "data_heytingAlgebra@ps" "disj" "data_heytingAlgebra@ps" inst a b | isInst inst "heytingAlgebraBoolean" -> EBinary OrElse a b
 
         -- String
         EApp1 "data_semigroup@ps" "append" "data_semigroup@ps" inst a b | isInst inst "semigroupString" -> EBinary BinaryConcat a b
@@ -829,10 +827,8 @@ binaryOperators :: Map.Map ((Text, Text), (Text, Text)) (Either BinaryOperator (
 binaryOperators =
   Map.fromList $
     conv
-      <$> ( [ Binary euclideanRingNumber opDiv FDivide,
+      <$> ( [ Binary euclideanRingNumber opDiv FDivide
               -- [drathier]: Purescript euclidian integer division is not the same division as erlang division, so we can't inline it as `div` here. See data_euclideanRing@foreign:intDiv and https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/divmodnote-letter.pdf for the various kinds of division.
-              Binary heytingAlgebraBoolean opConj AndAlso,
-              Binary heytingAlgebraBoolean opDisj OrElse
             ]
               ++ concatMap
                 ( \(semi, ring) ->
@@ -870,8 +866,7 @@ unaryOperators =
   Map.fromList $
     (\(Unary (dmod, dfn) (omod, ofn) result) -> (((dmod, atomPS dfn), (omod, atomPS ofn)), result))
       <$> [ Unary ringNumber opNegate Negate,
-            Unary ringInt opNegate Negate,
-            Unary heytingAlgebraBoolean opNot Not
+            Unary ringInt opNegate Negate
           ]
 
 semiringNumber :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
@@ -916,9 +911,6 @@ ordString = (EC.dataOrd, snd C.P_ordString)
 -- semigroupString :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 -- semigroupString = (EC.dataSemigroup, snd $ C.P_semigroupString)
 
-heytingAlgebraBoolean :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-heytingAlgebraBoolean = (EC.dataHeytingAlgebra, snd C.P_heytingAlgebraBoolean)
-
 -- semigroupoidFn :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 -- semigroupoidFn = (EC.controlSemigroupoid, snd $ C.P_semigroupoidFn)
 
@@ -960,15 +952,6 @@ opNegate = (EC.dataRing, snd C.P_negate)
 
 opDiv :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
 opDiv = (EC.dataEuclideanRing, snd C.P_div)
-
-opConj :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opConj = (EC.dataHeytingAlgebra, snd C.P_conj)
-
-opDisj :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opDisj = (EC.dataHeytingAlgebra, snd C.P_disj)
-
-opNot :: forall a b. (IsString a, IsString b, Eq b) => (a, b)
-opNot = (EC.dataHeytingAlgebra, snd C.P_not)
 
 functorVoid :: forall a b. (IsString a, IsString b) => (a, b)
 functorVoid = (EC.dataFunctor, EC.void)
@@ -1320,6 +1303,10 @@ libRules =
         (("set@ps", "unions"), r1 $ \l -> pure (app erlangSetsUnion [l])),
         (("set@ps", "difference"), r2 $ \a b -> pure (app erlangSetsSubtract [a, b])),
         (("set@ps", "keepIf"), r2 $ \p s -> pure (app erlangSetsFilter [p, s])),
+        -- `and` and `or` short-circuit once inlined, so the right operand is only evaluated when needed.
+        (("boolean@ps", "and"), r2 $ \a b -> pure (EBinary AndAlso a b)),
+        (("boolean@ps", "or"), r2 $ \a b -> pure (EBinary OrElse a b)),
+        (("boolean@ps", "not"), r1 $ \a -> pure (EUnary Not a)),
         (("map@ps", "singleton"), r2 $ \k v -> pure (mapLiteral [(k, v)])),
         (("map@ps", "insert"), r3 $ \k v m -> pure (app erlangMapsPut [k, v, m])),
         (("map@ps", "unsafeUpdate"), r3 $ \k v m -> pure (app erlangMapsUpdate [k, v, m])),

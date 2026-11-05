@@ -31,9 +31,6 @@ controlApplicative :: forall a. (IsString a) => a
 controlApplicative = "control_applicative@ps"
 
 
-dataHeytingAlgebra :: forall a. (IsString a) => a
-dataHeytingAlgebra = "data_heytingAlgebra@ps"
-
 dataEq :: forall a. (IsString a) => a
 dataEq = "data_eq@ps"
 

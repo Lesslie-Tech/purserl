@@ -207,8 +207,13 @@ deriveEq utc = do
       y <- freshIdent "y"
       lamCase2 x y . addCatch <$> mapM mkCtorClause ctors
 
-    preludeConj :: Expr -> Expr -> Expr
-    preludeConj = App . App (mkRef Libs.I_conj)
+    -- A case rather than a call to a Boolean function, so the instance doesn't depend on which modules are built first.
+    andCase :: Expr -> Expr -> Expr
+    andCase l r =
+      Case [l]
+        [ CaseAlternative [LiteralBinder nullSourceSpan (BooleanLiteral True)] (unguarded r)
+        , CaseAlternative [NullBinder] (unguarded (mkLit (BooleanLiteral False)))
+        ]
 
     preludeEq :: Expr -> Expr -> Expr
     preludeEq = App . App (mkRef Libs.I_eq)
@@ -236,7 +241,7 @@ deriveEq utc = do
     conjAll :: [Expr] -> Expr
     conjAll = \case
       [] -> mkLit (BooleanLiteral True)
-      xs -> foldl1 preludeConj xs
+      xs -> foldl1 andCase xs
 
     toEqTest :: Expr -> Expr -> SourceType -> Expr
     toEqTest l r ty
