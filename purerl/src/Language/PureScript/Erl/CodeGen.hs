@@ -7,6 +7,8 @@ module Language.PureScript.Erl.CodeGen
     moduleToErl,
     buildCodegenEnvironment,
     CodegenEnvironment,
+    FnArity (..),
+    instanceArities,
   )
 where
 
@@ -21,6 +23,7 @@ import Control.Monad.Writer.Strict (MonadWriter (..), WriterT (runWriterT))
 import Data.Either (fromRight)
 import Data.Foldable (find, traverse_, foldl')
 import Data.List (nub)
+import qualified Data.List.NonEmpty as NEL
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe (catMaybes, fromMaybe, isNothing, mapMaybe)
@@ -47,7 +50,7 @@ import Language.PureScript.CoreFn
     ssAnn,
   )
 import Language.PureScript.Environment as E
-  ( Environment (names, typeClasses, typeSynonyms, types),
+  ( Environment (names, typeClassDictionaries, typeClasses, typeSynonyms, types),
     TypeClassData (typeClassIsEmpty),
     tyFunction,
   )
@@ -83,6 +86,7 @@ import Language.PureScript.Names
   )
 import Language.PureScript.Options (Options)
 import Language.PureScript.Traversals (sndM)
+import Language.PureScript.TypeClassDictionaries (TypeClassDictionaryInScope (..))
 import Language.PureScript.Types
   ( Constraint (constraintClass),
     SourceType,
@@ -172,10 +176,29 @@ isEmptyClassConstraint :: E.Environment -> Constraint a -> Bool
 isEmptyClassConstraint env con =
   maybe False typeClassIsEmpty $ M.lookup (constraintClass con) (E.typeClasses env)
 
+-- Instance functions aren't in E.names; they take one dictionary per non-empty-class constraint.
+-- Instances of an empty class have no dictionary at all, whatever their constraints. Constraints on classes
+-- missing from the environment (unexported ones) can't be classified, and different modules must agree on
+-- the arity, so those instances get none.
+instanceArities :: E.Environment -> M.Map (Qualified Ident) FnArity
+instanceArities env =
+  M.fromList
+    [ (tcdValue d, Arity (n, 0))
+      | byModule <- M.elems (E.typeClassDictionaries env),
+        perClass <- M.elems byModule,
+        dicts <- M.elems perClass,
+        d <- NEL.toList dicts,
+        maybe True (not . typeClassIsEmpty) (M.lookup (tcdClassName d) (E.typeClasses env)),
+        Just deps <- [tcdDependencies d],
+        all ((`M.member` E.typeClasses env) . constraintClass) deps,
+        let n = length (filter (not . isEmptyClassConstraint env) deps),
+        n > 0
+    ]
+
 data CodegenEnvironment = CodegenEnvironment E.Environment (M.Map (Qualified Ident) FnArity)
 
 buildCodegenEnvironment :: E.Environment -> CodegenEnvironment
-buildCodegenEnvironment env = CodegenEnvironment env explicitArities
+buildCodegenEnvironment env = CodegenEnvironment env (explicitArities `M.union` instanceArities env)
   where
     tyArity :: SourceType -> FnArity
     tyArity t = Arity $ go 0 t'

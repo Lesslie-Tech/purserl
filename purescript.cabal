@@ -429,6 +429,7 @@ test-suite tests
     TestEmptyClassDictElision
     TestDiscard
     TestErlFlatten
+    TestErlInstanceArity
     TestGraph
     TestHierarchy
     TestIde

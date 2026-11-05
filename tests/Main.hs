@@ -12,6 +12,7 @@ import TestCst qualified
 import TestEmptyClassDictElision qualified
 import TestDiscard qualified
 import TestErlFlatten qualified
+import TestErlInstanceArity qualified
 import TestHierarchy qualified
 import TestIde qualified
 import TestMake qualified
@@ -35,5 +36,6 @@ main = do
     describe "empty class dict elision" TestEmptyClassDictElision.spec
     describe "discard" TestDiscard.spec
     describe "erl flatten" TestErlFlatten.spec
+    describe "erl instance arity" TestErlInstanceArity.spec
     describe "hierarchy" TestHierarchy.spec
     describe "graph" TestGraph.spec
