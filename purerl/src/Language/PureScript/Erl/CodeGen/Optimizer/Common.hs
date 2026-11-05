@@ -102,13 +102,3 @@ replaceIdents unfilteredVars = go
         g' = (\(Guard eg) -> Just $ Guard $ replaceIdents vars' eg) =<< g
 -}
 
-
-collect :: Int -> Erl -> Erl
-collect n e = go e []
-  where
-    go :: Erl -> [Erl] -> Erl
-    go (EApp meta f x) acc | not (null x) =
-      case x <> acc of
-        args | length args >= n -> EApp meta f args
-        args -> go f args
-    go _other _acc = e

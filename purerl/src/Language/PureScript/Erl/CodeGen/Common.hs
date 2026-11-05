@@ -11,7 +11,6 @@ module Language.PureScript.Erl.CodeGen.Common
 , ModuleType(..)
 , toAtomName
 , toVarName
-, identToAtomName
 , identToVar
 , nameIsErlReserved
 , utf8BinaryContent
@@ -149,9 +148,6 @@ toVarName v = case uncons v of
       | isAlpha x && isLatin1 x = singleton (toUpper x)
       | x == '_' = "_"
       | otherwise = "V@1" <> replaceChar x
-
-identToAtomName :: Ident -> Text
-identToAtomName = toAtomName . runIdent'
 
 identToVar :: Ident -> Text
 identToVar = toVarName . runIdent'

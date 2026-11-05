@@ -59,7 +59,7 @@ import Language.PureScript.Erl.CodeGen.Common
     freshNameErl,
     freshNameErl',
     identToVar,
-    toAtomName, identToAtomName, runIdent', runAtom
+    toAtomName, runIdent', runAtom
   )
 import Language.PureScript.Erl.CodeGen.Constants.PureScriptModules
   ( dataFunctionUncurried,
