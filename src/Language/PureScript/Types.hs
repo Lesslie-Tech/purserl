@@ -1,3 +1,4 @@
+{-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE MagicHash #-}
 -- |
@@ -9,7 +10,7 @@ import Prelude
 import Protolude (ordNub, fromMaybe)
 
 import Control.Applicative ((<|>))
-import Control.Arrow (first, second)
+import Control.Arrow (second)
 import Control.DeepSeq (NFData)
 import Control.Lens (Lens', (^.), set)
 import Control.Monad ((<=<), (>=>))
@@ -610,10 +611,11 @@ srcRowListItem = RowListItem NullSourceAnn
 
 -- | Convert a row to a list of pairs of labels and types
 rowToList :: Type a -> ([RowListItem a], Type a)
-rowToList = go where
-  go (RCons ann name ty row) =
-    first (RowListItem ann name ty :) (rowToList row)
-  go r = ([], r)
+rowToList t = case go t of (# items, tail' #) -> (items, tail')
+  where
+  go :: Type a -> (# [RowListItem a], Type a #)
+  go (RCons ann name ty row) = case go row of (# items, tail' #) -> (# RowListItem ann name ty : items, tail' #)
+  go r = (# [], r #)
 
 -- | Convert a row to a list of pairs of labels and types, sorted by the labels.
 rowToSortedList :: Type a -> ([RowListItem a], Type a)
