@@ -228,16 +228,23 @@ externsIsCurrentVersion ef =
   efVersion ef == Purserl.versionString
 
 -- | Convert an externs file back into a module
+--
+-- The declarations of a module have contiguous keys, so each map is built
+-- apart and unioned in, which is cheaper than inserting into the large one.
 applyExternsFileToEnvironment :: ExternsFile -> Environment -> Environment
-applyExternsFileToEnvironment ExternsFile{..} = flip (foldl' applyDecl) efDeclarations
+applyExternsFileToEnvironment ExternsFile{..} env0 = foldl' applyInstance env1 efDeclarations
   where
-  applyDecl :: Environment -> ExternsDeclaration -> Environment
-  applyDecl env (EDType pn kind tyKind) = env { types = M.insert (qual pn) (kind, tyKind) (types env) }
-  applyDecl env (EDTypeSynonym pn args ty) = env { typeSynonyms = M.insert (qual pn) (args, ty) (typeSynonyms env) }
-  applyDecl env (EDDataConstructor pn dTy tNm ty nms) = env { dataConstructors = M.insert (qual pn) (dTy, tNm, ty, nms) (dataConstructors env) }
-  applyDecl env (EDValue ident ty) = env { names = M.insert (Qualified (ByModuleName efModuleName) ident) (ty, External, Defined) (names env) }
-  applyDecl env (EDClass pn args members cs deps tcIsEmpty) = env { typeClasses = M.insert (qual pn) (makeTypeClassData args members cs deps tcIsEmpty) (typeClasses env) }
-  applyDecl env (EDInstance className ident vars kinds tys cs ch idx ns ss) =
+  env1 :: Environment
+  env1 = env0
+    { types = M.union (M.fromList [(qual pn, (kind, tyKind)) | EDType pn kind tyKind <- efDeclarations]) (types env0)
+    , typeSynonyms = M.union (M.fromList [(qual pn, (args, ty)) | EDTypeSynonym pn args ty <- efDeclarations]) (typeSynonyms env0)
+    , dataConstructors = M.union (M.fromList [(qual pn, (dTy, tNm, ty, nms)) | EDDataConstructor pn dTy tNm ty nms <- efDeclarations]) (dataConstructors env0)
+    , names = M.union (M.fromList [(qual ident, (ty, External, Defined)) | EDValue ident ty <- efDeclarations]) (names env0)
+    , typeClasses = M.union (M.fromList [(qual pn, makeTypeClassData args members cs deps tcIsEmpty) | EDClass pn args members cs deps tcIsEmpty <- efDeclarations]) (typeClasses env0)
+    }
+
+  applyInstance :: Environment -> ExternsDeclaration -> Environment
+  applyInstance env (EDInstance className ident vars kinds tys cs ch idx ns ss) =
     env { typeClassDictionaries =
             updateMap
               (updateMap (M.insertWith (<>) (qual ident) (pure dict)) className)
@@ -253,6 +260,7 @@ applyExternsFileToEnvironment ExternsFile{..} = flip (foldl' applyDecl) efDeclar
     instTy = case ns of
       CompilerNamed -> Just $ srcInstanceType ss vars className tys
       UserNamed -> Nothing
+  applyInstance env _ = env
 
   qual :: a -> Qualified a
   qual = Qualified (ByModuleName efModuleName)
