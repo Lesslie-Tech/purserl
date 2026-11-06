@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 module Language.PureScript.Erl.CodeGen.Optimizer.Common where
 
 import Control.Arrow (second)
@@ -35,9 +36,13 @@ isUncurriedFn' :: (Text, Text) -> Erl -> Bool
 isUncurriedFn' (moduleName, fnName) (EAtomLiteral (Atom (Just x) y)) = x == moduleName && y == fnName
 isUncurriedFn' _ _ = False
 
-{-# INLINE applyAll #-}
+-- | Applies the functions last to first, like @foldl1 (.)@, but strictly: composing them lazily
+-- allocates a thunk for every function on every call.
 applyAll :: [a -> a] -> a -> a
-applyAll = foldl1 (.)
+applyAll fs = let rs = reverse fs in \e -> go rs e
+  where
+    go [] !e = e
+    go (r : rest) !e = go rest (r e)
 
 
 -- Check if var x occurs in expression
