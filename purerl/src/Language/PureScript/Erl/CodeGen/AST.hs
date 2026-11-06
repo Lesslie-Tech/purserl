@@ -1,4 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE PatternSynonyms #-}
 
 -- |
@@ -19,6 +21,7 @@ import Data.Bifunctor (bimap)
 import Language.PureScript.PSString (PSString)
 import Language.PureScript.AST.SourcePos
 import Debug.Trace (traceM, trace)
+import GHC.Exts (isTrue#, reallyUnsafePtrEquality#)
 
 -- |
 -- Data type for simplified Erlang expressions
@@ -386,45 +389,77 @@ data EType
   | TAlias Atom [EType]
   deriving (Show, Eq)
 
+-- | Pointer equality: a false negative only costs a rebuild.
+same :: a -> a -> Bool
+same a b = isTrue# (reallyUnsafePtrEquality# a b)
+{-# INLINE same #-}
+
+-- | Maps a list, returning the list itself when no element changed.
+mapShared :: (a -> a) -> [a] -> [a]
+mapShared _ [] = []
+mapShared g l@(x : xs) =
+  let !x' = g x
+      !xs' = mapShared g xs
+  in if same x x' && same xs xs' then l else x' : xs'
+
+-- | Applies 'f' bottom-up and rebuilds a node only when a child changed.
 everywhereOnErl :: (Erl -> Erl) -> Erl -> Erl
 everywhereOnErl f = go
   where
   go :: Erl -> Erl
   go erl =
     case erl of
-      EVar {} -> f erl
-      EAtomLiteral {} -> f erl
-      ENumericLiteral {} -> f erl
-      EStringLiteral {} -> f erl
-      ECharLiteral {} -> f erl
-      EFunRef {} -> f erl
-      EComment {} -> f erl
-      EAttribute {} -> f erl
-      ESpec {} -> f erl
-      EType {} -> f erl
+      EUnary op e -> let !e' = go e in f (if same e e' then erl else EUnary op e')
+      EBinary op e1 e2 ->
+        let !e1' = go e1; !e2' = go e2
+        in f (if same e1 e1' && same e2 e2' then erl else EBinary op e1' e2')
+      EFunctionDef t ssann a vs e -> let !e' = go e in f (if same e e' then erl else EFunctionDef t ssann a vs e')
+      EBind x e ->
+        let !x' = go x; !e' = go e
+        in f (if same x x' && same e e' then erl else EBind x' e')
+      EFunFull fname args -> let !a' = binds args in f (if same args a' then erl else EFunFull fname a')
+      EApp meta e es ->
+        let !e' = go e; !es' = mapShared go es
+        in f (if same e e' && same es es' then erl else EApp meta e' es')
+      EBlock es -> let !es' = mapShared go es in f (if same es es' then erl else EBlock es')
+      ETupleLiteral es -> let !es' = mapShared go es in f (if same es es' then erl else ETupleLiteral es')
+      EArrayLiteral es -> let !es' = mapShared go es in f (if same es es' then erl else EArrayLiteral es')
+      EMapLiteral bs -> let !b' = binds bs in f (if same bs b' then erl else EMapLiteral b')
+      EMapPattern bs -> let !b' = binds bs in f (if same bs b' then erl else EMapPattern b')
+      EMapUpdate e bs ->
+        let !e' = go e; !b' = binds bs
+        in f (if same e e' && same bs b' then erl else EMapUpdate e' b')
+      ECaseOf e bs ->
+        let !e' = go e; !b' = binds bs
+        in f (if same e e' && same bs b' then erl else ECaseOf e' b')
+      EListLiteral es -> let !es' = mapShared go es in f (if same es es' then erl else EListLiteral es')
+      EListCons es e ->
+        let !es' = mapShared go es; !e' = go e
+        in f (if same es es' && same e e' then erl else EListCons es' e')
+      ETryAnyAny e1 e2 ->
+        let !e1' = go e1; !e2' = go e2
+        in f (if same e1 e1' && same e2 e2' then erl else ETryAnyAny e1' e2')
+      EAndThen a b ->
+        let !a' = go a; !b' = go b
+        in f (if same a a' && same b b' then erl else EAndThen a' b')
+      ELet a b ->
+        let !a' = go a; !b' = go b
+        in f (if same a a' && same b b' then erl else ELet a' b')
+      ERawErlangSource fmt bs -> let !b' = binds bs in f (if same bs b' then erl else ERawErlangSource fmt b')
+      EMaybe kind steps final ->
+        let !st' = mapShared step steps; !fi' = go final
+        in f (if same steps st' && same final fi' then erl else EMaybe kind st' fi')
+      _ -> f erl
 
-      EUnary op e -> f $ EUnary op (go e)
-      EBinary op e1 e2 -> f $ EBinary op (go e1) (go e2)
-      EFunctionDef t ssann a vs e -> f $ EFunctionDef t ssann a vs (go e)
-      EBind x e -> f $ EBind (go x) (go e)
-      EFunFull fname args -> f $ EFunFull fname $ map (second go) args
-      EApp meta e es -> f $ EApp meta (go e) (map go es)
-      EBlock es -> f $ EBlock (map go es)
-      ETupleLiteral es -> f $ ETupleLiteral (map go es)
-      EArrayLiteral es -> f $ EArrayLiteral (map go es)
-      EMapLiteral binds -> f $ EMapLiteral $ map (second go) binds
-      EMapPattern binds -> f $ EMapPattern $ map (second go) binds
-      EMapUpdate e binds -> f $ EMapUpdate (go e) $ map (second go) binds
-      ECaseOf e binds -> f $ ECaseOf (go e) $ map (second go) binds
-      EListLiteral es -> f $ EListLiteral (map go es)
-      EListCons es e -> f $ EListCons (map go es) (go e)
-      ETryAnyAny e1 e2 -> f $ ETryAnyAny (go e1) (go e2)
-      EAndThen a b -> f $ EAndThen (go a) (go b)
-      ELet a b -> f $ ELet (go a) (go b)
-      ERawErlangSource fmt binds -> f $ ERawErlangSource fmt $ map (second go) binds
-      EMaybe kind steps final -> f $ EMaybe kind (map (bimap (fmap go) go) steps) (go final)
+  binds :: [(x, Erl)] -> [(x, Erl)]
+  binds = mapShared (\p@(x, e) -> let !e' = go e in if same e e' then p else (x, e'))
 
-      -- other -> error (show ("other", other))
+  step p@(pat, e) =
+    let !pat' = case pat of
+          Nothing -> pat
+          Just q -> let !q' = go q in if same q q' then pat else Just q'
+        !e' = go e
+    in if same pat pat' && same e e' then p else (pat', e')
 
 everywhereOnErlTopDown :: (Erl -> Erl) -> Erl -> Erl
 everywhereOnErlTopDown f = runIdentity . everywhereOnErlTopDownM (Identity . f)
