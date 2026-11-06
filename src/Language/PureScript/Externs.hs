@@ -1,5 +1,6 @@
 {-# Language DeriveAnyClass #-}
 {-# Language NoGeneralizedNewtypeDeriving #-}
+{-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE FunctionalDependencies #-}
 -- |
 -- This module generates code for \"externs\" files, i.e. files containing only
@@ -768,12 +769,6 @@ instance ToCS (Type ()) () where
 instance ToCS (Constraint SourceAnn) () where
   toCS = storeConstraintTypes
 
-storeConstraintTypes :: Constraint a -> CS ()
-storeConstraintTypes (Constraint _ refTypeClass kindArgs targs mdata) = do
-  csdbPutTypeClass refTypeClass
-  traverse_ storeTypeRefs kindArgs
-  traverse_ storeTypeRefs targs
-
 -- CSDB put helpers
 
 csdbPutCtor :: Qualified (ProperName 'ConstructorName) -> CS ()
@@ -874,6 +869,23 @@ csdbPutHelper f (Qualified qBy ref) =
             mn
             outer
     )
+
+-- | The pure form of 'csdbPutHelper'.
+putRef :: (ToCSDBInner -> t -> ToCSDBInner) -> Qualified t -> ToCSDB -> ToCSDB
+putRef f (Qualified qBy ref) (ToCSDB outer) =
+  ToCSDB $ case qBy of
+    BySourcePos _ -> outer
+    ByModuleName mn ->
+      M.alter (\maybeInner -> let !inner = f (fromMaybe mempty maybeInner) ref in Just inner) mn outer
+
+putTypeRef :: Qualified (ProperName 'TypeName) -> ToCSDB -> ToCSDB
+putTypeRef = putRef (\v r -> v { _referencedTypes = M.insert r () (_referencedTypes v) })
+
+putTypeOpRef :: Qualified (OpName 'TypeOpName) -> ToCSDB -> ToCSDB
+putTypeOpRef = putRef (\v r -> v { _referencedTypeOp = M.insert r () (_referencedTypeOp v) })
+
+putTypeClassRef :: Qualified (ProperName 'ClassName) -> ToCSDB -> ToCSDB
+putTypeClassRef = putRef (\v r -> v { _referencedTypeClass = M.insert r () (_referencedTypeClass v) })
 
 
 -- DB put helpers
@@ -1043,72 +1055,55 @@ dbPutTypeInstanceDeclaration ident csTypeInstanceDeclaration =
 -- | Only nodes with children go through the sharing memo; recording a leaf is as cheap as
 -- looking it up.
 storeTypeRefs :: Type a -> CS ()
-storeTypeRefs t = case t of
-  TUnknown {} -> pure ()
-  TypeVar {} -> pure ()
-  TypeLevelString {} -> pure ()
-  TypeLevelInt {} -> pure ()
-  TypeWildcard {} -> pure ()
-  REmpty {} -> pure ()
-  TypeConstructor _ refType -> csdbPutType refType
-  TypeOp _ refTypeOp -> csdbPutTypeOp refTypeOp
-  _ -> do
-    alreadySeen <- state (checkAndMarkSeen t)
-    unless alreadySeen $ storeTypeRefsGo t
+storeTypeRefs t = StateT $ \memo -> state $ \db ->
+  case walkTypeRefs t memo db of (# memo', db' #) -> (((), memo'), db')
 
-storeTypeRefsGo :: Type a -> CS ()
-storeTypeRefsGo t =
-  case t of
-    TUnknown _ _ -> pure ()
-    TypeVar _ _ -> pure ()
-    TypeLevelString _ _ -> pure ()
-    TypeLevelInt _ _ -> pure ()
-    TypeWildcard _ _ -> pure ()
-    TypeConstructor _ refType -> do
-      -- [drathier]: this seems to be the type, not the constructor, which makes much more sense at the type level
-      csdbPutType refType
+storeConstraintTypes :: Constraint a -> CS ()
+storeConstraintTypes c = StateT $ \memo -> state $ \db ->
+  case walkConstraintRefs c memo db of (# memo', db' #) -> (((), memo'), db')
 
-    TypeOp _ refTypeOp -> do
-      -- TODO[drathier]: is this ctor unused here? docs for it say it's desugared to a TypeConstructor
-      csdbPutTypeOp refTypeOp
+-- | The walk of 'storeTypeRefs' with the state threaded by hand: it runs once per type node, and
+-- going through 'CS' there allocated closures and tuples for every one.
+walkTypeRefs :: Type a -> TypeRefsMemo -> ToCSDB -> (# TypeRefsMemo, ToCSDB #)
+walkTypeRefs t !memo !db = case t of
+  TUnknown {} -> (# memo, db #)
+  TypeVar {} -> (# memo, db #)
+  TypeLevelString {} -> (# memo, db #)
+  TypeLevelInt {} -> (# memo, db #)
+  TypeWildcard {} -> (# memo, db #)
+  REmpty {} -> (# memo, db #)
+  TypeConstructor _ refType -> (# memo, putTypeRef refType db #)
+  TypeOp _ refTypeOp -> (# memo, putTypeOpRef refTypeOp db #)
+  _ -> case checkAndMarkSeen t memo of
+    (True, memo') -> (# memo', db #)
+    (False, memo') -> children memo' db
+  where
+  children memo' db' = case t of
+    TypeApp _ t1 t2 -> two t1 t2 memo' db'
+    KindApp _ t1 t2 -> two t1 t2 memo' db'
+    ForAll _ _ _ mt1 t2 _ -> case mt1 of
+      Nothing -> walkTypeRefs t2 memo' db'
+      Just k -> case walkTypeRefs k memo' db' of (# m, d #) -> walkTypeRefs t2 m d
+    ConstrainedType _ constraint t1 ->
+      case walkConstraintRefs constraint memo' db' of (# m, d #) -> walkTypeRefs t1 m d
+    Skolem _ _ mt1 _ _ -> case mt1 of
+      Nothing -> (# memo', db' #)
+      Just k -> walkTypeRefs k memo' db'
+    RCons _ _ t1 t2 -> two t1 t2 memo' db'
+    KindedType _ t1 t2 -> two t1 t2 memo' db'
+    BinaryNoParensType _ t1 t2 t3 ->
+      case two t1 t2 memo' db' of (# m, d #) -> walkTypeRefs t3 m d
+    ParensInType _ t1 -> walkTypeRefs t1 memo' db'
+    _ -> (# memo', db' #)
+  two a b m d = case walkTypeRefs a m d of (# m', d' #) -> walkTypeRefs b m' d'
 
-    TypeApp _ t1 t2 -> do
-      storeTypeRefs t1
-      storeTypeRefs t2
-
-    KindApp _ t1 t2 -> do
-      storeTypeRefs t1
-      storeTypeRefs t2
-
-    ForAll _ _ _ mt1 t2 _ -> do
-      traverse_ storeTypeRefs mt1
-      storeTypeRefs t2
-
-    ConstrainedType _ constraint t1 -> do
-      storeConstraintTypes constraint
-      storeTypeRefs t1
-
-    Skolem _ _ mt1 _ _ -> do
-      traverse_ storeTypeRefs mt1
-
-    REmpty a -> pure ()
-
-    RCons _ _ t1 t2 -> do
-      storeTypeRefs t1
-      storeTypeRefs t2
-
-    KindedType _ t1 t2 -> do
-      storeTypeRefs t1
-      storeTypeRefs t2
-
-    BinaryNoParensType _ t1 t2 t3 -> do
-      storeTypeRefs t1
-      storeTypeRefs t2
-      storeTypeRefs t3
-
-    ParensInType _ t1 -> do
-      storeTypeRefs t1
-
+walkConstraintRefs :: Constraint a -> TypeRefsMemo -> ToCSDB -> (# TypeRefsMemo, ToCSDB #)
+walkConstraintRefs (Constraint _ refTypeClass kindArgs targs _) memo db =
+  case walkList kindArgs memo (putTypeClassRef refTypeClass db) of (# m, d #) -> walkList targs m d
+  where
+  walkList [] m d = (# m, d #)
+  walkList (x : xs) m d = case walkTypeRefs x m d of (# m', d' #) -> walkList xs m' d'
+  {-# INLINE walkList #-}
 
 data DB
   = DB
