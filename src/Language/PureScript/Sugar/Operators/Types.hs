@@ -13,7 +13,7 @@ matchTypeOperators
   -> [[(Qualified (OpName 'TypeOpName), Associativity)]]
   -> SourceType
   -> Either MultipleErrors SourceType
-matchTypeOperators ss = matchOperators isBinOp extractOp fromOp reapply id
+matchTypeOperators ss = matchOperators isBinOp extractOp fromOp (const Nothing) reapply id
   where
 
   isBinOp :: SourceType -> Bool

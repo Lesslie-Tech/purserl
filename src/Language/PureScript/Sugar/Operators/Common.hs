@@ -59,19 +59,111 @@ opTable
 opTable ops fromOp reapply =
   map (map (\(name, a) -> P.Infix (P.try (matchOp fromOp name) >>= \ss -> return (reapply ss name)) (toAssoc a))) ops
 
+-- | The precedence level of every operator: 0 binds tightest.
+type OpLevels nameType = M.Map (Qualified (OpName nameType)) (Int, Associativity)
+
+opLevels :: [[(Qualified (OpName nameType), Associativity)]] -> OpLevels nameType
+opLevels ops = M.fromList [(name, (lvl, assoc)) | (lvl, grp) <- zip [0 ..] ops, (name, assoc) <- grp]
+
+-- | An operator with its level, associativity, how to apply it and its right operand.
+data Item a = Item !Int !Associativity (a -> a -> a) a
+
+-- | Resolves precedence by precedence climbing. It only answers when the parser
+-- below would answer with the same tree: on an unknown operator or a clash
+-- between operators of one level (mixed or repeated non-associative) it gives
+-- 'Nothing', and the parser reports the error. Backtick operators come from
+-- @fromTick@ and bind tighter than all the others (level -1).
+reorderChain
+  :: forall a nameType
+   . FromOp nameType a
+  -> (a -> Maybe (a -> a -> a))
+  -> Reapply nameType a
+  -> OpLevels nameType
+  -> Chain a
+  -> Maybe a
+reorderChain fromOp fromTick reapply levels chain = do
+  (lhs, items) <- toItems chain
+  (result, []) <- climb maxBound lhs items
+  pure result
+  where
+  toItems :: Chain a -> Maybe (a, [Item a])
+  toItems (Left lhs : rest) = (\items -> (lhs, items)) <$> itemsOf rest
+  toItems _ = Nothing
+
+  itemsOf :: Chain a -> Maybe [Item a]
+  itemsOf [] = Just []
+  itemsOf (Right op : Left r : rest) = do
+    (lvl, assoc, f) <- classify op
+    (Item lvl assoc f r :) <$> itemsOf rest
+  itemsOf _ = Nothing
+
+  classify :: a -> Maybe (Int, Associativity, a -> a -> a)
+  classify op = case fromOp op of
+    Just (ss, name) -> (\(lvl, assoc) -> (lvl, assoc, reapply ss name)) <$> M.lookup name levels
+    Nothing -> (\f -> (-1, Infixl, f)) <$> fromTick op
+
+  -- Takes the operators of level @k@ or tighter that follow @lhs@.
+  climb :: Int -> a -> [Item a] -> Maybe (a, [Item a])
+  climb _ lhs [] = Just (lhs, [])
+  climb k lhs items@(Item lvl assoc f r : more)
+    | lvl > k = Just (lhs, items)
+    | otherwise = case assoc of
+        Infixr -> do
+          (r', rest) <- rightOperand lvl r more
+          climb k (f lhs r') rest
+        _ -> do
+          (r', rest) <- climb (lvl - 1) r more
+          guard (not (clashes lvl assoc rest))
+          climb k (f lhs r') rest
+
+  -- The right operand of a right associative operator of level @lvl@.
+  rightOperand :: Int -> a -> [Item a] -> Maybe (a, [Item a])
+  rightOperand lvl r more = do
+    (z, rest) <- climb (lvl - 1) r more
+    case rest of
+      Item lvl' assoc' f' r' : more' | lvl' == lvl -> do
+        guard (assoc' == Infixr)
+        (y, rest') <- rightOperand lvl r' more'
+        pure (f' z y, rest')
+      _ -> pure (z, rest)
+
+  -- Whether the next operator is of the same level but can't continue a chain of @assoc@.
+  clashes :: Int -> Associativity -> [Item a] -> Bool
+  clashes lvl assoc (Item lvl' assoc' _ _ : _) = lvl' == lvl && (assoc' /= assoc || assoc == Infix)
+  clashes _ _ [] = False
+
 matchOperators
   :: forall a nameType
    . Show a
   => (a -> Bool)
   -> (a -> Maybe (a, a, a))
   -> FromOp nameType a
+  -> (a -> Maybe (a -> a -> a))
   -> Reapply nameType a
   -> ([[P.Operator (Chain a) () Identity a]] -> P.OperatorTable (Chain a) () Identity a)
   -> [[(Qualified (OpName nameType), Associativity)]]
   -> a
   -> Either MultipleErrors a
-matchOperators isBinOp extractOp fromOp reapply modOpTable ops = parseChains
+matchOperators = matchOperatorsWith True
+
+-- | With 'False' the precedence climbing is skipped and the parser decides everything.
+matchOperatorsWith
+  :: forall a nameType
+   . Show a
+  => Bool
+  -> (a -> Bool)
+  -> (a -> Maybe (a, a, a))
+  -> FromOp nameType a
+  -> (a -> Maybe (a -> a -> a))
+  -> Reapply nameType a
+  -> ([[P.Operator (Chain a) () Identity a]] -> P.OperatorTable (Chain a) () Identity a)
+  -> [[(Qualified (OpName nameType), Associativity)]]
+  -> a
+  -> Either MultipleErrors a
+matchOperatorsWith climbFirst isBinOp extractOp fromOp fromTick reapply modOpTable ops = parseChains
   where
+  levels :: OpLevels nameType
+  levels = opLevels ops
   parseChains :: a -> Either MultipleErrors a
   parseChains ty
     | True <- isBinOp ty = bracketChain (extendChain ty)
@@ -84,10 +176,12 @@ matchOperators isBinOp extractOp fromOp reapply modOpTable ops = parseChains
   -- A lone operator needs no precedence resolution.
   bracketChain [Left l, Right op, Left r]
     | Just (ss, name) <- fromOp op = pure (reapply ss name l r)
-  bracketChain chain =
-    case P.parse opParser "operator expression" chain of
-      Right a -> pure a
-      Left _ -> throwError . MultipleErrors $ mkErrors chain
+  bracketChain chain
+    | climbFirst, Just a <- reorderChain fromOp fromTick reapply levels chain = pure a
+    | otherwise =
+        case P.parse opParser "operator expression" chain of
+          Right a -> pure a
+          Left _ -> throwError . MultipleErrors $ mkErrors chain
   opParser :: P.Parsec (Chain a) () a
   opParser = P.buildExpressionParser (modOpTable (opTable ops fromOp reapply)) parseValue <* P.eof
 

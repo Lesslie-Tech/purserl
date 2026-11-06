@@ -434,6 +434,7 @@ test-suite tests
     TestHierarchy
     TestIde
     TestMake
+    TestOperatorChain
     TestUnify
     TestUtils
     Paths_purescript

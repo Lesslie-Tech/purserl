@@ -178,11 +178,15 @@ rebracketModule !caller pred_ valueOpTable typeOpTable valueAliased typeAliased 
       everywhereWithContextOnValuesM
         ss
         (\_ d -> (declSourceSpan d,) <$> goDecl d)
-        (\pos -> wrap (matchExprOperators valueOpTable) <=< goExpr' pos)
-        (\pos -> wrap (matchBinderOperators valueOpTable) <=< goBinder' pos)
+        (\pos -> wrap matchExpr <=< goExpr' pos)
+        (\pos -> wrap matchBinder <=< goBinder' pos)
         defS
         defS
         defS
+
+  -- Bound here so that the operator levels are built once per module.
+  matchExpr = matchExprOperators valueOpTable
+  matchBinder = matchBinderOperators valueOpTable
 
   (goDecl, goExpr', goBinder') = updateTypes (flip matchTypeOperators typeOpTable)
 

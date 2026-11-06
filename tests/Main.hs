@@ -16,6 +16,7 @@ import TestErlInstanceArity qualified
 import TestHierarchy qualified
 import TestIde qualified
 import TestMake qualified
+import TestOperatorChain qualified
 import TestUnify qualified
 import TestGraph qualified
 
@@ -31,6 +32,7 @@ main = do
     describe "ast" TestAst.spec
     describe "ide" TestIde.spec
     describe "make" TestMake.spec
+    describe "operator chains" TestOperatorChain.spec
     describe "unify" TestUnify.spec
     describe "corefn" TestCoreFn.spec
     describe "empty class dict elision" TestEmptyClassDictElision.spec

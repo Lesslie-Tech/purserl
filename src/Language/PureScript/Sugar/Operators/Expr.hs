@@ -16,7 +16,7 @@ matchExprOperators
   :: [[(Qualified (OpName 'ValueOpName), Associativity)]]
   -> Expr
   -> Either MultipleErrors Expr
-matchExprOperators = matchOperators isBinOp extractOp fromOp reapply modOpTable
+matchExprOperators = matchOperators isBinOp extractOp fromOp fromTick reapply modOpTable
   where
 
   isBinOp :: Expr -> Bool
@@ -32,6 +32,11 @@ matchExprOperators = matchOperators isBinOp extractOp fromOp reapply modOpTable
   fromOp :: Expr -> Maybe (SourceSpan, Qualified (OpName 'ValueOpName))
   fromOp (Op ss q@(Qualified _ (OpName _))) = Just (ss, q)
   fromOp _ = Nothing
+
+  -- Backtick operators: any expression that isn't an operator.
+  fromTick :: Expr -> Maybe (Expr -> Expr -> Expr)
+  fromTick (Op _ _) = Nothing
+  fromTick v = Just (BinaryNoParens v)
 
   reapply :: SourceSpan -> Qualified (OpName 'ValueOpName) -> Expr -> Expr -> Expr
   reapply ss = BinaryNoParens . Op ss

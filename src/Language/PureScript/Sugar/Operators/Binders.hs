@@ -11,7 +11,7 @@ matchBinderOperators
   :: [[(Qualified (OpName 'ValueOpName), Associativity)]]
   -> Binder
   -> Either MultipleErrors Binder
-matchBinderOperators = matchOperators isBinOp extractOp fromOp reapply id
+matchBinderOperators = matchOperators isBinOp extractOp fromOp (const Nothing) reapply id
   where
 
   isBinOp :: Binder -> Bool
