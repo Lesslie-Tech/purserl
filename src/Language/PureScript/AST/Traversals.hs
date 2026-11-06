@@ -489,6 +489,7 @@ everywhereOnValuesM f g h = (f', g', h')
   handleGuard (ConditionGuard e) = ConditionGuard <$> g' e
   handleGuard (PatternGuard b e) = PatternGuard <$> h' b <*> g' e
 
+{-# INLINE everythingOnValues #-}
 everythingOnValues
   :: forall r
    . (r -> r -> r)
@@ -565,6 +566,7 @@ everythingOnValues (<>.) f g h i j = (f', g', h', i', j')
   k' (ConditionGuard e) = g' e
   k' (PatternGuard b e) = h' b <>. g' e
 
+{-# INLINE everythingWithContextOnValues #-}
 everythingWithContextOnValues
   :: forall s r
    . s
@@ -777,6 +779,7 @@ data ScopedIdent = LocalIdent Ident | ToplevelIdent Ident
 inScope :: Ident -> S.Set ScopedIdent -> Bool
 inScope i s = (LocalIdent i `S.member` s) || (ToplevelIdent i `S.member` s)
 
+{-# INLINE everythingWithScope #-}
 everythingWithScope
   :: forall r
    . (Monoid r)
