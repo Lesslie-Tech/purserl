@@ -11,7 +11,7 @@ import Control.Arrow (second)
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify, put)
 import Control.Monad (forM_, guard, join, unless, when, (<=<))
-import Control.Exception (Exception, onException, throwIO, try)
+import Control.Exception (Exception, SomeException, fromException, onException, throwIO, try)
 import System.IO.Unsafe (unsafePerformIO)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Supply (SupplyT(..))
@@ -53,6 +53,9 @@ data CheckRefs = CheckRefs
   , crSupply :: !(IORef Integer)
   , crWarnings :: !(IORef MultipleErrors)
   , crHints :: !(IORef [ErrorMessageHint])
+  , crMode :: !(IORef Int)
+  -- ^ How 'withSpeculation' runs: 0 is outside it, 1 is inside a speculative run, 2 is inside the
+  -- diagnosing rerun of a failed one.
   -- ^ The current error message hint stack. It has its own reference because
   -- every check, inference and unification pushes a hint, which would
   -- otherwise copy the whole 'CheckState' twice.
@@ -142,7 +145,8 @@ runCheckInMake st (Check m) = do
     supplyRef <- newIORef n
     warningsRef <- newIORef mempty
     hintsRef <- newIORef []
-    res <- try (m (CheckRefs stRef supplyRef warningsRef hintsRef) >>= \a -> (,) a <$> readIORef stRef)
+    modeRef <- newIORef 0
+    res <- try (m (CheckRefs stRef supplyRef warningsRef hintsRef modeRef) >>= \a -> (,) a <$> readIORef stRef)
     (,,) res <$> readIORef supplyRef <*> readIORef warningsRef
   lift (tell warnings)
   case res of
@@ -158,7 +162,8 @@ runCheckPure st (Check m) = unsafePerformIO $ do
   supplyRef <- newIORef 0
   warningsRef <- newIORef mempty
   hintsRef <- newIORef []
-  try (m (CheckRefs stRef supplyRef warningsRef hintsRef) >>= \a -> (,) a <$> readIORef stRef) >>= \case
+  modeRef <- newIORef 0
+  try (m (CheckRefs stRef supplyRef warningsRef hintsRef modeRef) >>= \a -> (,) a <$> readIORef stRef) >>= \case
     Left (CheckFailure e) -> pure (Left e)
     Right r -> pure (Right r)
 {-# NOINLINE runCheckPure #-}
@@ -287,6 +292,44 @@ withScopedTypeVars mn ks ma = do
     when (Qualified (ByModuleName mn) (ProperName name) `M.member` types (checkEnv orig)) $
       tell . errorMessage $ ShadowedTypeVar name
   bindTypes (M.fromList (map (\(name, k) -> (Qualified (ByModuleName mn) (ProperName name), (k, ScopedTypeVar))) ks)) ma
+
+-- | Runs @fast@, which does the work without the error hints that @slow@ pushes at every step. If
+-- @fast@ fails, everything it changed is restored and @slow@ runs instead, which fails the same way
+-- with the hints. Only the outermost call speculates: inside it, @fast@ runs as it is, and inside
+-- the rerun, @slow@ does.
+withSpeculation :: Check a -> Check a -> Check a
+withSpeculation fast slow = Check $ \r -> do
+  mode <- readIORef (crMode r)
+  case mode of
+    0 -> do
+      s <- readIORef (crState r)
+      n <- readIORef (crSupply r)
+      hs <- readIORef (crHints r)
+      w <- readIORef (crWarnings r)
+      writeIORef (crMode r) 1
+      res <- try (unCheck fast r)
+      case res of
+        Right a -> writeIORef (crMode r) 0 >> pure a
+        Left (ex :: SomeException) -> case fromException ex of
+          Just (CheckFailure _) -> do
+            writeIORef (crState r) s
+            writeIORef (crSupply r) n
+            writeIORef (crHints r) hs
+            writeIORef (crWarnings r) w
+            writeIORef (crMode r) 2
+            res2 <- try (unCheck slow r)
+            writeIORef (crMode r) 0
+            either (\(ex2 :: SomeException) -> throwIO ex2) pure res2
+          Nothing -> writeIORef (crMode r) 0 >> throwIO ex
+    1 -> unCheck fast r
+    _ -> unCheck slow r
+{-# INLINE withSpeculation #-}
+
+-- | Whether the caller is inside a speculative run of 'withSpeculation', where it should do just the
+-- work of its fast side, without building the slow side.
+speculating :: Check Bool
+speculating = Check $ \r -> (== 1) <$> readIORef (crMode r)
+{-# INLINE speculating #-}
 
 withErrorMessageHint
   :: ErrorMessageHint

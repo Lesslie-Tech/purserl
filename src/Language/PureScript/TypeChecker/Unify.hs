@@ -33,7 +33,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment qualified as E
 import Language.PureScript.Errors (ErrorMessageHint(..), MultipleErrors, SimpleErrorMessage(..), SourceAnn, errorMessage, internalCompilerError, onErrorMessages, rethrow, warnWithPosition, withoutPosition, safst)
 import Language.PureScript.TypeChecker.Kinds (elaborateKind, instantiateKind, unifyKinds')
-import Language.PureScript.TypeChecker.Monad (Check, CheckState(..), Substitution(..), UnkLevel(..), Unknown, getLocalContext, guardWith, lookupUnkName, withErrorMessageHint)
+import Language.PureScript.TypeChecker.Monad (Check, CheckState(..), Substitution(..), UnkLevel(..), Unknown, getLocalContext, guardWith, lookupUnkName, speculating, withErrorMessageHint, withSpeculation)
 import Language.PureScript.TypeChecker.Skolems (newSkolemConstant, skolemize)
 import Language.PureScript.Types (Constraint(..), pattern REmptyKinded, RowListItem(..), SourceType, Type(..), WildcardData(..), alignRowsWith, everythingOnTypes, everywhereOnTypes, everywhereOnTypesM, getAnnForType, mkForAll, rowFromList, srcTUnknown, usedTypeVariables)
 
@@ -127,13 +127,26 @@ unifyTypes = unifyTypesHinted id
 -- | Unify two types. The error hint shows the types after applying the given
 -- function, which lets a caller that only resolved the head of its types
 -- report the substituted subterms, as if they had been substituted up front.
+-- | The unification outside any speculative run: it runs @work@ without hints and, if that fails,
+-- again with the hint. Kept apart so the hint is not built by the calls inside a speculative run.
+unifyHintedOutermost :: (SourceType -> SourceType) -> SourceType -> SourceType -> Check () -> Check ()
+unifyHintedOutermost hinted t1 t2 work =
+  withSpeculation work (withErrorMessageHint (ErrorUnifyingTypes (hinted t1) (hinted t2)) work)
+{-# NOINLINE unifyHintedOutermost #-}
+
 unifyTypesHinted :: (SourceType -> SourceType) -> SourceType -> SourceType -> Check ()
 unifyTypesHinted hinted t1 t2 = do
   sub <- gets checkSubstitution
   let a = headSubst sub t1
       b = headSubst sub t2
   -- Equal leaves cannot fail, so skip the hint bookkeeping.
-  if sameLeaf a b then return () else withErrorMessageHint (ErrorUnifyingTypes (hinted t1) (hinted t2)) $ unifyFast sub a b
+  if sameLeaf a b
+    then return ()
+    else do
+      inside <- speculating
+      if inside
+        then unifyFast sub a b
+        else unifyHintedOutermost hinted t1 t2 (unifyFast sub a b)
   where
   sameLeaf (TUnknown _ u1) (TUnknown _ u2) = u1 == u2
   sameLeaf (TypeVar _ v1) (TypeVar _ v2) = v1 == v2
