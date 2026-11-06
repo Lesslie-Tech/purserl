@@ -857,6 +857,7 @@ srcInstanceType ss vars className tys
 -- type (e.g. a big record row threaded through many binds of a do-block)
 -- turns what should be cheap, shareable work into work that is repeated in
 -- full, and unshareable, at every occurrence.
+{-# INLINE everywhereOnTypes #-}
 everywhereOnTypes :: (Type a -> Type a) -> Type a -> Type a
 everywhereOnTypes f = go where
   go t@(TypeApp ann t1 t2) =
@@ -1092,6 +1093,7 @@ everywhereOnTypesTopDownM f = go <=< f where
     pure (ParensInType ann t')
   go other = pure other
 
+{-# INLINE everythingOnTypes #-}
 everythingOnTypes :: (r -> r -> r) -> (Type a -> r) -> Type a -> r
 everythingOnTypes (<+>) f = go where
   go t@(TypeApp _ t1 t2) = f t <+> go t1 <+> go t2
@@ -1127,6 +1129,7 @@ foldOnTypes f = flip go where
     visit !r = f t r
 {-# INLINE foldOnTypes #-}
 
+{-# INLINE everythingWithContextOnTypes #-}
 everythingWithContextOnTypes :: s -> r -> (r -> r -> r) -> (s -> Type a -> (s, r)) -> Type a -> r
 everythingWithContextOnTypes s0 r0 (<+>) f = go' s0 where
   go' s t = let (s', r) = f s t in r <+> go s' t
