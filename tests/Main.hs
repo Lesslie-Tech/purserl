@@ -11,6 +11,7 @@ import TestCoreFn qualified
 import TestCst qualified
 import TestEmptyClassDictElision qualified
 import TestDiscard qualified
+import TestListLiterals qualified
 import TestErlFlatten qualified
 import TestErlInstanceArity qualified
 import TestHierarchy qualified
@@ -37,6 +38,7 @@ main = do
     describe "corefn" TestCoreFn.spec
     describe "empty class dict elision" TestEmptyClassDictElision.spec
     describe "discard" TestDiscard.spec
+    describe "list literals" TestListLiterals.spec
     describe "erl flatten" TestErlFlatten.spec
     describe "erl instance arity" TestErlInstanceArity.spec
     describe "hierarchy" TestHierarchy.spec

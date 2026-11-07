@@ -35,6 +35,11 @@ data Literal a
   --
   | ArrayLiteral ![a]
   -- |
+  -- A list literal, produced by the type checker when an array literal's type
+  -- resolves to List.List. Never produced by the parser.
+  --
+  | ListLiteral ![a]
+  -- |
   -- An object literal
   --
   | ObjectLiteral ![(PSString, a)]

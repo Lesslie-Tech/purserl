@@ -242,11 +242,14 @@ data CheckState = CheckState
   , checkUndefinedNames :: S.Set (Qualified Ident)
   -- ^ Superset of the names currently bound with 'Undefined' visibility, so
   -- that making a binding group visible doesn't have to traverse the whole environment.
+  , checkPendingLists :: [(SourceSpan, SourceType)]
+  -- ^ Container types of array literals whose representation (Array or
+  -- List) is not yet known. Resolved at the end of each binding group.
   }
 
 -- | Create an empty @CheckState@
 emptyCheckState :: Environment -> CheckState
-emptyCheckState env = CheckState env 0 0 0 Nothing [] emptySubstitution mempty mempty
+emptyCheckState env = CheckState env 0 0 0 Nothing [] emptySubstitution mempty mempty []
 
 -- | Unification variables
 type Unknown = Int

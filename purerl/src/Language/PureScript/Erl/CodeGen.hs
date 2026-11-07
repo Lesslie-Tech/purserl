@@ -283,6 +283,7 @@ findArities mn decls (CodegenEnvironment _ explicitArities) foreignExports = Ari
       CharLiteral _ -> apps
       BooleanLiteral _ -> apps
       ArrayLiteral exprs -> foldr findUsages' apps exprs
+      ListLiteral exprs -> foldr findUsages' apps exprs
       ObjectLiteral fields -> foldr (findUsages' . snd) apps fields
     Constructor {} -> apps
     where
@@ -827,6 +828,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
                 arrayVar <- freshNameErl' "ArrayLiteral"
                 pushArrayCont arrayVar items
                 pure (EVar arrayVar)
+              ListLiteral items -> EListLiteral <$> mapM binderToErl items
 
     valueToErl'' ann _ (Let _ ds val) = do
       ds2 <- mapM bindToErl ds
@@ -850,6 +852,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
       CharLiteral c -> pure $ ECharLiteral c
       BooleanLiteral b -> pure $ if b then ETrue else EFalse
       ArrayLiteral xs -> EArrayLiteral <$> mapM valueToErl xs
+      ListLiteral xs -> EListLiteral <$> mapM valueToErl xs
       ObjectLiteral ps -> EMapLiteral . map (first (AtomPS Nothing)) <$> mapM (sndM valueToErl) ps
 
     ensureFreshVars_ = ensureFreshVars Set.empty M.empty
@@ -862,6 +865,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
           Literal ann lit ->
             Literal ann <$> case lit of
               ArrayLiteral exs -> ArrayLiteral <$> traverse go exs
+              ListLiteral exs -> ListLiteral <$> traverse go exs
               ObjectLiteral fields -> ObjectLiteral <$> traverse (traverse go) fields
               _ -> pure lit
           Constructor {} -> pure expr

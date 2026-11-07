@@ -89,6 +89,11 @@ literalToJSON t (ArrayLiteral xs)
     [ "literalType"  .= "ArrayLiteral"
     , "value"        .= map t xs
     ]
+literalToJSON t (ListLiteral xs)
+  = object
+    [ "literalType"  .= "ListLiteral"
+    , "value"        .= map t xs
+    ]
 literalToJSON t (ObjectLiteral xs)
   = object
     [ "literalType"    .= "ObjectLiteral"

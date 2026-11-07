@@ -195,6 +195,7 @@ renameInValue (Let ann ds v) =
 --
 renameInLiteral :: (a -> Rename a) -> Literal a -> Rename (Literal a)
 renameInLiteral rename (ArrayLiteral bs) = ArrayLiteral <$> traverse rename bs
+renameInLiteral rename (ListLiteral bs) = ListLiteral <$> traverse rename bs
 renameInLiteral rename (ObjectLiteral bs) = ObjectLiteral <$> traverse (sndM rename) bs
 renameInLiteral _ l = return l
 

@@ -315,6 +315,7 @@ expandRecordOps = traverse goBind
       Var {} -> True
       Abs {} -> True
       Literal _ (ArrayLiteral _) -> False
+      Literal _ (ListLiteral _) -> False
       Literal _ (ObjectLiteral _) -> False
       Literal {} -> True
       _ -> False
@@ -885,6 +886,8 @@ renameIdentsAndVars modu topLevelFunctions bind =
           pure $ BooleanLiteral b
         ArrayLiteral xs ->
           ArrayLiteral <$> traverse goExpr xs
+        ListLiteral xs ->
+          ListLiteral <$> traverse goExpr xs
         ObjectLiteral fields ->
           ObjectLiteral <$> traverse (\(k, v) -> (,) <$> pure k <*> goExpr v) fields
 
@@ -902,6 +905,8 @@ renameIdentsAndVars modu topLevelFunctions bind =
           pure $ BooleanLiteral b
         ArrayLiteral xs ->
           ArrayLiteral <$> traverse goBinder xs
+        ListLiteral xs ->
+          ListLiteral <$> traverse goBinder xs
         ObjectLiteral fields ->
           ObjectLiteral <$> traverse (\(k, v) -> (,) <$> pure k <*> goBinder v) fields
 

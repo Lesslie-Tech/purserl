@@ -190,6 +190,9 @@ expr env e0 = do
     Literal a (ArrayLiteral xs) -> do
       (xs', i) <- traverseR (expr env) xs
       pure (Literal a (ArrayLiteral xs'), i)
+    Literal a (ListLiteral xs) -> do
+      (xs', i) <- traverseR (expr env) xs
+      pure (Literal a (ListLiteral xs'), i)
     Literal a (ObjectLiteral fs) -> do
       (vs, i) <- traverseR (expr env . snd) fs
       pure (Literal a (ObjectLiteral (zip (map fst fs) vs)), i)
@@ -341,6 +344,7 @@ identsFromBinders :: [Binder a] -> [Ident]
 identsFromBinders = foldMap identsFromBinder where
   identsFromBinder = \case
     LiteralBinder _ (ArrayLiteral xs)  -> identsFromBinders xs
+    LiteralBinder _ (ListLiteral xs)   -> identsFromBinders xs
     LiteralBinder _ (ObjectLiteral xs) -> identsFromBinders (map snd xs)
     VarBinder _ ident                  -> [ident]
     ConstructorBinder _ _ _ xs         -> identsFromBinders xs

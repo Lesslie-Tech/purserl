@@ -24,7 +24,7 @@ import Data.List.NonEmpty qualified as NEL
 
 import Language.PureScript.AST.SourcePos (nullSourceAnn)
 import Language.PureScript.Crash (internalError)
-import Language.PureScript.Names (Ident, ProperName(..), ProperNameType(..), Qualified, QualifiedBy, coerceProperName)
+import Language.PureScript.Names (Ident, ModuleName(..), ProperName(..), ProperNameType(..), Qualified(..), QualifiedBy(..), coerceProperName)
 import Language.PureScript.Roles (Role(..))
 import Language.PureScript.TypeClassDictionaries (NamedDict)
 import Language.PureScript.Interning (Intern(..))
@@ -386,6 +386,11 @@ tyBoolean = srcTypeConstructor C.Boolean
 -- | Type constructor for arrays
 tyArray :: SourceType
 tyArray = srcTypeConstructor C.Array
+
+-- | The type of native Erlang lists (the project's @List@ module), which an
+-- array literal can also denote.
+qnList :: Qualified (ProperName 'TypeName)
+qnList = Qualified (ByModuleName (ModuleName "List")) (ProperName "List")
 
 -- | Type constructor for records
 tyRecord :: SourceType

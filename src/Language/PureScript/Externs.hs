@@ -698,6 +698,7 @@ instance ToCS a () => ToCS (Literal a) () where
       CharLiteral _ -> pure ()
       BooleanLiteral _ -> pure ()
       ArrayLiteral arr -> traverse_ toCS arr
+      ListLiteral arr -> traverse_ toCS arr
       ObjectLiteral obj -> traverse_ (traverse_ toCS) obj
 
 

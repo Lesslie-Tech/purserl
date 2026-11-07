@@ -72,6 +72,40 @@ data BindingGroupType
 -- | The result of a successful type check.
 data TypedValue' = TypedValue' Bool Expr SourceType
 
+-- | Turn an array literal whose container type resolved to a list into a list literal.
+promoteList :: SourceType -> Expr -> Expr
+promoteList (TypeApp _ (TypeConstructor _ q) _) (Literal ss (ArrayLiteral xs)) | q == qnList = Literal ss (ListLiteral xs)
+promoteList _ e = e
+
+-- | Likewise for an array pattern, which is found by its source span.
+promoteBinder :: Substitution -> M.Map SourceSpan SourceType -> Binder -> Binder
+promoteBinder sub containers b@(LiteralBinder ss (ArrayLiteral bs))
+  | Just c <- M.lookup ss containers
+  , TypeConstructor _ q <- substituteType sub c
+  , q == qnList = LiteralBinder ss (ListLiteral bs)
+  | otherwise = b
+promoteBinder _ _ b = b
+
+-- | Replace the pending array literal containers, returning the previous ones.
+swapPendingLists :: [(SourceSpan, SourceType)] -> Check [(SourceSpan, SourceType)]
+swapPendingLists new = state $ \st -> (checkPendingLists st, st { checkPendingLists = new })
+
+addPendingList :: SourceSpan -> SourceType -> Check ()
+addPendingList ss c = state $ \st -> ((), st { checkPendingLists = (ss, c) : checkPendingLists st })
+
+-- | Settle the container of every pending array literal: unresolved ones
+-- become arrays, and anything other than an array or list is a type error.
+-- Returns the pending containers, which may need promoting.
+resolvePendingLists :: Check [(SourceSpan, SourceType)]
+resolvePendingLists = do
+  pending <- gets checkPendingLists
+  forM_ pending $ \(ss, c) -> do
+    sub <- gets checkSubstitution
+    case substituteType sub c of
+      TypeConstructor _ q | q == qnList -> pure ()
+      _ -> warnAndRethrowWithPositionTC ss $ unifyTypes c tyArray
+  pure pending
+
 -- | Convert an type checked value into an expression.
 tvToExpr :: TypedValue' -> Expr
 tvToExpr (TypedValue' c e t) = TypedValue c e t
@@ -90,11 +124,14 @@ typesOf
   -> [((SourceAnn, Ident), Expr)]
   -> Check [((SourceAnn, Ident), (Expr, SourceType))]
 typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
+    outerPending <- swapPendingLists []
     (tys, wInfer) <- capturingSubstitution tidyUp $ do
       (SplitBindingGroup untyped typed dict, w) <- withoutWarnings $ typeDictionaryForBindingGroup (Just moduleName) vals
       ds1 <- parU typed $ \e -> withoutWarnings $ checkTypedBindingGroupElement moduleName e dict
       ds2 <- forM untyped $ \e -> withoutWarnings $ typeForBindingGroupElement e dict
-      return (map (False, ) ds1 ++ map (True, ) ds2, w)
+      pending <- resolvePendingLists
+      return ((map (False, ) ds1 ++ map (True, ) ds2, w), pending)
+    _ <- swapPendingLists outerPending
 
     inferred <- forM tys $ \(shouldGeneralize, ((sai@(SourceAnn ss _, ident), (val, ty)), _)) -> do
       -- Replace type class dictionary placeholders with actual dictionaries
@@ -224,7 +261,11 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
 
     -- Apply the substitution that was returned from runUnify to both types and (type-annotated) values
 
-    tidyUp ts sub = first (map (second (first (second (overTypes (substituteType sub) *** substituteType sub))))) ts
+    tidyUp (ts, pending) sub =
+      let overValue
+            | null pending = overTypes
+            | otherwise = overTypesWith promoteList (promoteBinder sub (M.fromList pending))
+      in first (map (second (first (second (overValue (substituteType sub) *** substituteType sub))))) ts
 
     isHoleError :: ErrorMessage -> Bool
     isHoleError (ErrorMessage _ HoleInferredType{}) = True
@@ -381,7 +422,10 @@ infer' (Literal ss (ArrayLiteral vals)) = do
     (val', t') <- instantiatePolyTypeWithUnknowns val t
     unifyTypes els t'
     return (TypedValue ch val' t')
-  return $ TypedValue' True (Literal ss (ArrayLiteral ts')) (srcTypeApp tyArray els)
+  container <- freshTypeWithKind (kindType -:> kindType)
+  addPendingList ss container
+  let ty = srcTypeApp container els
+  return $ TypedValue' True (TypedValue True (Literal ss (ArrayLiteral ts')) ty) ty
 infer' (Literal ss (ObjectLiteral ps)) = do
   ensureNoDuplicateProperties ps
   typedFields <- inferProperties ps
@@ -650,10 +694,16 @@ inferBinder val (LiteralBinder _ (ObjectLiteral props)) = do
     m1 <- inferBinder propTy binder
     m2 <- inferRowProperties nrow (srcRCons (Label name) propTy row) binders
     return $ m1 `M.union` m2
-inferBinder val (LiteralBinder _ (ArrayLiteral binders)) = do
+inferBinder val (LiteralBinder ss (ArrayLiteral binders)) = do
   el <- freshTypeWithKind kindType
   m1 <- M.unions <$> traverse (inferBinder el) binders
-  unifyTypes val (srcTypeApp tyArray el)
+  container <- freshTypeWithKind (kindType -:> kindType)
+  unifyTypes val (srcTypeApp container el)
+  container' <- gets (flip substituteType container . checkSubstitution)
+  case container' of
+    TypeConstructor _ q | q == qnList -> addPendingList ss container
+    TUnknown{} -> addPendingList ss container
+    _ -> unifyTypes container tyArray
   return m1
 inferBinder val (NamedBinder ss name binder) =
   warnAndRethrowWithPositionTC ss $ do
@@ -813,9 +863,19 @@ check' v@(Literal _ (CharLiteral _)) t | t == tyChar =
 check' v@(Literal _ (BooleanLiteral _)) t | t == tyBoolean =
   return $ TypedValue' True v t
 check' (Literal ss (ArrayLiteral vals)) t@(TypeApp _ a ty) = do
-  unifyTypes a tyArray
-  array <- Literal ss . ArrayLiteral . map tvToExpr <$> forM vals (`check` ty)
-  return $ TypedValue' True array t
+  a' <- gets (flip substituteType a . checkSubstitution)
+  case a' of
+    TypeConstructor _ q | q == qnList -> do
+      list <- Literal ss . ListLiteral . map tvToExpr <$> forM vals (`check` ty)
+      return $ TypedValue' True list t
+    TUnknown{} -> do
+      addPendingList ss a'
+      array <- Literal ss . ArrayLiteral . map tvToExpr <$> forM vals (`check` ty)
+      return $ TypedValue' True (TypedValue True array t) t
+    _ -> do
+      unifyTypes a tyArray
+      array <- Literal ss . ArrayLiteral . map tvToExpr <$> forM vals (`check` ty)
+      return $ TypedValue' True array t
 check' (Abs binder ret) ty@(TypeApp _ (TypeApp _ t argTy) retTy)
   | DiscardBinder ss <- binder = do
       unifyTypes t tyFunction
