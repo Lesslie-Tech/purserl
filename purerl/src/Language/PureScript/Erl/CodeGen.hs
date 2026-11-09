@@ -937,7 +937,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
               BooleanLiteral True -> pure ETrue
               BooleanLiteral False -> pure EFalse
               ObjectLiteral kvPairs ->
-                EMapPattern <$> mapM (\(k, v) -> (AtomPS Nothing k,) <$> binderToErl v) kvPairs
+                EMapPattern <$> mapM (\(k, v) -> (EAtomLiteral (AtomPS Nothing k),) <$> binderToErl v) kvPairs
               ArrayLiteral items -> do
                 arrayVar <- freshNameErl' "ArrayLiteral"
                 pushArrayCont arrayVar items

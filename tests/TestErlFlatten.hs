@@ -13,7 +13,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 
 -- A Veither is `#{type := ~"_", value := V}` when ok and `#{type := Label, value := E}` for an error.
 veitherPat :: Text -> Erl -> Erl
-veitherPat label v = EMapPattern [(Atom Nothing "type", EStringLiteral (mkString label)), (Atom Nothing "value", v)]
+veitherPat label v = EMapPattern [(EAtomLiteral (Atom Nothing "type"), EStringLiteral (mkString label)), (EAtomLiteral (Atom Nothing "value"), v)]
 
 veitherVal :: Text -> Erl -> Erl
 veitherVal label v = EMapLiteral [(Atom Nothing "type", EStringLiteral (mkString label)), (Atom Nothing "value", v)]

@@ -15,6 +15,7 @@ import TestListLiterals qualified
 import TestErlFlatten qualified
 import TestErlAliases qualified
 import TestErlHeadMatches qualified
+import TestErlMapLookup qualified
 import TestErlInstanceArity qualified
 import TestErlUncurriedOnly qualified
 import TestHierarchy qualified
@@ -45,6 +46,7 @@ main = do
     describe "erl flatten" TestErlFlatten.spec
     describe "erl aliases" TestErlAliases.spec
     describe "erl head matches" TestErlHeadMatches.spec
+    describe "erl map lookup" TestErlMapLookup.spec
     describe "erl instance arity" TestErlInstanceArity.spec
     describe "erl uncurried only" TestErlUncurriedOnly.spec
     describe "hierarchy" TestHierarchy.spec

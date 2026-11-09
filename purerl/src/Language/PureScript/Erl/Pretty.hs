@@ -313,7 +313,7 @@ render ind = go
          Nothing -> "#{" <> mintercalate (",\n" <> ci) fields <> "}"
 
   go (EMapPattern elts) =
-    "#{" <> mintercalate ", " (map (\(k, e) -> B.fromText (runAtom k) <> " := " <> go e) elts) <> "}"
+    "#{" <> mintercalate ", " (map (\(k, e) -> go k <> " := " <> go e) elts) <> "}"
 
   go (EMapUpdate e elts) =
     "(" <> go e <> ")" <> "#{" <> mintercalate ", " (map (\(k, ee) -> B.fromText (runAtom k) <> "=>" <> go ee) elts) <> "}"

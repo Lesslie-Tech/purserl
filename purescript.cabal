@@ -433,6 +433,7 @@ test-suite tests
     TestErlFlatten
     TestErlAliases
     TestErlHeadMatches
+    TestErlMapLookup
     TestErlInstanceArity
     TestErlUncurriedOnly
     TestGraph

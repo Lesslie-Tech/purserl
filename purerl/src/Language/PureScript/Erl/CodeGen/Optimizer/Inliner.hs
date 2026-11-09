@@ -417,7 +417,7 @@ inlineAltChain expr = case flattenCall expr of
       _ -> do
         v <- freshName "Val"
         -- A value that is not an error is returned as it is, which stops the block.
-        let ok = EBind (EVar v) (EMapPattern [(Atom Nothing "type", EStringLiteral (mkString "_"))])
+        let ok = EBind (EVar v) (EMapPattern [(typeKey, EStringLiteral (mkString "_"))])
         pure (Just ETrue, ECaseOf operand [(EBinder ok, EVar v), (EBinder (EVar "_"), ETrue)])
 
 inlineCommonOperators :: Text -> EC.EffectDictionaries -> (Erl -> Erl) -> Erl -> Erl
@@ -709,10 +709,11 @@ flattenFailureCases = everywhereOnErl $ \case
 
     staticMatch (EMapPattern pats) fields = concat <$> traverse bindField pats
       where
-        bindField (k, p) = case (p, lookup k fields) of
+        bindField (EAtomLiteral k, p) = case (p, lookup k fields) of
           (EVar v, Just e) -> Just [EBind (EVar v) e]
           (EStringLiteral a, Just (EStringLiteral b)) | a == b -> Just []
           _ -> Nothing
+        bindField _ = Nothing
     staticMatch _ _ = Nothing
 
     statements = \case
@@ -723,10 +724,14 @@ flattenFailureCases = everywhereOnErl $ \case
 
     unsnoc' es = (init es, last es)
 
+-- | The `type` field of a Veither.
+typeKey :: Erl
+typeKey = EAtomLiteral (Atom Nothing "type")
+
 -- | The success case of a Veither, Maybe or Either.
 success :: Erl -> Bool
 success = \case
-  EMapPattern pats -> (Atom Nothing "type", EStringLiteral (mkString "_")) `elem` pats
+  EMapPattern pats -> (typeKey, EStringLiteral (mkString "_")) `elem` pats
   ETupleLiteral (EAtomLiteral (Atom Nothing tag) : _) -> tag `elem` ["just", "right"]
   _ -> False
 
@@ -750,7 +755,7 @@ mergeHandlerCases = everywhereOnErl $ \case
       _ -> Nothing
     errorLabel (EBinder (EMapPattern pats)) = not (success (EMapPattern pats)) && any (isType . fst) pats
     errorLabel _ = False
-    isType = (== Atom Nothing "type")
+    isType = (== typeKey)
     ok (EMapLiteral fields) = (Atom Nothing "type", EStringLiteral (mkString "_")) `elem` fields
     ok _ = False
 
@@ -1182,9 +1187,7 @@ libRules =
   Map.fromList $
     stackRules
     ++ forwardRules
-    ++ [ (("map@ps", "lookupOr"), r3 $ \d k m -> do
-        v <- freshVar "Val"
-        pure $ ECaseOf (app erlangMapsFind [k, m]) [(EBinder (tagged "ok" [v]), v), (EBinder (atom "error"), d)]),
+    ++ [ (("map@ps", "lookupOr"), r3 $ \d k m -> lookupCase k m id d),
       (("maybe@ps", "maybe"), r3 $ \x f m -> maybeCase m x (\z -> app f [z])),
       (("maybe@ps", "withDefault"), r2 $ \x m -> maybeCase m x id),
       (("maybe@ps", "iff"), r2 $ \b v -> pure (boolCase b (just v) nothing)),
@@ -1295,9 +1298,7 @@ libRules =
         (("map@ps", "mapWithIndex"), r2 $ \f m -> do
           g <- adapter [] ["Key", "Val"] f
           pure (app erlangMapsMap [g, m])),
-        (("map@ps", "lookup"), r2 $ \k m -> do
-          v <- freshVar "Val"
-          pure $ ECaseOf (app erlangMapsFind [k, m]) [(EBinder (tagged "ok" [v]), just v), (EBinder (atom "error"), nothing)]),
+        (("map@ps", "lookup"), r2 $ \k m -> lookupCase k m just nothing),
         (("int@ps", "toString"), r1 $ \x -> pure (app erlangIntegerToBinary [x])),
         -- A set is a version 2 `sets` set: a map from each element to `[]`.
         (("set@ps", "member"), r2 $ \x s -> pure (app erlangMapsIsKey [x, s])),
@@ -1388,6 +1389,21 @@ libRules =
 
     freshVar prefix = EVar <$> freshName prefix
 
+    -- A lookup is a match on the map, `#{K := V} -> found; #{} -> missing`, with no `maps:find` tuple to take apart.
+    -- A key that isn't a variable or a simple literal can't be a pattern key, so it is bound first, which also
+    -- keeps it evaluated before the map.
+    lookupCase k m found missing = do
+      v <- freshVar "Val"
+      (bindKey, key) <- case k of
+        EVar x | x /= "_" -> pure (id, k)
+        EAtomLiteral _ -> pure (id, k)
+        EStringLiteral _ -> pure (id, k)
+        EIntLit _ -> pure (id, k)
+        _ -> do
+          kv <- freshVar "Key"
+          pure (ELet (EBind kv k), kv)
+      pure $ bindKey (ECaseOf m [(EBinder (EMapPattern [(key, v)]), found v), (EBinder (EMapPattern []), missing)])
+
     boolCase b onTrue onFalse = ECaseOf b [(EBinder ETrue, onTrue), (EBinder EFalse, onFalse)]
 
     maybeCase m onNothing onJust = do
@@ -1401,7 +1417,7 @@ libRules =
     -- A Veither is `#{type := ~"_", value := V}` when ok and `#{type := Label, value := E}` for an error.
     okLabel = mkString "_"
     veitherVal label v = EMapLiteral [(Atom Nothing "type", EStringLiteral label), (Atom Nothing "value", v)]
-    veitherPat label v = EMapPattern [(Atom Nothing "type", EStringLiteral label), (Atom Nothing "value", v)]
+    veitherPat label v = EMapPattern [(typeKey, EStringLiteral label), (EAtomLiteral (Atom Nothing "value"), v)]
 
     -- Branch on the label; the other branch gets the whole value.
     labelCase label v onMatch onOther = do

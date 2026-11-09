@@ -96,7 +96,8 @@ data Erl
 
   | EArrayLiteral [Erl]
 
-  | EMapPattern [(Atom, Erl)]
+  -- | The keys are literals or bound variables.
+  | EMapPattern [(Erl, Erl)]
 
   | EMapUpdate Erl [(Atom,Erl)]
 
@@ -424,7 +425,7 @@ everywhereOnErl f = go
       ETupleLiteral es -> let !es' = mapShared go es in f (if same es es' then erl else ETupleLiteral es')
       EArrayLiteral es -> let !es' = mapShared go es in f (if same es es' then erl else EArrayLiteral es')
       EMapLiteral bs -> let !b' = binds bs in f (if same bs b' then erl else EMapLiteral b')
-      EMapPattern bs -> let !b' = binds bs in f (if same bs b' then erl else EMapPattern b')
+      EMapPattern bs -> let !b' = mapShared (\p@(k, e) -> let !k' = go k; !e' = go e in if same k k' && same e e' then p else (k', e')) bs in f (if same bs b' then erl else EMapPattern b')
       EMapUpdate e bs ->
         let !e' = go e; !b' = binds bs
         in f (if same e e' && same bs b' then erl else EMapUpdate e' b')
@@ -482,7 +483,7 @@ everywhereOnErlTopDownM f = f >=> go
   go (ETupleLiteral es) = ETupleLiteral <$> traverse f' es
   go (EArrayLiteral es) = EArrayLiteral <$> traverse f' es
   go (EMapLiteral binds) = EMapLiteral <$> fargs binds
-  go (EMapPattern binds) = EMapPattern <$> fargs binds
+  go (EMapPattern binds) = EMapPattern <$> traverse (\(k, e) -> (,) <$> f' k <*> f' e) binds
   go (EMapUpdate e binds) = EMapUpdate <$> f' e <*> fargs binds
   go (ECaseOf e binds) = ECaseOf <$> f' e <*> fargs binds
   go (EListLiteral es) = EListLiteral <$> traverse f' es
@@ -509,9 +510,9 @@ everything (<>.) f = go
   go e0@(ETupleLiteral es) = foldl (<>.) (f e0) (map go es)
   go e0@(EArrayLiteral es) = foldl (<>.) (f e0) (map go es)
   go e0@(EMapLiteral binds) = foldl (<>.) (f e0) (map (go . snd) binds)
-  go e0@(EMapPattern binds) = foldl (<>.) (f e0) (map (go . snd) binds)
+  go e0@(EMapPattern binds) = foldl (<>.) (f e0) (concatMap (\(k, e) -> [go k, go e]) binds)
   go e0@(EMapUpdate e binds) = foldl (<>.) (f e0 <>. go e) (map (go . snd) binds)
-  go e0@(ECaseOf e binds) = foldl (<>.) (f e0 <>. go e) (map (go . snd) binds)
+  go e0@(ECaseOf e binds) = foldl (<>.) (f e0 <>. go e) (concatMap (\(EBinder p, r) -> [go p, go r]) binds)
   go e0@(EListLiteral es) = foldl (<>.) (f e0) (map go es)
   go e0@(EListCons es e) = foldl (<>.) (f e0) (map go $ es <> [e])
   go e0@(ETryAnyAny e1 e2) = f e0 <>. go e1 <>. go e2

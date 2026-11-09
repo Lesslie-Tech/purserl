@@ -11,7 +11,7 @@ import Test.Hspec (Spec, describe, it, shouldBe)
 
 -- | `#{k := X}`
 record :: Erl
-record = EMapPattern [(Atom Nothing "k", EVar "X")]
+record = EMapPattern [(EAtomLiteral (Atom Nothing "k"), EVar "X")]
 
 tuple :: [Erl] -> Erl
 tuple = ETupleLiteral
