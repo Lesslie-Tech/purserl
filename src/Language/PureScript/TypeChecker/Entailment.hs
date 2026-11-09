@@ -507,7 +507,8 @@ mkDictionary (WarnInstance msg) args = do
   -- So pass an empty placeholder (undefined) instead.
   return (useEmptyDict args)
 mkDictionary (IsSymbolInstance sym) _ =
-  let fields = [ ("reflectSymbol", Abs (VarBinder nullSourceSpan UnusedIdent) (Literal nullSourceSpan (StringLiteral sym))) ] in
+  -- The class has one member, `reflect :: String`: the symbol itself, so the dictionary holds no function.
+  let fields = [ ("reflect", Literal nullSourceSpan (StringLiteral sym)) ] in
   return $ App (Constructor nullSourceSpan (coerceProperName . dictTypeName <$> C.IsSymbol)) (Literal nullSourceSpan (ObjectLiteral fields))
 mkDictionary (ReflectableInstance ref) _ =
   let fields = [ ("reflectType", Abs (VarBinder nullSourceSpan UnusedIdent) (asExpression ref)) ] in

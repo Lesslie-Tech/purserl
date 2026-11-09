@@ -23,6 +23,7 @@ import Language.PureScript.Erl.CodeGen.Optimizer.Inliner
       flattenFailureCases,
       mergeHandlerCases )
 
+import Language.PureScript.Erl.CodeGen.Common (runAtom)
 import qualified Language.PureScript.Erl.CodeGen.Constants as EC
 import Data.Map (Map)
 import Control.Monad ((<=<))
@@ -149,7 +150,7 @@ buildExpander = replaceAtoms . foldr go []
 
 -- |
 -- The label of an `IsSymbol` dictionary: either a literal
--- `#{reflectSymbol => fun (_) -> ~"label" end}` or a call to a top-level
+-- `#{reflect => ~"label"}` or a call to a top-level
 -- constant of the current module that is one.
 --
 dictSymbol :: Map Atom PSString -> Erl -> Maybe PSString
@@ -159,7 +160,8 @@ dictSymbol known = \case
 
 literalSymbol :: Erl -> Maybe PSString
 literalSymbol = \case
-  EMapLiteral [(_, EFunFull Nothing [(EFunBinder [_], EStringLiteral s)])] -> Just s
+  EMapLiteral fields
+    | [EStringLiteral s] <- [e | (k, e) <- fields, runAtom k == "reflect"] -> Just s
   _ -> Nothing
 
 topLevelDict :: Erl -> Maybe (Atom, PSString)

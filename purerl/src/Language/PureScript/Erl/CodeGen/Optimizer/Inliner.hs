@@ -1187,7 +1187,9 @@ libRules =
   Map.fromList $
     stackRules
     ++ forwardRules
-    ++ [ (("map@ps", "lookupOr"), r3 $ \d k m -> lookupCase k m id d),
+    ++ [ -- With a known dictionary the symbol is the string itself.
+         (("data_symbol@ps", "reflect"), LibRule 0 True (\l _ -> pure (EStringLiteral (label l)))),
+         (("map@ps", "lookupOr"), r3 $ \d k m -> lookupCase k m id d),
       (("maybe@ps", "maybe"), r3 $ \x f m -> maybeCase m x (\z -> app f [z])),
       (("maybe@ps", "withDefault"), r2 $ \x m -> maybeCase m x id),
       (("maybe@ps", "iff"), r2 $ \b v -> pure (boolCase b (just v) nothing)),

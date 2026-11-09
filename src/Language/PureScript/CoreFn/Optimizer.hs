@@ -3,6 +3,7 @@ module Language.PureScript.CoreFn.Optimizer (optimizeCoreFn) where
 import Protolude hiding (Type, moduleName, traceM, State, evalState)
 import Prelude (error)
 
+import Data.List qualified as List
 import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (fresh)
 import Language.PureScript.CoreFn.Ann (Ann)
@@ -218,8 +219,8 @@ data RecOp
 
 -- | The label of a dictionary built by the `IsSymbol` solver.
 literalSymbolDict :: Expr Ann -> Maybe PS.PSString
-literalSymbolDict (App _ (Var _ (Qualified _ (Ident "IsSymbol$Dict"))) (Literal _ (ObjectLiteral [(k, Abs _ _ (Literal _ (StringLiteral s)))])))
-  | k == PS.mkString "reflectSymbol" = Just s
+literalSymbolDict (App _ (Var _ (Qualified _ (Ident "IsSymbol$Dict"))) (Literal _ (ObjectLiteral fields)))
+  | Just (Literal _ (StringLiteral s)) <- List.lookup (PS.mkString "reflect") fields = Just s
 literalSymbolDict _ = Nothing
 
 -- | (dictionaries taken, value arguments) for each rewritten function.

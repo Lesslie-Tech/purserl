@@ -3,6 +3,7 @@ module Language.PureScript.CoreFn.CSE (optimizeCommonSubexpressions) where
 
 import Protolude
 
+import Data.List qualified as List
 import Control.Monad.State.Strict qualified as Strict
 import Control.Monad.Supply (Supply)
 import Data.IntMap.Strict qualified as IM
@@ -21,7 +22,7 @@ import Language.PureScript.CoreFn.Meta (Meta(IsSyntheticApp))
 import Language.PureScript.CoreFn.Traversals (everywhereOnValues)
 import Language.PureScript.Environment (dictTypeName)
 import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), ModuleName(..), ProperName(..), Qualified(..), QualifiedBy(..), freshIdent, runIdent, toMaybeModuleName)
-import Language.PureScript.PSString (decodeString)
+import Language.PureScript.PSString (decodeString, mkString)
 
 -- |
 -- Float synthetic Apps (right now, the only Apps marked as synthetic are type
@@ -292,7 +293,8 @@ nameHint = \case
   App _ v1 v2
     | Var _ n <- v1
     , fmap (ProperName . runIdent) n == fmap dictTypeName C.IsSymbol
-    , Literal _ (ObjectLiteral [(_, Abs _ _ (Literal _ (StringLiteral str)))]) <- v2
+    , Literal _ (ObjectLiteral fields) <- v2
+    , Just (Literal _ (StringLiteral str)) <- List.lookup (mkString "reflect") fields
     , Just decodedStr <- decodeString str
       -> decodedStr <> "IsSymbol"
     | otherwise
