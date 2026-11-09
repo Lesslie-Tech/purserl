@@ -14,6 +14,7 @@ import TestDiscard qualified
 import TestListLiterals qualified
 import TestErlFlatten qualified
 import TestErlInstanceArity qualified
+import TestErlUncurriedOnly qualified
 import TestHierarchy qualified
 import TestIde qualified
 import TestMake qualified
@@ -41,5 +42,6 @@ main = do
     describe "list literals" TestListLiterals.spec
     describe "erl flatten" TestErlFlatten.spec
     describe "erl instance arity" TestErlInstanceArity.spec
+    describe "erl uncurried only" TestErlUncurriedOnly.spec
     describe "hierarchy" TestHierarchy.spec
     describe "graph" TestGraph.spec

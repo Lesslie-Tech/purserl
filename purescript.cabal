@@ -431,6 +431,7 @@ test-suite tests
     TestListLiterals
     TestErlFlatten
     TestErlInstanceArity
+    TestErlUncurriedOnly
     TestGraph
     TestHierarchy
     TestIde

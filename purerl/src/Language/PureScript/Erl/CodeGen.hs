@@ -9,6 +9,7 @@ module Language.PureScript.Erl.CodeGen
     CodegenEnvironment,
     FnArity (..),
     instanceArities,
+    isUncurriedOnly,
   )
 where
 
@@ -195,11 +196,35 @@ instanceArities env =
         n > 0
     ]
 
-data CodegenEnvironment = CodegenEnvironment E.Environment (M.Map (Qualified Ident) FnArity)
+-- | The functions that only exist in their uncurried form: no curried @f/0@, no dictionary-only overload and no
+-- forwarders. Partial applications and function values of them are built where they're needed.
+-- Asking about a name is what computes its arity, so this is a predicate and not a set built for the whole environment.
+type UncurriedOnly = Qualified Ident -> Bool
+
+data CodegenEnvironment = CodegenEnvironment E.Environment (M.Map (Qualified Ident) FnArity) UncurriedOnly (Qualified Ident -> Bool)
+
+-- | Whether a name from the environment only exists in its uncurried form.
+isUncurriedOnly :: CodegenEnvironment -> Qualified Ident -> Bool
+isUncurriedOnly (CodegenEnvironment _ _ uncurriedOnly _) = uncurriedOnly
 
 buildCodegenEnvironment :: E.Environment -> CodegenEnvironment
-buildCodegenEnvironment env = CodegenEnvironment env (explicitArities `M.union` instanceArities env)
+buildCodegenEnvironment env = CodegenEnvironment env (explicitArities `M.union` instanceArities env) uncurriedOnly classMember
   where
+    -- Values with a function type. Class members keep their overloads, and so do foreign imports, whose definitions
+    -- don't go through the uncurried-only path. Instances aren't in the names.
+    uncurriedOnly :: UncurriedOnly
+    uncurriedOnly qi = case M.lookup qi explicitArities of
+      Just (Arity (n, m)) -> n + m > 0 && qi `M.member` E.names env && not (classMember qi)
+      _ -> False
+
+    classMember :: Qualified Ident -> Bool
+    classMember (Qualified (P.ByModuleName m) i) =
+      any (\tc -> any (\(i', _, _) -> i' == i) (P.typeClassMembers tc)) (M.findWithDefault [] m classesByModule)
+    classMember _ = False
+
+    classesByModule :: M.Map ModuleName [P.TypeClassData]
+    classesByModule = M.fromListWith (<>) [(m, [tc]) | (Qualified (P.ByModuleName m) _, tc) <- M.toList (E.typeClasses env)]
+
     tyArity :: SourceType -> FnArity
     tyArity t = Arity $ go 0 t'
       where
@@ -226,7 +251,7 @@ data Arities = Arities
   }
 
 findArities :: ModuleName -> [Bind Ann] -> CodegenEnvironment -> [(T.Text, Int)] -> Arities
-findArities mn decls (CodegenEnvironment _ explicitArities) foreignExports = Arities arities actualForeignArities
+findArities mn decls (CodegenEnvironment _ explicitArities _ _) foreignExports = Arities arities actualForeignArities
   where
   actualForeignArities :: M.Map (Qualified Ident) Int
   actualForeignArities = M.fromList $ map (\(x, n) -> (Qualified (P.ByModuleName mn) (Ident x), n)) foreignExports
@@ -324,7 +349,7 @@ moduleToErl' ::
   Module Ann ->
   [(T.Text, Int)] ->
   ErlW ([(Atom, Int)], [Erl], [Erl], [Erl], [(Atom, Int)], [Erl]) -- , Map Atom Int)
-moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ declaredExports _ foreigns origDecls) foreignExports =
+moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped isClassMember) (Module _ _ mn _ _ declaredExports _ foreigns origDecls) foreignExports =
   do
     res <- traverse (\b ->
       do
@@ -366,6 +391,36 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
     return (exports, namedSpecs, foreignSpecs, attributes ++ erlDecls, safeExports, safeDecls)
   where
     declaredExportsSet = Set.fromList declaredExports
+
+    -- Instances are visible to every module, whatever the export list says.
+    ownInstanceNames :: Set (Qualified Ident)
+    ownInstanceNames =
+      Set.fromList
+        [ tcdValue d
+          | byModule <- maybe [] pure (M.lookup (P.ByModuleName mn) (E.typeClassDictionaries env)),
+            perClass <- M.elems byModule,
+            dicts <- M.elems perClass,
+            d <- NEL.toList dicts
+        ]
+
+    -- Functions of this module that the externs know nothing about (private ones, and the ones the optimizer made up)
+    -- are uncurried too, with the arity they are used with. Nothing other modules can refer to qualifies: they
+    -- couldn't know the arity.
+    uncurriedOnly :: UncurriedOnly
+    uncurriedOnly qi = uncurriedOnlyTyped qi || qi `Set.member` uncurriedOnlyLocal
+
+    uncurriedOnlyLocal :: Set (Qualified Ident)
+    uncurriedOnlyLocal =
+      Set.fromList
+          [ qi
+            | i <- topLevelNames,
+              i `Set.notMember` declaredExportsSet,
+              let qi = Qualified (P.ByModuleName mn) i,
+              qi `Set.notMember` ownInstanceNames,
+              qi `M.notMember` explicitArities,
+              Just (Arity (0, k)) <- [M.lookup qi arities],
+              k > 0
+          ]
 
     Arities arities actualForeignArities = findArities mn decls cgEnv foreignExports
 
@@ -424,7 +479,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
       let var = Qualified P.ByNullSourcePos fident
           -- wrap e = EBlock [EVarBind (identToVar fident) fun, e]
           wrap = ELet (EVarBind (identToVar fident) fun)
-      (idents, erl, env) <- generateFunctionOverloads Nothing (ssAnn nullSourceSpan) ident (Atom Nothing $ runIdent' ident) (Var (ssAnn nullSourceSpan) var) wrap
+      (idents, erl, env) <- generateFunctionOverloads False Nothing (ssAnn nullSourceSpan) ident (Atom Nothing $ runIdent' ident) (Var (ssAnn nullSourceSpan) var) wrap
       let combinedTEnv = M.union env (maybe M.empty snd ffiTyEnv)
       pure (idents, erl, (ident,) . fst <$> ffiTyEnv, combinedTEnv)
 
@@ -491,10 +546,10 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
             _ -> Atom Nothing $ runIdent' ident
 
       val' <- ensureFreshVars_ val
-      generateFunctionOverloads (Just ss) eann ident ident' val' id
+      generateFunctionOverloads True (Just ss) eann ident ident' val' id
 
-    generateFunctionOverloads :: Maybe SourceSpan -> Ann -> Ident -> Atom -> Expr Ann -> (Erl -> Erl) -> ErlW ([(Atom, Int)], [Erl], ETypeEnv)
-    generateFunctionOverloads ss eann ident ident' val outerWrapper = do
+    generateFunctionOverloads :: Bool -> Maybe SourceSpan -> Ann -> Ident -> Atom -> Expr Ann -> (Erl -> Erl) -> ErlW ([(Atom, Int)], [Erl], ETypeEnv)
+    generateFunctionOverloads canBeUncurriedOnly ss eann ident ident' val outerWrapper = do
       -- Always generate the plain curried form, f x y = ... -~~> f() -> fun (X) -> fun (Y) -> ... end end.
       let qident = Qualified (P.ByModuleName mn) ident
 
@@ -541,6 +596,13 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
           vars <- replicateM arity freshNameErl
           erl' <- valueToErl $ foldl applyStep (mkRunApp dataFunctionUncurried (snd C.P_runFn) arity val) vars
           pure $ curried <> ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' vars (outerWrapper erl')])
+        -- Only the uncurried definition; the body is applied to the parameters, whatever shape it has.
+        Just (Arity (n, m))
+          | canBeUncurriedOnly, uncurriedOnly qident, n + m > 0 -> do
+              let arity = n + m
+              vars <- replicateM arity freshNameErl
+              erl' <- valueToErl $ foldl applyStep val vars
+              pure ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' vars (outerWrapper erl')])
         Just (Arity (n, m)) | n + m > 0 ->
           do
             let arity = n + m
@@ -641,9 +703,17 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
         return $ EAtomLiteral $ Atom Nothing C.S_undefined
     valueToErl'' ann _ (Var (_, _, Just (IsConstructor _ [])) (Qualified _ ident)) =
       return $ constructorLiteral (runIdent' ident) []
+    valueToErl'' ann _ (Var _ ident)
+      | isTopLevelBinding ident,
+        uncurriedOnly ident,
+        Just (Arity (n, m)) <- M.lookup ident arities,
+        n + m > 1 = do
+        vars <- replicateM (n + m) freshNameErl
+        pure $ curriedLambda (EApp RegularApp (EAtomLiteral $ qualifiedToErl mn ident) (EVar <$> vars)) vars
     valueToErl'' ann _ (Var _ ident) | isTopLevelBinding ident = pure $
       case M.lookup ident arities of
         Just (Arity (0, 1)) -> EFunRef (qualifiedToErl mn ident) 1
+        Just (Arity (1, 0)) | uncurriedOnly ident -> EFunRef (qualifiedToErl mn ident) 1
         _
           | Just (EffFnXArity arity) <- effFnArity ident,
             arity > 0 ->
@@ -695,12 +765,29 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
         Var _ (Qualified _ ident)
           | isFullySaturatedForeignCall mn actualForeignArities f args ->
             return $ EApp eMeta (EAtomLiteral $ qualifiedToErl' mn ForeignModule ident) args'
-        -- Fully saturated (consuming tc dicts and value args in 1 call) (including "over-saturated")
+        -- Fully saturated (consuming tc dicts and value args in 1 call) (including "over-saturated"). A class member
+        -- is the dictionary's field, so it gets the dictionary alone and the arguments go to what comes back.
         Var _ qi@(Qualified _ _)
           | Just (Arity (n, m)) <- M.lookup qi arities,
             let arity = n + m,
-            length args >= arity ->
+            length args >= arity,
+            not (isClassMember qi) ->
             return $ curriedApp (drop arity args') $ EApp eMeta (EAtomLiteral (qualifiedToErl mn qi)) (take arity args')
+        -- partial application of an uncurried-only function: the arguments are evaluated now, the rest is taken by funs
+        Var _ qi@(Qualified _ _)
+          | uncurriedOnly qi,
+            Just (Arity (n, m)) <- M.lookup qi arities,
+            let arity = n + m,
+            not (null args),
+            length args < arity -> do
+            bound <- forM args' $ \a -> case a of
+              EVar _ -> pure (Nothing, a)
+              _ -> do
+                v <- freshNameErl
+                pure (Just (v, a), EVar v)
+            rest <- replicateM (arity - length args) freshNameErl
+            let call = EApp eMeta (EAtomLiteral (qualifiedToErl mn qi)) (map snd bound ++ map EVar rest)
+            pure $ letbindVars ELet [b | (Just b, _) <- bound] (curriedLambda call rest)
         -- partially saturated application (all tc dicts to be applied in 1 call and maybe more to be applied to the curried result)
         Var _ qi@(Qualified _ _)
           | Just (Arity (n, _)) <- M.lookup qi arities,
