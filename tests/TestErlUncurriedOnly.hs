@@ -85,11 +85,17 @@ spec = do
     it "calls them with all their arguments, however they are used" $ do
       (_, user) <- compileLibAndUser
       -- Saturated (`full`), partially applied (`partial`, `later`) and as a value (`value`).
-      argCounts "lib@ps:pick(" user `shouldBe` replicate 5 2
+      argCounts "lib@ps:pick(" user `shouldBe` replicate 6 2
 
     it "evaluates the arguments of a partial application once, where it is made" $ do
       (_, user) <- compileLibAndUser
       T.count "lib@ps:pick(7, 8)" user `shouldBe` 1
+
+    -- A lambda that takes a record apart is a fun with the pattern as its head, not a fun that matches its parameter.
+    it "puts the pattern a lambda matches in the head of its fun" $ do
+      (_, user) <- compileLibAndUser
+      user `shouldSatisfy` T.isInfixOf "fun (#{a := "
+      user `shouldSatisfy` (not . T.isInfixOf "} = V@")
 
     it "calls a class member through the dictionary alone" $ do
       (_, user) <- compileLibAndUser
@@ -142,7 +148,9 @@ sources =
           "value :: { f :: Int -> Int -> Int }",
           "value = { f: pick }",
           "viaClass :: forall a. Sized a => a -> Int",
-          "viaClass x = size x 1"
+          "viaClass x = size x 1",
+          "unRec :: { f :: { a :: Int } -> Int }",
+          "unRec = { f: \\{ a } -> pick a a }"
         ]
     )
   ]

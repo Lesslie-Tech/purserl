@@ -432,6 +432,7 @@ test-suite tests
     TestListLiterals
     TestErlFlatten
     TestErlAliases
+    TestErlHeadMatches
     TestErlInstanceArity
     TestErlUncurriedOnly
     TestGraph

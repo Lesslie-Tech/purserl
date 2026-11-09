@@ -53,7 +53,7 @@ data Erl
   -- |
   -- Top-level function definition (over-simplified)
   --
-  | EFunctionDef (Maybe EType) (Maybe SourceSpan) Atom [Text] Erl
+  | EFunctionDef (Maybe EType) (Maybe SourceSpan) Atom [Erl] Erl
   -- TODO not really a separate form. and misused
   | EBind Erl Erl
   -- |

@@ -290,9 +290,12 @@ render ind = go
 
   go (EBind x e) = go x <> " = " <> go e
 
-  go (EFunctionDef _t _ss x xs e) =
-    B.fromText (runAtom x) <> "(" <> mintercalate "," (map (B.fromText . escapeQuotedVar) xs) <> ") ->" <> body
+  go (EFunctionDef _t _ss x heads e) =
+    B.fromText (runAtom x) <> "(" <> mintercalate "," (map param heads) <> ") ->" <> body
     where
+      param = \case
+        EVar v -> B.fromText (escapeQuotedVar v)
+        pat -> render (ind + 2) pat
       body = case e of
         EAndThen a b -> blockWithSurroundingNewlines (flattenSeq a b)
         ELet a b -> blockWithSurroundingNewlines (flattenSeq a b)

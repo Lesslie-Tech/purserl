@@ -10,11 +10,12 @@ module Language.PureScript.Erl.CodeGen
     FnArity (..),
     instanceArities,
     isUncurriedOnly,
+    fuseHead,
   )
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (foldM, replicateM, unless)
+import Control.Monad (foldM, guard, replicateM, unless)
 import Control.Monad.Error.Class (MonadError (..))
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.Supply.Class (MonadSupply (fresh), bumpToNextRoundNumber)
@@ -589,13 +590,13 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
                 Ident "$__unused" -> "_"
                 arg -> identToVar arg
 
-          -- The first @k@ parameters and the body applied to them.
-          applyToParams :: Int -> ErlW ([T.Text], Erl)
+          -- The head of the first @k@ parameters and the body applied to them.
+          applyToParams :: Int -> ErlW ([Erl], Erl)
           applyToParams k = case peelParams k val of
-            Just (params, body) -> (params,) <$> valueToErl body
+            Just (params, body) -> uncurry fuseHead . (params,) <$> valueToErl body
             Nothing -> do
               vars <- replicateM k freshNameErl
-              (vars,) <$> valueToErl (foldl applyStep val vars)
+              (EVar <$> vars,) <$> valueToErl (foldl applyStep val vars)
 
       let curriedWrappingUncurried arity = do
             vars <- replicateM arity freshNameErl
@@ -607,7 +608,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
             vars <- replicateM arity freshNameErl
             let callCurriedErl = curriedApp (EVar <$> vars) $ EApp RegularApp (EAtomLiteral ident') []
             pure
-              ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' vars callCurriedErl])
+              ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' (EVar <$> vars) callCurriedErl])
 
       -- NOTE[drathier]: all call site arities are unknown here, since codegen runs as we go instead of as a separate
       -- second pass, so every arity is assumed to be used.
@@ -616,12 +617,12 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
         Just (EffFnXArity arity) -> do
           vars <- replicateM arity freshNameErl
           erl' <- valueToErl $ foldl applyStep (mkRunApp effectUncurried (snd C.P_runEffectFn) arity val) vars
-          pure $ curried <> ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' vars (outerWrapper (EApp RegularApp erl' []))])
+          pure $ curried <> ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' (EVar <$> vars) (outerWrapper (EApp RegularApp erl' []))])
         Just (FnXArity arity) -> do
           -- Same as above
           vars <- replicateM arity freshNameErl
           erl' <- valueToErl $ foldl applyStep (mkRunApp dataFunctionUncurried (snd C.P_runFn) arity val) vars
-          pure $ curried <> ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' vars (outerWrapper erl')])
+          pure $ curried <> ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' (EVar <$> vars) (outerWrapper erl')])
         -- Only the uncurried definition; the body is applied to the parameters, whatever shape it has.
         Just (Arity (n, m))
           | canBeUncurriedOnly, uncurriedOnly qident, n + m > 0 -> do
@@ -757,7 +758,10 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
           arg' = case fixIdent arg of
             UnusedIdent -> "_"
             _ -> identToVar arg
-      return $ EFun1 (fmap identToVar ident) arg' ret
+      let name = fmap identToVar ident
+      return $ case fuseHead [arg' | arg' /= "_"] ret of
+        ([pat], rhs) | pat /= EVar arg' -> EFunFull name [(EFunBinder [pat], rhs)]
+        _ -> EFun1 name arg' ret
     valueToErl'' ann _ (Accessor _ prop val) = do
       eval <- valueToErl2 ann Nothing val
       return $ EApp RegularApp (EAtomLiteral $ Atom (Just "maps") "get") [EAtomLiteral $ AtomPS Nothing prop, eval]
@@ -1055,3 +1059,27 @@ data DB
     , topmostValues :: [T.Text]
     }
 
+
+-- | The head over the parameters of a function whose body is a single arm matching them, and what is left of the body:
+-- the arm's pattern goes into the head, as @N = P@ if the body uses the parameter again. A column that matches
+-- nothing, and a pattern with no variable at all (left for the optimizer to drop), leave the head as it is.
+fuseHead :: [T.Text] -> Erl -> ([Erl], Erl)
+fuseHead params body = fromMaybe (EVar <$> params, body) $ case body of
+  ECaseOf scrut [(EBinder pat, rhs)] | anyVar pat -> do
+    columns <- case (scrut, pat) of
+      (EVar v, p) -> Just [(v, p)]
+      (ETupleLiteral vs, ETupleLiteral ps) | length vs == length ps -> (`zip` ps) <$> traverse varName vs
+      _ -> Nothing
+    let matched = [(v, p) | (v, p) <- columns, p /= EVar "_"]
+        names = fst <$> matched
+        fusable v = v /= "_" && length (filter (== v) params) == 1 && not (everything (||) (== EVar v) pat)
+    guard (not (null matched) && all fusable names && length (nub names) == length names)
+    let headOf v = case lookup v matched of
+          Just p | everything (||) (== EVar v) rhs -> EBind (EVar v) p
+                 | otherwise -> p
+          Nothing -> EVar v
+    Just (headOf <$> params, rhs)
+  _ -> Nothing
+  where
+    anyVar = everything (||) (\case EVar _ -> True; _ -> False)
+    varName = \case EVar v -> Just v; _ -> Nothing

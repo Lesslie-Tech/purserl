@@ -203,11 +203,11 @@ inlineCommonValuesTopDown expander = everywhereOnErlTopDown convert
 {-
         -- [drathier]: needlessly _@123-wrapped top-level functions, take the inner var and use that instead of the _@123 var.
         -- TODO[drathier]: perf: these only ever apply at top-level, so no need to check for them while recursing. They won't apply for let-bound functions either, as EFunctionDef is only valid at top-level. Otherwise it's an EFunFull.
-        EFunctionDef mType mSS name [var1a, var2a, var3a, var4a, var5a] (EApp _ (EApp _ (EApp _ (EApp _ (EApp _ (EFun1 Nothing var1i (EFun1 Nothing var2i (EFun1 Nothing var3i (EFun1 Nothing var4i (EFun1 Nothing var5i body))))) [EVar var1b]) [EVar var2b]) [EVar var3b]) [EVar var4b]) [EVar var5b]) | var1a == var1b, var2a == var2b, var3a == var3b, var4a == var4b, var5a == var5b -> EFunctionDef mType mSS name [var1i, var2i, var3i, var4i, var5i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i), (var2a, EVar var2i), (var2b, EVar var2i), (var3a, EVar var3i), (var3b, EVar var3i), (var4a, EVar var4i), (var4b, EVar var4i), (var5a, EVar var5i), (var5b, EVar var5i)] body) -- TODO[drathier]: this clause is untested, only tested 1-3 args
-        EFunctionDef mType mSS name [var1a, var2a, var3a, var4a] (EApp _ (EApp _ (EApp _ (EApp _ (EFun1 Nothing var1i (EFun1 Nothing var2i (EFun1 Nothing var3i (EFun1 Nothing var4i body)))) [EVar var1b]) [EVar var2b]) [EVar var3b]) [EVar var4b]) | var1a == var1b, var2a == var2b, var3a == var3b, var4a == var4b -> EFunctionDef mType mSS name [var1i, var2i, var3i, var4i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i), (var2a, EVar var2i), (var2b, EVar var2i), (var3a, EVar var3i), (var3b, EVar var3i), (var4a, EVar var4i), (var4b, EVar var4i)] body) -- TODO[drathier]: this clause is untested, only tested 1-3 args
-        EFunctionDef mType mSS name [var1a, var2a, var3a] (EApp _ (EApp _ (EApp _ (EFun1 Nothing var1i (EFun1 Nothing var2i (EFun1 Nothing var3i body))) [EVar var1b]) [EVar var2b]) [EVar var3b]) | var1a == var1b, var2a == var2b, var3a == var3b -> EFunctionDef mType mSS name [var1i, var2i, var3i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i), (var2a, EVar var2i), (var2b, EVar var2i), (var3a, EVar var3i), (var3b, EVar var3i)] body)
-        EFunctionDef mType mSS name [var1a, var2a] (EApp _ (EApp _ (EFun1 Nothing var1i (EFun1 Nothing var2i body)) [EVar var1b]) [EVar var2b]) | var1a == var1b, var2a == var2b -> EFunctionDef mType mSS name [var1i, var2i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i), (var2a, EVar var2i), (var2b, EVar var2i)] body)
-        EFunctionDef mType mSS name [var1a] (EApp _ (EFun1 Nothing var1i body) [EVar var1b]) | var1a == var1b -> EFunctionDef mType mSS name [var1i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i)] body)
+        EFunctionDef mType mSS name [EVar var1a, EVar var2a, EVar var3a, EVar var4a, EVar var5a] (EApp _ (EApp _ (EApp _ (EApp _ (EApp _ (EFun1 Nothing var1i (EFun1 Nothing var2i (EFun1 Nothing var3i (EFun1 Nothing var4i (EFun1 Nothing var5i body))))) [EVar var1b]) [EVar var2b]) [EVar var3b]) [EVar var4b]) [EVar var5b]) | var1a == var1b, var2a == var2b, var3a == var3b, var4a == var4b, var5a == var5b -> EFunctionDef mType mSS name [EVar var1i, EVar var2i, EVar var3i, EVar var4i, EVar var5i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i), (var2a, EVar var2i), (var2b, EVar var2i), (var3a, EVar var3i), (var3b, EVar var3i), (var4a, EVar var4i), (var4b, EVar var4i), (var5a, EVar var5i), (var5b, EVar var5i)] body) -- TODO[drathier]: this clause is untested, only tested 1-3 args
+        EFunctionDef mType mSS name [EVar var1a, EVar var2a, EVar var3a, EVar var4a] (EApp _ (EApp _ (EApp _ (EApp _ (EFun1 Nothing var1i (EFun1 Nothing var2i (EFun1 Nothing var3i (EFun1 Nothing var4i body)))) [EVar var1b]) [EVar var2b]) [EVar var3b]) [EVar var4b]) | var1a == var1b, var2a == var2b, var3a == var3b, var4a == var4b -> EFunctionDef mType mSS name [EVar var1i, EVar var2i, EVar var3i, EVar var4i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i), (var2a, EVar var2i), (var2b, EVar var2i), (var3a, EVar var3i), (var3b, EVar var3i), (var4a, EVar var4i), (var4b, EVar var4i)] body) -- TODO[drathier]: this clause is untested, only tested 1-3 args
+        EFunctionDef mType mSS name [EVar var1a, EVar var2a, EVar var3a] (EApp _ (EApp _ (EApp _ (EFun1 Nothing var1i (EFun1 Nothing var2i (EFun1 Nothing var3i body))) [EVar var1b]) [EVar var2b]) [EVar var3b]) | var1a == var1b, var2a == var2b, var3a == var3b -> EFunctionDef mType mSS name [EVar var1i, EVar var2i, EVar var3i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i), (var2a, EVar var2i), (var2b, EVar var2i), (var3a, EVar var3i), (var3b, EVar var3i)] body)
+        EFunctionDef mType mSS name [EVar var1a, EVar var2a] (EApp _ (EApp _ (EFun1 Nothing var1i (EFun1 Nothing var2i body)) [EVar var1b]) [EVar var2b]) | var1a == var1b, var2a == var2b -> EFunctionDef mType mSS name [EVar var1i, EVar var2i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i), (var2a, EVar var2i), (var2b, EVar var2i)] body)
+        EFunctionDef mType mSS name [EVar var1a] (EApp _ (EFun1 Nothing var1i body) [EVar var1b]) | var1a == var1b -> EFunctionDef mType mSS name [EVar var1i] (letBindIdents [(var1a, EVar var1i), (var1b, EVar var1i)] body)
 -}
 
         -- [drathier]: immediately called funs, let-bind their vars
@@ -767,6 +767,7 @@ applySpine = go []
 
     canStep (ELet _ _) _ = True
     canStep (EFun1 {}) ((_, [_]) : _) = True
+    canStep (EFunFull Nothing [(EFunBinder [_], _)]) ((_, [_]) : _) = True
     canStep (EFun0 _ _) ((_, []) : _) = True
     canStep (ECaseOf _ alts) as = pushable alts as
     canStep _ _ = False
@@ -794,12 +795,15 @@ applySpine = go []
     fun = \case
       EFun0 _ _ -> True
       EFun1 {} -> True
+      EFunFull Nothing [(EFunBinder [_], _)] -> True
       ELet _ body -> fun body
       ECaseOf _ alts -> all (fun . snd) alts
       _ -> False
 
     step (ELet b body) as = ELet b (step body as)
     step (EFun1 _ v body) ((_, [arg]) : as) = bindLet (EVar v) arg (step body as)
+    -- A pattern head is matched against the argument first.
+    step (EFunFull Nothing [(EFunBinder [pat], body)]) ((_, [arg]) : as) = bindLet pat arg (step body as)
     step (EFun0 _ body) ((_, []) : as) = step body as
     step (ECaseOf scrutinee alts) as | pushable alts as = ECaseOf scrutinee [(b, step rhs as) | (b, rhs) <- alts]
     step h as = foldl (\g (k, args) -> EApp k g args) h as
@@ -1155,6 +1159,21 @@ freshName prefix = do
   n <- fresh
   pure (prefix <> "@" <> T.pack (show n))
 
+-- | A fun over the leading heads and then one parameter per name, that calls @f@ with those. When @f@ is a literal fun
+-- its own head patterns become the heads, so a pattern it matches stays in the head.
+adapter :: [Erl] -> [Text] -> Erl -> Supply Erl
+adapter lead names f = case peel (length names) f of
+  Just (pats, body) | distinct (concatMap varsInExpr (lead <> pats)) -> pure (EFunFull Nothing [(EFunBinder (lead <> pats), body)])
+  _ -> do
+    xs <- traverse freshName names
+    pure (EFunFull Nothing [(EFunBinder (lead <> map EVar xs), foldl (\g x -> EApp RegularApp g [EVar x]) f xs)])
+  where
+    peel :: Int -> Erl -> Maybe ([Erl], Erl)
+    peel 0 e = Just ([], e)
+    peel n (EFunFull Nothing [(EFunBinder [p], b)]) = (\(ps, e) -> (p : ps, e)) <$> peel (n - 1) b
+    peel _ _ = Nothing
+    distinct vs = let named = filter (/= "_") vs in length named == Set.size (Set.fromList named)
+
 -- | Arguments that are only needed on one branch end up inside that branch, so
 -- they are evaluated lazily. The names here must include the Veither functions
 -- that CoreFn's `shouldFloatExpr` keeps un-floated.
@@ -1258,12 +1277,11 @@ libRules =
         (("array@ps", "size"), r1 $ \x -> pure (app erlangArraySize [x])),
         -- `array:map/2` takes (Index, Elem) -> Elem, so `F` gets an adapter closure; the FFI hop would build the same one.
         (("array@ps", "map"), r2 $ \f arr -> do
-          x <- freshName "Elem"
-          pure (app erlangArrayMap [EFunN Nothing ["_", x] (app f [EVar x]), arr])),
+          g <- adapter [EVar "_"] ["Elem"] f
+          pure (app erlangArrayMap [g, arr])),
         (("array@ps", "mapWithIndex"), r2 $ \f arr -> do
-          i <- freshName "Index"
-          x <- freshName "Elem"
-          pure (app erlangArrayMap [EFunN Nothing [i, x] (app (app f [EVar i]) [EVar x]), arr])),
+          g <- adapter [] ["Index", "Elem"] f
+          pure (app erlangArrayMap [g, arr])),
         (("map@ps", "isEmpty"), r1 $ \x -> pure (EBinary EqualTo (EMapLiteral []) x)),
         (("map@ps", "isNotEmpty"), r1 $ \x -> pure (EBinary NotEqualTo (EMapLiteral []) x)),
         (("map@ps", "member"), r2 $ \k m -> pure (app erlangMapsIsKey [k, m])),
@@ -1272,12 +1290,11 @@ libRules =
         (("map@ps", "values"), r1 $ \m -> pure (app erlangMapsValues [m])),
         (("map@ps", "size"), r1 $ \m -> pure (app erlangMapsSize [m])),
         (("map@ps", "map"), r2 $ \f m -> do
-          v <- freshName "Val"
-          pure (app erlangMapsMap [EFunN Nothing ["_", v] (app f [EVar v]), m])),
+          g <- adapter [EVar "_"] ["Val"] f
+          pure (app erlangMapsMap [g, m])),
         (("map@ps", "mapWithIndex"), r2 $ \f m -> do
-          k <- freshName "Key"
-          v <- freshName "Val"
-          pure (app erlangMapsMap [EFunN Nothing [k, v] (app (app f [EVar k]) [EVar v]), m])),
+          g <- adapter [] ["Key", "Val"] f
+          pure (app erlangMapsMap [g, m])),
         (("map@ps", "lookup"), r2 $ \k m -> do
           v <- freshVar "Val"
           pure $ ECaseOf (app erlangMapsFind [k, m]) [(EBinder (tagged "ok" [v]), just v), (EBinder (atom "error"), nothing)]),
