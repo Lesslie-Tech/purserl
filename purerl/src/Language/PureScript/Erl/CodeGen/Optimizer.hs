@@ -13,6 +13,7 @@ import Control.Monad.Supply (Supply)
 
 import Language.PureScript.Erl.CodeGen.AST
     ( everywhereOnErl, Erl(..), pattern EApp, Atom(..), EFunBinder(..) )
+import Language.PureScript.Erl.CodeGen.Optimizer.Aliases (dropVarAliases)
 import Language.PureScript.Erl.CodeGen.Optimizer.Inliner
     ( inlineCommonOperators,
       inlineCommonValuesTopDown,
@@ -46,7 +47,7 @@ optimize own exports es = do
   es
     & mapM
       (\b ->
-        fmap (localizeCalls own . go) (b
+        fmap (localizeCalls own . dropVarAliases . go) (b
           & canonicalizeCalls own
           & inlineCommonOperators EC.effect EC.effectDictionaries id
           & specialize

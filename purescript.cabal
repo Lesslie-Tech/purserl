@@ -344,6 +344,7 @@ library
     Language.PureScript.Erl.CodeGen.Constants
     Language.PureScript.Erl.CodeGen.Constants.PureScriptModules
     Language.PureScript.Erl.CodeGen.Optimizer
+    Language.PureScript.Erl.CodeGen.Optimizer.Aliases
     Language.PureScript.Erl.CodeGen.Optimizer.Common
     Language.PureScript.Erl.CodeGen.Optimizer.Inliner
     Language.PureScript.Erl.CodeGen.Types
@@ -430,6 +431,7 @@ test-suite tests
     TestDiscard
     TestListLiterals
     TestErlFlatten
+    TestErlAliases
     TestErlInstanceArity
     TestErlUncurriedOnly
     TestGraph

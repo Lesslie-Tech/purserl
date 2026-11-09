@@ -13,6 +13,7 @@ import TestEmptyClassDictElision qualified
 import TestDiscard qualified
 import TestListLiterals qualified
 import TestErlFlatten qualified
+import TestErlAliases qualified
 import TestErlInstanceArity qualified
 import TestErlUncurriedOnly qualified
 import TestHierarchy qualified
@@ -41,6 +42,7 @@ main = do
     describe "discard" TestDiscard.spec
     describe "list literals" TestListLiterals.spec
     describe "erl flatten" TestErlFlatten.spec
+    describe "erl aliases" TestErlAliases.spec
     describe "erl instance arity" TestErlInstanceArity.spec
     describe "erl uncurried only" TestErlUncurriedOnly.spec
     describe "hierarchy" TestHierarchy.spec
