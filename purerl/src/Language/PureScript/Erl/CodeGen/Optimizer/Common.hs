@@ -1,8 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 module Language.PureScript.Erl.CodeGen.Optimizer.Common where
 
-import Control.Arrow (second)
-import Data.Bifunctor (bimap)
+import Data.Bifunctor (bimap, second)
 import Control.Monad.State.Strict (State, put, runState)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -39,7 +38,7 @@ isUncurriedFn' _ _ = False
 -- | Applies the functions last to first, like @foldl1 (.)@, but strictly: composing them lazily
 -- allocates a thunk for every function on every call.
 applyAll :: [a -> a] -> a -> a
-applyAll fs = let rs = reverse fs in \e -> go rs e
+applyAll fs = let rs = reverse fs in go rs
   where
     go [] !e = e
     go (r : rest) !e = go rest (r e)

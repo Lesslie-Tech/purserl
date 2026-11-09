@@ -15,12 +15,12 @@ module Language.PureScript.TypeChecker.Entailment
 import Prelude
 import Protolude (ordNub, headMay)
 
-import Control.Arrow (first, (&&&))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState(..), MonadTrans(..), StateT(..), evalStateT, execStateT, gets, modify)
 import Control.Monad (foldM, guard, join, zipWithM, zipWithM_, (<=<))
 import Control.Monad.Supply.Class (MonadSupply(..))
 import Control.Monad.Writer (MonadWriter(..))
+import Data.Bifunctor (first)
 import Data.Monoid (Any(..))
 
 import Data.Either (lefts, partitionEithers)
@@ -286,7 +286,7 @@ findInstances
 findInstances deps dicts tys = first catMaybes . partitionEithers $ do
   chain :: NonEmpty TypeClassDict <-
            NEL.groupBy ((==) `on` tcdChain) $
-           sortOn (tcdChain &&& tcdIndex)
+           sortOn (\d -> (tcdChain d, tcdIndex d))
            dicts
   -- process instances in a chain in index order
   let found = for (tails1 chain) $ \(tcd :| tl) ->
@@ -517,9 +517,9 @@ mkDictionary (ReflectableInstance ref) _ =
 unknownsInAllCoveringSets :: Qualified (ProperName 'ClassName) -> [ErrorMessageHint] -> (Int -> Text) -> [(Ident, SourceType, Maybe (S.Set (NEL.NonEmpty Int)))] -> [SourceType] -> S.Set (S.Set Int) -> UnknownsHint
 unknownsInAllCoveringSets className hints indexToArgText tyClassMembers tyArgs coveringSets = do
   let unkIndices = findIndices containsUnknowns tyArgs
-  if all (\s -> any (`S.member` s) unkIndices) coveringSets then 
+  if all (\s -> any (`S.member` s) unkIndices) coveringSets then
     fromMaybe Unknowns unknownsRequiringVtas
-  else 
+  else
     NoUnknowns
   where
     unknownsRequiringVtas = do
@@ -538,9 +538,9 @@ unknownsInAllCoveringSets className hints indexToArgText tyClassMembers tyArgs c
             (_, getVars, _, _, _) = everythingOnValues (++) ignore getVarIdents ignore ignore ignore
             ignore = const []
             getVarIdents = \case
-              Var _ ident | Just vtas <- M.lookup ident tyClassMemberVta -> 
+              Var _ ident | Just vtas <- M.lookup ident tyClassMemberVta ->
                 [(ident, vtas)]
-              _ -> 
+              _ ->
                 []
 
         getECTExpr = \case
@@ -933,8 +933,8 @@ matches deps TypeClassDictionaryInScope{..} tys =
           go ([], TUnknown _ _)     ([], _)                           = Unknown
           go ([], _)                ([], TUnknown _ _)                = Unknown
           go ([], Skolem _ _ _ s1 _)  ([], Skolem _ _ _ s2 _)  | s1 == s2 = Match ()
-          go ([], Skolem _ _ _ _ _)   _                               = Unknown
-          go _                      ([], Skolem _ _ _ _ _)            = Unknown
+          go ([], Skolem {})   _                               = Unknown
+          go _                      ([], Skolem {})            = Unknown
           go ([], REmpty _)         ([], REmpty _)                    = Match ()
           go ([], TypeVar _ v1)     ([], TypeVar _ v2)     | v1 == v2 = Match ()
           go _  _                                                     = Apart
@@ -972,7 +972,7 @@ newDictionaries path name (Constraint _ className instanceKinds instanceTy _) = 
     return (TypeClassDictionaryInScope Nothing 0 name path className [] instanceKinds instanceTy Nothing Nothing : supDicts)
 
 mkContext :: [NamedDict] -> InstanceContext
-mkContext = foldr combineContexts M.empty . map fromDict where
+mkContext = foldr (combineContexts . fromDict) M.empty where
   fromDict d = M.singleton ByNullSourcePos (M.singleton (tcdClassName d) (M.singleton (tcdValue d) (pure d)))
 
 -- | Check all pairs of values in a list match a predicate

@@ -229,7 +229,7 @@ computeCoveringSets nargs deps = ( determinedArgs, coveringSets )
                     First $ IM.mapMaybe (NEL.nonEmpty . NEL.filter (y `IS.notMember`)) $ IM.delete y inEdges
 
     -- Reduce to the inclusion-minimal sets
-    coveringSets = S.filter (\v -> not (any (\c -> c `S.isProperSubsetOf` v) allCoveringSets)) allCoveringSets
+    coveringSets = S.filter (\v -> not (any (`S.isProperSubsetOf` v) allCoveringSets)) allCoveringSets
 
     -- An argument is determined if it is in no covering set
     determinedArgs = argumentIndices `S.difference` fold coveringSets
@@ -524,8 +524,8 @@ primTypeErrorTypes =
     , (C.Beside, (kindDoc -:> kindDoc -:> kindDoc, ExternData [Phantom, Phantom]))
     , (C.Above, (kindDoc -:> kindDoc -:> kindDoc, ExternData [Phantom, Phantom]))
     ] <> mconcat
-    [ primClass C.Fail (\kind -> kindDoc -:> kind)
-    , primClass C.Warn (\kind -> kindDoc -:> kind)
+    [ primClass C.Fail (kindDoc -:>)
+    , primClass C.Warn (kindDoc -:>)
     ]
 
 -- | The primitive class map. This just contains the `Partial` class.

@@ -13,13 +13,13 @@ module Language.PureScript.Erl.CodeGen
 where
 
 import Control.Applicative ((<|>))
-import Control.Arrow (first, second)
 import Control.Monad (foldM, replicateM, unless)
 import Control.Monad.Error.Class (MonadError (..))
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.Supply.Class (MonadSupply (fresh), bumpToNextRoundNumber)
 import Language.PureScript.Erl.Make.Monad (Make)
 import Control.Monad.Writer.Strict (MonadWriter (..), WriterT (runWriterT))
+import Data.Bifunctor (first, second)
 import Data.Either (fromRight)
 import Data.Foldable (find, traverse_, foldl')
 import Data.List (nub)
@@ -423,7 +423,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
       fident <- fmap (Ident . ("f" <>) . T.pack . show) fresh
       let var = Qualified P.ByNullSourcePos fident
           -- wrap e = EBlock [EVarBind (identToVar fident) fun, e]
-          wrap e = ELet (EVarBind (identToVar fident) fun) e
+          wrap = ELet (EVarBind (identToVar fident) fun)
       (idents, erl, env) <- generateFunctionOverloads Nothing (ssAnn nullSourceSpan) ident (Atom Nothing $ runIdent' ident) (Var (ssAnn nullSourceSpan) var) wrap
       let combinedTEnv = M.union env (maybe M.empty snd ffiTyEnv)
       pure (idents, erl, (ident,) . fst <$> ffiTyEnv, combinedTEnv)
@@ -575,7 +575,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
       case bind of
         NonRec (ss,_,_) ident val -> do
           b <- EVarBind (identToVar ident) <$> valueToErl'' ss (Just ident) val
-          pure (\innermost -> ELet b innermost)
+          pure (ELet b)
           -- For recursive bindings F(X) = E1, G(X) = E2, ... we have a problem as the variables are not
           -- in scope until each expression is defined. To avoid lifting to the top level first generate
           -- funs which take a tuple of such funs F'({F', G'}) -> (X) -> E1 etc.
@@ -617,7 +617,6 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
     qualifiedToTypeclassCtor (Qualified (P.BySourcePos  _) ident) = Atom Nothing (runIdent' ident)
 
     valueToErl :: Expr Ann -> ErlW Erl
-    valueToErl e = valueToErl' Nothing e
 
     valueToErl' :: Maybe Ident -> Expr Ann -> ErlW Erl
     valueToErl' mIdent e =
@@ -921,14 +920,13 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities) (Module _ _ mn _ _ d
         goCase (CaseAlternative ann (Left ges)) =
           CaseAlternative ann . Left
             <$> traverse (traverse go) ges
+    valueToErl = valueToErl' Nothing
 
 letbindVars elet exprs innermost =
   case exprs of
     [] -> innermost
     (name,e):es ->
-      case EVar name == e of
-        True -> letbindVars elet es innermost
-        False -> elet (EBind (EVar name) e) (letbindVars elet es innermost)
+      (if EVar name == e then letbindVars elet es innermost else elet (EBind (EVar name) e) (letbindVars elet es innermost))
 
 letbind elet exprs innermost =
   case exprs of

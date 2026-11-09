@@ -239,7 +239,7 @@ resolveLocations
   -> ModuleMap [IdeDeclarationAnn]
 resolveLocations asts =
   Map.mapWithKey (\mn decls ->
-                    maybe decls (flip resolveLocationsForModule decls) (Map.lookup mn asts))
+                    maybe decls (`resolveLocationsForModule` decls) (Map.lookup mn asts))
 
 resolveLocationsForModule
   :: (DefinitionSites P.SourceSpan, TypeAnnotations)
@@ -300,7 +300,7 @@ resolveDocumentation
   -> ModuleMap [IdeDeclarationAnn]
 resolveDocumentation modules =
   Map.mapWithKey (\mn decls ->
-    maybe decls (flip resolveDocumentationForModule decls) (Map.lookup mn modules))
+    maybe decls (`resolveDocumentationForModule` decls) (Map.lookup mn modules))
 
 resolveDocumentationForModule
   :: P.Module

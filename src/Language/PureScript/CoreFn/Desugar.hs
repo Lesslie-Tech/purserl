@@ -3,8 +3,8 @@ module Language.PureScript.CoreFn.Desugar (moduleToCoreFn) where
 import Prelude
 import Protolude (ordNub, orEmpty)
 
-import Control.Arrow (second)
 
+import Data.Bifunctor (second)
 import Data.Function (on)
 import Data.Maybe (mapMaybe)
 import Data.Tuple (swap)
@@ -270,7 +270,7 @@ exportToCoreFn (A.ValueOpRef _ _) = []
 exportToCoreFn (A.TypeClassRef _ _) = []
 exportToCoreFn (A.TypeInstanceRef _ name _) = [name]
 exportToCoreFn (A.ModuleRef _ _) = []
-exportToCoreFn (A.ReExportRef _ _ _) = []
+exportToCoreFn (A.ReExportRef {}) = []
 
 -- | Converts a ProperName to an Ident.
 properToIdent :: ProperName a -> Ident

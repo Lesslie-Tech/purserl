@@ -455,11 +455,11 @@ typeCheckAll moduleName = traverse go
     typeModule (KindApp _ t1 _) = typeModule t1
     typeModule (ForAll _ _ _ _ t1 _) = typeModule t1
     typeModule (ConstrainedType _ _ t1) = typeModule t1
-    typeModule (Skolem _ _ _ _ _) = Nothing
+    typeModule (Skolem {}) = Nothing
     typeModule (REmpty _) = Nothing
-    typeModule (RCons _ _ _ _) = Nothing
+    typeModule (RCons {}) = Nothing
     typeModule (KindedType _ t1 _) = typeModule t1
-    typeModule (BinaryNoParensType _ _ _ _) = Nothing
+    typeModule (BinaryNoParensType {}) = Nothing
     typeModule (ParensInType _ t1) = typeModule t1
 
     modulesByTypeIndex :: M.Map Int (Maybe ModuleName)

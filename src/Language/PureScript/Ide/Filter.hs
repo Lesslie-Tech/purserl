@@ -98,7 +98,7 @@ applyDeclarationFilters
   -> ModuleMap [IdeDeclarationAnn]
 applyDeclarationFilters fs =
   Map.filter (not . null)
-  . Map.mapWithKey (\modl decls -> foldr (.) identity (map (applyDeclarationFilter modl) fs) decls)
+  . Map.mapWithKey (\modl decls -> foldr ((.) . applyDeclarationFilter modl) identity fs decls)
 
 applyDeclarationFilter
   :: P.ModuleName

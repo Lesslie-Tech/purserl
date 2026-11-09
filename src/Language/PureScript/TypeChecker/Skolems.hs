@@ -39,7 +39,7 @@ introduceSkolemScope t
   where
   needsScope (ForAll _ _ _ _ _ Nothing) = Any True
   needsScope _ = Any False
-  go (ForAll ann vis ident mbK ty Nothing) = ForAll ann vis ident mbK ty <$> (Just <$> newSkolemScope)
+  go (ForAll ann vis ident mbK ty Nothing) = ForAll ann vis ident mbK ty . Just <$> newSkolemScope
   go other = return other
 
 -- | Generate a new skolem scope

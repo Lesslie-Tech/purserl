@@ -87,7 +87,7 @@ reorderChain fromOp fromTick reapply levels chain = do
   pure result
   where
   toItems :: Chain a -> Maybe (a, [Item a])
-  toItems (Left lhs : rest) = (\items -> (lhs, items)) <$> itemsOf rest
+  toItems (Left lhs : rest) = (lhs,) <$> itemsOf rest
   toItems _ = Nothing
 
   itemsOf :: Chain a -> Maybe [Item a]
@@ -100,7 +100,7 @@ reorderChain fromOp fromTick reapply levels chain = do
   classify :: a -> Maybe (Int, Associativity, a -> a -> a)
   classify op = case fromOp op of
     Just (ss, name) -> (\(lvl, assoc) -> (lvl, assoc, reapply ss name)) <$> M.lookup name levels
-    Nothing -> (\f -> (-1, Infixl, f)) <$> fromTick op
+    Nothing -> (-1, Infixl,) <$> fromTick op
 
   -- Takes the operators of level @k@ or tighter that follow @lhs@.
   climb :: Int -> a -> [Item a] -> Maybe (a, [Item a])

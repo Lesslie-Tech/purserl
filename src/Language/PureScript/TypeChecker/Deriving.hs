@@ -267,7 +267,7 @@ deriveOrd utc = do
     mkCompareFunction ctors = do
       x <- freshIdent "x"
       y <- freshIdent "y"
-      lamCase2 x y <$> (addCatch . concat <$> mapM mkCtorClauses (splitLast ctors))
+      lamCase2 x y . addCatch . concat <$> mapM mkCtorClauses (splitLast ctors)
 
     splitLast :: [a] -> [(a, Bool)]
     splitLast [] = []
@@ -452,7 +452,7 @@ validateParamsInTypeConstructors derivingClass utc isBi CovariantClasses{..} con
       goContra = go params $ not isNegative
 
       assertNoParamUsedIn :: SourceType -> Writer [SourceSpan] ()
-      assertNoParamUsedIn ty = void $ both (flip assertParamNotUsedIn ty) params
+      assertNoParamUsedIn ty = void $ both (`assertParamNotUsedIn` ty) params
 
       assertParamNotUsedIn :: Text -> SourceType -> Writer [SourceSpan] ()
       assertParamNotUsedIn param = everythingOnTypes (*>) $ \case

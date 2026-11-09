@@ -10,7 +10,6 @@ import Prelude
 import Protolude (ordNub, fromMaybe)
 
 import Control.Applicative ((<|>))
-import Control.Arrow (second)
 import Control.DeepSeq (NFData)
 import Control.Lens (Lens', (^.), set)
 import Control.Monad ((<=<), (>=>))
@@ -528,7 +527,7 @@ typeFromJSON defaultAnn annFromJSON = A.withObject "Type" $ \o -> do
 
         withMbKind = do
           (b, c, d, e) <- contents
-          ForAll a TypeVarInvisible b <$> (Just <$> go c) <*> go d <*> pure e
+          (ForAll a TypeVarInvisible b . Just <$> go c) <*> go d <*> pure e
       asObject <|> withMbKind <|> withoutMbKind
     "ConstrainedType" -> do
       (b, c) <- contents
@@ -753,11 +752,11 @@ quantify ty = foldr (\arg t -> ForAll (getAnnForType ty) TypeVarInvisible arg No
 
 -- | Move all universal quantifiers to the front of a type
 moveQuantifiersToFront :: a -> Type a -> Type a
-moveQuantifiersToFront syntheticAnn = go [] [] 
+moveQuantifiersToFront syntheticAnn = go [] []
   where
   go qs cs = \case
     ForAll ann vis q mbK ty sco -> do
-      let 
+      let
         cArgs :: [Text] = cs >>= constraintArgs . snd >>= freeTypeVariables
         (q'', ty')
           | q `elem` cArgs = do
@@ -768,7 +767,7 @@ moveQuantifiersToFront syntheticAnn = go [] []
       go ((ann, q'', sco, mbK, vis) : qs) cs ty'
     ConstrainedType ann c ty ->
       go qs ((ann, c) : cs) ty
-    ty -> 
+    ty ->
       foldl (\ty' (ann, q, sco, mbK, vis) -> ForAll ann vis q mbK ty' sco) (foldl (\ty' (ann, c) -> ConstrainedType ann c ty') ty cs) qs
 
 -- | Check if a type contains `forall`
@@ -1146,13 +1145,13 @@ everythingWithContextOnTypes s0 r0 (<+>) f = go' s0 where
   go _ _ = r0
 
 annForType :: Lens' (Type a) a
-annForType k (TUnknown a b) = (\z -> TUnknown z b) <$> k a
-annForType k (TypeVar a b) = (\z -> TypeVar z b) <$> k a
-annForType k (TypeLevelString a b) = (\z -> TypeLevelString z b) <$> k a
-annForType k (TypeLevelInt a b) = (\z -> TypeLevelInt z b) <$> k a
-annForType k (TypeWildcard a b) = (\z -> TypeWildcard z b) <$> k a
-annForType k (TypeConstructor a b) = (\z -> TypeConstructor z b) <$> k a
-annForType k (TypeOp a b) = (\z -> TypeOp z b) <$> k a
+annForType k (TUnknown a b) = (`TUnknown` b) <$> k a
+annForType k (TypeVar a b) = (`TypeVar` b) <$> k a
+annForType k (TypeLevelString a b) = (`TypeLevelString` b) <$> k a
+annForType k (TypeLevelInt a b) = (`TypeLevelInt` b) <$> k a
+annForType k (TypeWildcard a b) = (`TypeWildcard` b) <$> k a
+annForType k (TypeConstructor a b) = (`TypeConstructor` b) <$> k a
+annForType k (TypeOp a b) = (`TypeOp` b) <$> k a
 annForType k (TypeApp a b c) = (\z -> TypeApp z b c) <$> k a
 annForType k (KindApp a b c) = (\z -> KindApp z b c) <$> k a
 annForType k (ForAll a b c d e f) = (\z -> ForAll z b c d e f) <$> k a
@@ -1162,7 +1161,7 @@ annForType k (REmpty a) = REmpty <$> k a
 annForType k (RCons a b c d) = (\z -> RCons z b c d) <$> k a
 annForType k (KindedType a b c) = (\z -> KindedType z b c) <$> k a
 annForType k (BinaryNoParensType a b c d) = (\z -> BinaryNoParensType z b c d) <$> k a
-annForType k (ParensInType a b) = (\z -> ParensInType z b) <$> k a
+annForType k (ParensInType a b) = (`ParensInType` b) <$> k a
 
 getAnnForType :: Type a -> a
 getAnnForType = (^. annForType)

@@ -5,7 +5,7 @@ module Language.PureScript.CoreFn.Traversals where
 
 import Prelude
 
-import Control.Arrow (second, (***), (+++))
+import Data.Bifunctor (bimap, second)
 import Data.Bitraversable (bitraverse)
 
 import Language.PureScript.AST.Literals (Literal(..))
@@ -38,7 +38,7 @@ everywhereOnValues f g h = (f', g', h')
 
   handleCaseAlternative ca =
     ca { caseAlternativeBinders = map h' (caseAlternativeBinders ca)
-       , caseAlternativeResult = (map (g' *** g') +++ g') (caseAlternativeResult ca)
+       , caseAlternativeResult = bimap (map (bimap g' g')) g' (caseAlternativeResult ca)
        }
 
   handleLiteral :: (a -> a) -> Literal a -> Literal a

@@ -94,7 +94,7 @@ accessorSearch unsolved env st userT = maybe ([], []) fst $ checkInEnvironment e
   subst <- gets TC.checkSubstitution
   let solvedRow = toRowPair <$> fst (rowToList (substituteType subst rowType))
   tcS <- get
-  pure (solvedRow, filter (\x -> checkAccessor tcS (substituteType subst resultType) x) solvedRow)
+  pure (solvedRow, filter (checkAccessor tcS (substituteType subst resultType)) solvedRow)
   where
     checkAccessor tcs x (_, type') = isJust (checkSubsume unsolved env tcs x type')
     toRowPair (RowListItem _ lbl ty) = (lbl, ty)

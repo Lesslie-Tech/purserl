@@ -12,10 +12,10 @@ import Prelude
 import Protolude (ordNub)
 
 import Control.Applicative (Applicative(..))
-import Control.Arrow (first, second)
 import Control.Monad (unless)
 import Control.Monad.Writer.Class (MonadWriter(..))
 
+import Data.Bifunctor (first, second)
 import Data.List (foldl', sortOn)
 import Data.Maybe (fromMaybe)
 import Data.Map qualified as M

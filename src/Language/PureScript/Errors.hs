@@ -7,7 +7,6 @@ module Language.PureScript.Errors
 import Prelude
 import Protolude (unsnoc)
 
-import Control.Arrow ((&&&))
 import Control.DeepSeq (NFData)
 import Control.Lens (both, head1, over)
 import Control.Monad (forM, unless)
@@ -387,7 +386,7 @@ errorMessage'' sss err = MultipleErrors [ErrorMessage [PositionedError sss] err]
 -- | Create an error from multiple (possibly empty) source spans, reversed sorted.
 errorMessage''' :: [SourceSpan] -> SimpleErrorMessage -> MultipleErrors
 errorMessage''' sss err =
-  maybe (errorMessage err) (flip errorMessage'' err)
+  maybe (errorMessage err) (`errorMessage''` err)
     . NEL.nonEmpty
     . sortOn Down
     $ filter (/= NullSourceSpan) sss
@@ -642,7 +641,7 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
   um <- get
   return (prettyPrintErrorMessage um em)
   where
-  (markCode, markCodeBox) = (colorCode &&& colorCodeBox) codeColor
+  (markCode, markCodeBox) = (colorCode codeColor, colorCodeBox codeColor)
 
   -- Pretty print an ErrorMessage
   prettyPrintErrorMessage :: TypeMap -> ErrorMessage -> Box.Box
@@ -936,7 +935,7 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
                               options ->
                                 [ Box.moveRight 2 $ line "One of the following sets of type variables:"
                                 , Box.moveRight 2 $ paras $
-                                    map (\set -> Box.moveRight 2 $ line $ T.intercalate ", " set) options
+                                    map (Box.moveRight 2 . line . T.intercalate ", ") options
                                 ]
                     in
                       [ paras
@@ -1842,7 +1841,7 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
     renderLine :: (Int, Text, [SourceSpan]) -> Box.Box
     renderLine (lineNum, text, sss) = numBox Box.<+> lineBox
       where
-      colSpans = nubOrdOn fst $ map (over both (pred . sourcePosColumn) . (spanStart &&& spanEnd)) sss
+      colSpans = nubOrdOn fst $ map (over both (pred . sourcePosColumn) . (\s -> (spanStart s, spanEnd s))) sss
       numBox = lineNumberStyle $ show lineNum
       lineBox =
         if isJust codeColor

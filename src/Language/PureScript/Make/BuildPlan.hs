@@ -209,11 +209,7 @@ markComplete2 ma@MakeActions{..} buildPlan moduleName oldExt result = do
       BuildJobSkipped -> Nothing
       BuildJobSkippedFullCacheHit -> Just NoExternsChange
       BuildJobSucceeded _ newExt -> do
-        case fmap (Binary.encode . efOurCacheShapes) oldExt == Just (Binary.encode $ efOurCacheShapes newExt) of
-          True ->
-            Just NoExternsChange
-          False ->
-            Just ExternsChanged
+        (if fmap (Binary.encode . efOurCacheShapes) oldExt == Just (Binary.encode $ efOurCacheShapes newExt) then Just NoExternsChange else Just ExternsChanged)
     )
 
 -- | Whether or not the module with the given ModuleName needs to be rebuilt
@@ -401,27 +397,25 @@ construct2 ma@MakeActions{..} cacheDb (sorted, graph) = do
   env <- C.newMVar primEnv
   idx <- C.newMVar 1
   cacheChanged <- A.forConcurrently sortedModuleNames (getRebuildStatusIsUpToDate ma cacheDb)
-  case and cacheChanged of
-    True -> do
-      prebuiltOrMissing <- A.forConcurrently sortedModuleNames $ \mn -> do
-        mts <- getOutputTimestamp mn
-        (_, mexts) <- readExterns mn
-        pure (mn, Prebuilt <$> mts <*> mexts)
-      case traverse snd prebuiltOrMissing of
-        Just pbs ->
-          -- Genuinely nothing to do: every module is up to date and its
-          -- externs/output are actually present on disk.
-          pure
-            ( BuildPlan (M.fromList (zip sortedModuleNames pbs)) M.empty M.empty env idx M.empty M.empty
-            , cacheDb
-            )
-        Nothing ->
-          -- The cache db says everything's up to date, but some module's
-          -- externs/output is actually missing or stale on disk (e.g. output/
-          -- was partially deleted). Fall back to rebuilding everything rather
-          -- than trying to patch just the affected module(s).
-          buildEverything sortedModuleNames env idx
-    False -> buildEverything sortedModuleNames env idx
+  (if and cacheChanged then (do
+    prebuiltOrMissing <- A.forConcurrently sortedModuleNames $ \mn -> do
+      mts <- getOutputTimestamp mn
+      (_, mexts) <- readExterns mn
+      pure (mn, Prebuilt <$> mts <*> mexts)
+    case traverse snd prebuiltOrMissing of
+      Just pbs ->
+        -- Genuinely nothing to do: every module is up to date and its
+        -- externs/output are actually present on disk.
+        pure
+          ( BuildPlan (M.fromList (zip sortedModuleNames pbs)) M.empty M.empty env idx M.empty M.empty
+          , cacheDb
+          )
+      Nothing ->
+        -- The cache db says everything's up to date, but some module's
+        -- externs/output is actually missing or stale on disk (e.g. output/
+        -- was partially deleted). Fall back to rebuilding everything rather
+        -- than trying to patch just the affected module(s).
+        buildEverything sortedModuleNames env idx) else buildEverything sortedModuleNames env idx)
   where
     buildEverything sortedModuleNames env idx = do
       let makeBuildJob prev moduleName = do

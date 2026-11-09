@@ -26,14 +26,13 @@ module Language.PureScript.TypeChecker.Types
 import Prelude
 import Protolude (ordNub, fold, atMay)
 
-import Control.Arrow (first, second, (***))
 import Control.Monad (filterM, forM, forM_, guard, replicateM, unless, when, zipWithM, (<=<))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Class (MonadState(..), gets)
 import Control.Monad.Supply.Class (MonadSupply)
 import Control.Monad.Writer.Class (MonadWriter(..))
 
-import Data.Bifunctor (bimap)
+import Data.Bifunctor (bimap, first, second)
 import Data.Either (partitionEithers)
 import Data.Functor (($>))
 import Data.List (transpose, (\\), partition, delete)
@@ -257,7 +256,7 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
       other -> other
 
     -- Add any unsolved constraints
-    constrain cs ty = foldr srcConstrainedType ty (map (\(_, _, x) -> x) cs)
+    constrain cs ty = foldr (srcConstrainedType . (\(_, _, x) -> x)) ty cs
 
     -- Apply the substitution that was returned from runUnify to both types and (type-annotated) values
 
@@ -265,7 +264,7 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
       let overValue
             | null pending = overTypes
             | otherwise = overTypesWith promoteList (promoteBinder sub (M.fromList pending))
-      in first (map (second (first (second (overValue (substituteType sub) *** substituteType sub))))) ts
+      in first (map (second (first (second (bimap (overValue (substituteType sub)) (substituteType sub)))))) ts
 
     isHoleError :: ErrorMessage -> Bool
     isHoleError (ErrorMessage _ HoleInferredType{}) = True
@@ -472,7 +471,7 @@ infer' (ObjectUpdate ob ps) = do
   -- ?0  ~  Int
   -- ?1  ~  Int
   -- ob' : { a :: ?0, b :: ?1 }
-  ob' <- TypedValue True <$> (tvToExpr <$> check ob obRecordType) <*> pure obRecordType
+  ob' <- (TypedValue True . tvToExpr <$> check ob obRecordType) <*> pure obRecordType
   -- Infer the types of the values used for the record update.
   typedFields <- inferProperties ps
   let newItems :: [RowListItem SourceAnn]
@@ -770,7 +769,7 @@ checkBinders nvals ret (CaseAlternative binders result : bs) = do
     let ns = concatMap binderNames binders in length (ordNub ns) == length ns
   m1 <- M.unions <$> zipWithM inferBinder nvals binders
   r <- bindLocalVariables [ (ss, name, ty, Defined) | (name, (ss, ty)) <- M.toList m1 ] $
-       CaseAlternative binders <$> forM result (\ge -> checkGuardedRhs ge ret)
+       CaseAlternative binders <$> forM result (`checkGuardedRhs` ret)
   rs <- checkBinders nvals ret bs
   return $ r : rs
 
@@ -779,7 +778,7 @@ checkGuardedRhs
   -> SourceType
   -> Check GuardedExpr
 checkGuardedRhs (GuardedExpr [] rhs) ret = do
-  rhs' <- TypedValue True <$> (tvToExpr <$> check rhs ret) <*> pure ret
+  rhs' <- (TypedValue True . tvToExpr <$> check rhs ret) <*> pure ret
   return $ GuardedExpr [] rhs'
 checkGuardedRhs (GuardedExpr (ConditionGuard cond : guards) rhs) ret = do
   cond' <- withErrorMessageHint ErrorCheckingGuard $ check cond tyBoolean

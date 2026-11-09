@@ -321,7 +321,7 @@ instance Binary CSTypeSynonymDeclaration where
   -- |
   -- A kind signature declaration
   --
-data CSKindDeclaration = CSKindDeclaration (Type ())
+newtype CSKindDeclaration = CSKindDeclaration (Type ())
   deriving (Show, Generic, Eq, NFData)
 
 
@@ -331,7 +331,7 @@ instance Binary CSKindDeclaration where
   -- |
   -- A role declaration (name, roles)
   --
-data CSRoleDeclaration = CSRoleDeclaration [Role]
+newtype CSRoleDeclaration = CSRoleDeclaration [Role]
   deriving (Show, Generic, Eq, NFData)
 
 
@@ -352,7 +352,7 @@ instance Binary CSValueDeclaration where
   -- |
   -- A foreign import declaration (name, type)
   --
-data CSExternDeclaration = CSExternDeclaration ToCSDB
+newtype CSExternDeclaration = CSExternDeclaration ToCSDB
   deriving (Show, Generic, Eq, NFData)
 
 
@@ -362,7 +362,7 @@ instance Binary CSExternDeclaration where
   -- |
   -- A data type foreign import (name, kind)
   --
-data CSExternDataDeclaration = CSExternDataDeclaration ToCSDB
+newtype CSExternDataDeclaration = CSExternDataDeclaration ToCSDB
   deriving (Show, Generic, Eq, NFData)
 
 
@@ -449,6 +449,8 @@ instance Binary CSTypeInstanceBody where
     2 -> pure CSExplicitInstance
     n -> fail ("Binary CSTypeInstanceBody: invalid tag " <> show n)
 
+-- The strict field keeps csdbPutHelper from building thunk chains, so this can't be a newtype.
+{- HLINT ignore ToCSDB "Use newtype instead of data" -}
 data ToCSDB
   = ToCSDB !(M.Map ModuleName ToCSDBInner)
   deriving (Show, Eq, Generic, NFData)
@@ -683,7 +685,7 @@ instance ToCS Expr () where
         traverse_ toCS doNotationElems
         toCS inExpr
 
-      TypeClassDictionary _ _ _ -> internalError "[drathier]: should be unreachable, all TypeClassDictionary ctors should have been expanded already"
+      TypeClassDictionary {} -> internalError "[drathier]: should be unreachable, all TypeClassDictionary ctors should have been expanded already"
       DeferredDictionary _ _ -> internalError "[drathier]: should be unreachable, all DeferredDictionary ctors should have been expanded already"
       DerivedInstancePlaceholder _ _ -> internalError "[drathier]: should be unreachable, all DerivedInstancePlaceholder ctors should have been expanded already"
       AnonymousArgument -> internalError "[drathier]: should be unreachable, all AnonymousArgument ctors should have been expanded already"
@@ -724,7 +726,7 @@ instance ToCS Binder () where
         csdbPutCtor ctorName
         traverse_ toCS binders
       OpBinder _ _ -> internalError "[drathier]: should be unreachable, all OpBinder ctors should have been desugared already"
-      BinaryNoParensBinder _ _ _ -> internalError "[drathier]: should be unreachable, all BinaryNoParensBinder ctors should have been desugared already"
+      BinaryNoParensBinder {} -> internalError "[drathier]: should be unreachable, all BinaryNoParensBinder ctors should have been desugared already"
       ParensInBinder _ -> internalError "[drathier]: should be unreachable, all ParensInBinder ctors should have been desugared already"
       NamedBinder _ _ innerBinder -> toCS innerBinder
       PositionedBinder _ _ innerBinder -> toCS innerBinder
@@ -762,7 +764,7 @@ instance ToCS DB () where
       ))
 
 instance ToCS (Type SourceAnn) () where
-  toCS t = storeTypeRefs t
+  toCS = storeTypeRefs
 
 instance ToCS (Type ()) () where
   toCS = storeTypeRefs
@@ -1188,7 +1190,7 @@ instance Intern DBOpaque
 instance Show DBOpaque where
   show db =
     "DBOpaque{" <>
-    intercalate ", " (filter ((/=) "")
+    intercalate ", " (filter ("" /=)
       [ if _dataOrNewtypeDeclsTypeOnly_opaque db == mempty then "" else "_dataOrNewtypeDeclsTypeOnly_opaque=" <> show (_dataOrNewtypeDeclsTypeOnly_opaque db)
       , if _dataOrNewtypeDeclsFull_opaque db == mempty then "" else "_dataOrNewtypeDeclsFull_opaque=" <> show (_dataOrNewtypeDeclsFull_opaque db)
       , if _ctorTypes_opaque db == mempty then "" else "_ctorTypes_opaque=" <> show (_ctorTypes_opaque db)
@@ -1244,7 +1246,7 @@ dbOpaqueIsctExports meta upstreamDBs (ExportSummary valueName typeName typeOpNam
   let
     upstreamReExports =
       M.intersectionWith
-        (\innerExportSummary innerDB -> dbOpaqueIsctExports "inner" upstreamDBs innerExportSummary innerDB)
+        (dbOpaqueIsctExports "inner" upstreamDBs)
         reExportedRefs
         upstreamDBs
     ourDB =
@@ -1265,10 +1267,8 @@ dbOpaqueIsctExports meta upstreamDBs (ExportSummary valueName typeName typeOpNam
         }
   in
   foldl'
-    (\dbSoFar upstreamDB ->
-      -- [drathier]: <> is Map union; it keeps left arg on conflict
-      dbSoFar <> upstreamDB
-    )
+    -- [drathier]: <> is Map union; it keeps left arg on conflict
+    (<>)
     ourDB
     upstreamReExports
 
@@ -1391,7 +1391,7 @@ findDepsImpl getKind getRole mn env d =
       dbPutTypeSynonymDeclaration tname (CSTypeSynonymDeclaration tname ntargs nstype nstypeDB (getKind TypeSynonymSig tname))
 
     -- KindDeclaration SourceAnn KindSignatureFor (ProperName 'TypeName) SourceType
-    KindDeclaration _ _ _ _ ->
+    KindDeclaration {} ->
       internalError "[drathier]: should be unreachable, all KindDeclaration ctors should have been filtered out earlier"
 
     -- RoleDeclaration {-# UNPACK #-} !RoleDeclarationData
@@ -1411,7 +1411,7 @@ findDepsImpl getKind getRole mn env d =
       dbPutValueDeclaration ident (CSValueDeclaration namekind (length binders) tipe nexprDB)
 
     -- BoundValueDeclaration SourceAnn Binder Expr
-    BoundValueDeclaration _ _ _ ->
+    BoundValueDeclaration {} ->
       internalError "ASSUMPTION[drathier]: should be unreachable, all BoundValueDeclaration ctors should have been desugared earlier"
     -- BindingGroupDeclaration (NEL.NonEmpty ((SourceAnn, Ident), NameKind, Expr))
     BindingGroupDeclaration decls ->
@@ -1460,7 +1460,7 @@ findDepsImpl getKind getRole mn env d =
 
       let (_, nconstraintsdb) = mempty & runState (evalStateT (traverse toCS constraints) emptyTypeRefsMemo)
       let nconstraints = void <$> constraints
-      let ntargs = targs <&> second ((<$>) void)
+      let ntargs = targs <&> second (void <$>)
       let !_ = nconstraints <&>
             (\case
               Constraint _ _ [] _ _ -> ()
@@ -1598,8 +1598,7 @@ exsumPutTypeClassInstance ref v =
 
 
 findExportedThings :: [DeclarationRef] -> ExportSummary
-findExportedThings declRefs =
-  foldl findExportedThingsImpl mempty declRefs
+findExportedThings = foldl findExportedThingsImpl mempty
 
 findExportedThingsImpl :: ExportSummary -> DeclarationRef -> ExportSummary
 findExportedThingsImpl exsum declRef =
@@ -1628,28 +1627,27 @@ moduleToExternsFile _upstreamDbs (Module _ _ _ _ Nothing) _ _ = internalError "m
 moduleToExternsFile upstreamDBs (Module ss _comments mn decls (Just exports)) env renamedIdents =
   let
     sortDsByCtor :: Foldable f => f Declaration -> M.Map T.Text [Declaration]
-    sortDsByCtor dsx =
-      foldr sortDsByCtorImpl mempty dsx
     sortDsByCtorImpl :: Declaration -> M.Map T.Text [Declaration] -> M.Map T.Text [Declaration]
     sortDsByCtorImpl d res =
       case d of
-        DataDeclaration _ _ _ _ _ -> M.insertWith (<>) "DataDeclaration" [d] res
+        DataDeclaration {} -> M.insertWith (<>) "DataDeclaration" [d] res
         DataBindingGroupDeclaration _ -> M.insertWith (<>) "DataBindingGroupDeclaration" [d] res
-        TypeSynonymDeclaration _ _ _ _ -> M.insertWith (<>) "TypeSynonymDeclaration" [d] res
-        KindDeclaration _ _ _ _ -> M.insertWith (<>) "KindDeclaration" [d] res
+        TypeSynonymDeclaration {} -> M.insertWith (<>) "TypeSynonymDeclaration" [d] res
+        KindDeclaration {} -> M.insertWith (<>) "KindDeclaration" [d] res
         RoleDeclaration _ -> M.insertWith (<>) "RoleDeclaration" [d] res
         TypeDeclaration _ -> M.insertWith (<>) "TypeDeclaration" [d] res
         ValueDeclaration _ -> M.insertWith (<>) "ValueDeclaration" [d] res
-        BoundValueDeclaration _ _ _ -> M.insertWith (<>) "BoundValueDeclaration" [d] res
+        BoundValueDeclaration {} -> M.insertWith (<>) "BoundValueDeclaration" [d] res
         BindingGroupDeclaration _ -> M.insertWith (<>) "BindingGroupDeclaration" [d] res
-        ExternDeclaration _ _ _ -> M.insertWith (<>) "ExternDeclaration" [d] res
-        ExternDataDeclaration _ _ _ -> M.insertWith (<>) "ExternDataDeclaration" [d] res
+        ExternDeclaration {} -> M.insertWith (<>) "ExternDeclaration" [d] res
+        ExternDataDeclaration {} -> M.insertWith (<>) "ExternDataDeclaration" [d] res
         FixityDeclaration _ _ -> M.insertWith (<>) "FixityDeclaration" [d] res
-        ImportDeclaration _ _ _ _ -> M.insertWith (<>) "ImportDeclaration" [d] res
-        TypeClassDeclaration _ _ _ _ _ _ -> M.insertWith (<>) "TypeClassDeclaration" [d] res
-        TypeInstanceDeclaration _ _ _ _ _ _ _ _ _ -> M.insertWith (<>) "TypeInstanceDeclaration" [d] res
+        ImportDeclaration {} -> M.insertWith (<>) "ImportDeclaration" [d] res
+        TypeClassDeclaration {} -> M.insertWith (<>) "TypeClassDeclaration" [d] res
+        TypeInstanceDeclaration {} -> M.insertWith (<>) "TypeInstanceDeclaration" [d] res
 
     sds = sortDsByCtor decls
+    sortDsByCtor = foldr sortDsByCtorImpl mempty
 
 
   in

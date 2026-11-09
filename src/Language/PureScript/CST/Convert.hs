@@ -163,7 +163,7 @@ convertType' withinVta fileName = go
         b' = go b
         ann = Pos.widenSourceAnn (T.getAnnForType a') (T.getAnnForType b')
       T.TypeApp ann a' b'
-    ty@(TypeOp _ _ _ _) -> do
+    ty@(TypeOp {}) -> do
       let
         reassoc op b' a = do
           let
@@ -315,7 +315,7 @@ convertExpr fileName = go
     expr@(ExprInfix _ a (Wrapped _ b _) c) -> do
       let ann = (sourceSpan fileName . toSourceRange $ exprRange expr, [])
       positioned ann $ AST.BinaryNoParens (go b) (go a) (go c)
-    expr@(ExprOp _ _ _ _) -> do
+    expr@(ExprOp {}) -> do
       let
         ann = uncurry (sourceAnn fileName) $ exprRange expr
         reassoc op b a = do
@@ -440,7 +440,7 @@ convertBinder fileName = go
         b' = convertType fileName b
         ann = (sourceSpan fileName . toSourceRange $ binderRange binder, [])
       positioned ann $ AST.TypedBinder b' a'
-    binder@(BinderOp _ _ _ _) -> do
+    binder@(BinderOp {}) -> do
       let
         ann = uncurry (sourceAnn fileName) $ binderRange binder
         reassoc op b a = do

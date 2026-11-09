@@ -9,8 +9,8 @@ module Language.PureScript.Pretty.Values
 
 import Prelude hiding ((<>))
 
-import Control.Arrow (second)
 
+import Data.Bifunctor (second)
 import Data.Text (Text)
 import Data.List.NonEmpty qualified as NEL
 import Data.Monoid qualified as Monoid ((<>))
@@ -70,7 +70,7 @@ prettyPrintValue d (VisibleTypeApp val _) = prettyPrintValueAtom (d - 1) val
 prettyPrintValue d (Unused val) = prettyPrintValue d val
 prettyPrintValue d (Abs arg val) = text ('\\' : T.unpack (prettyPrintBinder arg) ++ " -> ") // moveRight 2 (prettyPrintValue (d - 1) val)
 prettyPrintValue d (Case values binders) =
-  (text "case " <> foldr beforeWithSpace (text "of") (map (prettyPrintValueAtom (d - 1)) values)) //
+  (text "case " <> foldr (beforeWithSpace . prettyPrintValueAtom (d - 1)) (text "of") values) //
     moveRight 2 (vcat left (map (prettyPrintCaseAlternative (d - 1)) binders))
 prettyPrintValue d (Let FromWhere ds val) =
   prettyPrintValue (d - 1) val //

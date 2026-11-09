@@ -71,7 +71,7 @@ printWarningsAndErrors False warnings errors = do
   pwd <- getCurrentDirectory
 
   probablySupportsANSI <- ANSI.hSupportsANSI stderr
-  colorOverride <- (/=) "" <$> Data.Maybe.fromMaybe "" <$> System.Environment.lookupEnv "PURS_FORCE_COLOR"
+  colorOverride <- (/=) "" . Data.Maybe.fromMaybe "" <$> System.Environment.lookupEnv "PURS_FORCE_COLOR"
   let cc = if colorOverride || probablySupportsANSI
            then Just P.defaultCodeColor
            else Nothing
@@ -87,7 +87,7 @@ printWarningsAndErrors False warnings errors = do
 printWarningsAndErrors True warnings errors = do
   let verbose = True
 
-  colorOverride <- (/=) "" <$> Data.Maybe.fromMaybe "" <$> System.Environment.lookupEnv "PURS_FORCE_COLOR"
+  colorOverride <- (/=) "" . Data.Maybe.fromMaybe "" <$> System.Environment.lookupEnv "PURS_FORCE_COLOR"
   let cc = if colorOverride
            then Just P.defaultCodeColor
            else Nothing

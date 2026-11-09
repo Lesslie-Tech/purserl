@@ -138,7 +138,7 @@ desugarGuardedExprs ss (Case scrut alternatives) =
     --
     desugarAlternatives :: [CaseAlternative]
                         -> SupplyT Make [CaseAlternative]
-    desugarAlternatives [] = pure []
+    desugarAlternatives [] = pure []
 
     -- the trivial case: no guards
     desugarAlternatives (a@(CaseAlternative _ [MkUnguarded _]) : as) =
@@ -328,11 +328,11 @@ desugarCases = desugarRest <=< fmap join . flip parU toDecls . groupBy inSameGro
   where
     desugarRest :: [Declaration] -> DesugarM [Declaration]
     desugarRest (TypeInstanceDeclaration sa na cd idx name constraints className tys ds : rest) =
-      (:) <$> (TypeInstanceDeclaration sa na cd idx name constraints className tys <$> traverseTypeInstanceBody desugarCases ds) <*> desugarRest rest
+      ((:) . TypeInstanceDeclaration sa na cd idx name constraints className tys <$> traverseTypeInstanceBody desugarCases ds) <*> desugarRest rest
     desugarRest (ValueDecl sa name nameKind bs result : rest) =
       let (_, f, _) = everywhereOnValuesTopDownM return go return
           f' = mapM (\(GuardedExpr gs e) -> GuardedExpr gs <$> f e)
-      in (:) <$> (ValueDecl sa name nameKind bs <$> f' result) <*> desugarRest rest
+      in ((:) . ValueDecl sa name nameKind bs <$> f' result) <*> desugarRest rest
       where
       go (Let w ds val') = Let w <$> desugarCases ds <*> pure val'
       go other = return other

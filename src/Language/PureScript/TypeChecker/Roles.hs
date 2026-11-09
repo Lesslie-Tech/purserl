@@ -13,7 +13,6 @@ module Language.PureScript.TypeChecker.Roles
 
 import Prelude
 
-import Control.Arrow ((&&&))
 import Control.Monad (unless, when, zipWithM_)
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.State (runState, state)
@@ -137,7 +136,7 @@ inferDataBindingGroupRoles
   -> [(Text, Maybe SourceType)]
   -> [Role]
 inferDataBindingGroupRoles env moduleName roleDeclarations group =
-  let declaredRoleEnv = M.fromList $ map (Qualified (ByModuleName moduleName) . rdeclIdent &&& rdeclRoles) roleDeclarations
+  let declaredRoleEnv = M.fromList $ map (\d -> (Qualified (ByModuleName moduleName) (rdeclIdent d), rdeclRoles d)) roleDeclarations
       inferredRoleEnv = getRoleEnv env
       initialRoleEnv = declaredRoleEnv `M.union` inferredRoleEnv
       inferredRoleEnv' = inferDataBindingGroupRoles' moduleName group initialRoleEnv
@@ -256,5 +255,5 @@ inferDataDeclarationRoles moduleName (tyName, tyArgs, ctors) roleEnv =
 -- ascribing a nominal role to each of those variables.
 freeNominals :: S.Set Text -> SourceType -> RoleMap
 freeNominals btvs x =
-  let ftvs = filter (flip S.notMember btvs) (freeTypeVariables x)
+  let ftvs = filter (`S.notMember` btvs) (freeTypeVariables x)
   in  RoleMap (M.fromList $ map (, Nominal) ftvs)

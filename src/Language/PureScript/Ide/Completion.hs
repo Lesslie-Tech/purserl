@@ -46,10 +46,8 @@ getExactMatches search filters modules =
 
 getExactCompletions :: Text -> [Filter] -> ModuleMap [IdeDeclarationAnn] -> [Completion]
 getExactCompletions search filters modules =
-  modules
-  & getExactMatches search filters
-  <&> simpleExport
-  <&> completionFromMatch
+  (modules
+  & getExactMatches search filters) <&> completionFromMatch . simpleExport
 
 matchesFromModules :: ModuleMap [IdeDeclarationAnn] -> [Match IdeDeclarationAnn]
 matchesFromModules = Map.foldMapWithKey completionFromModule

@@ -6,6 +6,7 @@ module Control.Monad.Supply.Class where
 
 import Prelude
 
+import Control.Monad (unless)
 import Control.Monad.RWS (MonadState(..), MonadTrans(..), RWST)
 import Control.Monad.State (StateT)
 import Control.Monad.State.Strict qualified as Strict
@@ -43,8 +44,6 @@ bumpToNextRoundNumber =
   do
     let stepSize = 10
     n <- peek
-    case (n `div` stepSize) * stepSize == n of
-      True -> pure ()
-      False -> do
-        _ <- freshName
-        bumpToNextRoundNumber
+    unless ((n `div` stepSize) * stepSize == n) $ do
+      _ <- freshName
+      bumpToNextRoundNumber

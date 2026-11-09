@@ -250,9 +250,7 @@ filterModule mn exps refs = do
   -- listing for the last ref would be used.
   combineTypeRefs :: [DeclarationRef] -> [DeclarationRef]
   combineTypeRefs
-    = fmap (\(ss', (tc, dcs)) -> TypeRef ss' tc dcs)
-    . fmap (foldr1 $ \(ss, (tc, dcs1)) (_, (_, dcs2)) -> (ss, (tc, liftM2 (++) dcs1 dcs2)))
-    . groupBy ((==) `on` (fst . snd))
+    = fmap ((\(ss', (tc, dcs)) -> TypeRef ss' tc dcs) . foldr1 (\(ss, (tc, dcs1)) (_, (_, dcs2)) -> (ss, (tc, liftM2 (++) dcs1 dcs2)))) . groupBy ((==) `on` (fst . snd))
     . sortOn (fst . snd)
     . mapMaybe (\ref -> (declRefSourceSpan ref,) <$> getTypeRef ref)
 

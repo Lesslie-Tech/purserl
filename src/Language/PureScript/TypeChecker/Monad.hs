@@ -7,7 +7,6 @@ module Language.PureScript.TypeChecker.Monad where
 
 import Prelude
 
-import Control.Arrow (second)
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify, put)
 import Control.Monad (forM_, guard, join, unless, when, (<=<))
@@ -559,7 +558,7 @@ debugTypes = go <=< M.toList . types
       ppTy = prettyPrintType 100 srcTy
       name = showQualified runProperName qual
       decl = case which of
-        DataType _ _ _    -> "data"
+        DataType {}    -> "data"
         TypeSynonym       -> "type"
         ExternData _      -> "extern"
         LocalTypeVariable -> "local"

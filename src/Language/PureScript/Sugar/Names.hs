@@ -12,11 +12,11 @@ module Language.PureScript.Sugar.Names
 import Prelude
 import Protolude (sortOn, swap, foldl')
 
-import Control.Arrow (first, second, (&&&))
 import Control.Monad (when, (>=>))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState, StateT(..), gets, modify)
 
+import Data.Bifunctor (first, second)
 import Data.List.NonEmpty qualified as NEL
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Map.Strict qualified as M
@@ -286,13 +286,13 @@ renameInModule imports (Module modSS coms mn decls exps) =
       (_, BySourcePos _) ->
         internalError "updateValue: ident is locally-qualified by a non-null source position"
   updateValue (_, bound) (Op ss op) =
-    ((ss, bound), ) <$> (Op ss <$> updateValueOpName op ss)
+    ((ss, bound), ) . Op ss <$> updateValueOpName op ss
   updateValue (_, bound) (Constructor ss name) =
-    ((ss, bound), ) <$> (Constructor ss <$> updateDataConstructorName name ss)
+    ((ss, bound), ) . Constructor ss <$> updateDataConstructorName name ss
   updateValue s (TypedValue check val ty) =
-    (s, ) <$> (TypedValue check val <$> updateTypesEverywhere ty)
+    (s, ) . TypedValue check val <$> updateTypesEverywhere ty
   updateValue s (VisibleTypeApp val ty) =
-    (s, ) <$> VisibleTypeApp val <$> updateTypesEverywhere ty
+    (s, ) . VisibleTypeApp val <$> updateTypesEverywhere ty
   updateValue s v = return (s, v)
 
   updateBinder
@@ -304,7 +304,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
   updateBinder (_, bound) (ConstructorBinder ss name b) =
     ((ss, bound), ) <$> (ConstructorBinder ss <$> updateDataConstructorName name ss <*> pure b)
   updateBinder (_, bound) (OpBinder ss op) =
-    ((ss, bound), ) <$> (OpBinder ss <$> updateValueOpName op ss)
+    ((ss, bound), ) . OpBinder ss <$> updateValueOpName op ss
   updateBinder s (TypedBinder t b) = do
     t' <- updateTypesEverywhere t
     return (s, TypedBinder t' b)
@@ -336,7 +336,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
     . binderNamesWithSpans
 
   letBoundVariable :: Declaration -> Maybe (Ident, SourceSpan)
-  letBoundVariable = fmap (valdeclIdent &&& (safst . valdeclSourceAnn)) . getValueDeclaration
+  letBoundVariable = fmap (\d -> (valdeclIdent d, safst (valdeclSourceAnn d))) . getValueDeclaration
 
   declarationsToMap :: [Declaration] -> Bound
   declarationsToMap = foldl goDTM M.empty

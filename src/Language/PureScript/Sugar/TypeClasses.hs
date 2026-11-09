@@ -10,10 +10,10 @@ module Language.PureScript.Sugar.TypeClasses
 
 import Prelude
 
-import Control.Arrow (first, second)
 import Control.Monad (unless)
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.State.Strict (StateT, evalStateT, get, modify, lift)
+import Data.Bifunctor (first, second)
 import Data.Graph (SCC(..), stronglyConnComp)
 import Data.List (find, partition)
 import Data.List.NonEmpty (nonEmpty)

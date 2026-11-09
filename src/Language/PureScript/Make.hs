@@ -297,7 +297,7 @@ make ma@MakeActions{..} ms = do
           -- file has been built before
           cwd <- liftBase getCurrentDirectory
           (newCacheInfo, isUpToDate) <- Cache.checkChanged cacheDb moduleName cwd cacheInfo
-          modifyMVar_ newCacheDbMVar (\db -> pure $ M.insert moduleName newCacheInfo db)
+          modifyMVar_ newCacheDbMVar (pure . M.insert moduleName newCacheInfo)
           -- -- progress $ CompileMeta (T.pack $ show (moduleName, "-- DR.4.2.1", ("writeNewCacheDb", newCacheInfo)))
           pure isUpToDate
 

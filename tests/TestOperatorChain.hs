@@ -34,7 +34,7 @@ matchT climbFirst table = either (const (Left ())) Right . matchOperatorsWith cl
   fromTick _ = Nothing
   reapply _ q = Bin (Op q)
   modTable t = [PE.Infix (P.try (Bin <$> parseTick)) PE.AssocLeft] : t
-  parseTick = token (\x -> case x of Right (Tick n) -> Just (Tick n); _ -> Nothing)
+  parseTick = token (\case Right (Tick n) -> Just (Tick n); _ -> Nothing)
 
 spec :: Spec
 spec = describe "operator chains" $ modifyMaxSuccess (const 20000) $

@@ -237,7 +237,7 @@ lintUnused (Module modSS _ mn modDecls exports) =
     go (Literal _ _) = mempty
     go (Op _ _) = mempty
     go (Constructor _ _) = mempty
-    go (TypeClassDictionary _ _ _) = mempty
+    go (TypeClassDictionary {}) = mempty
     go (DeferredDictionary _ _) = mempty
     go (DerivedInstancePlaceholder _ _) = mempty
     go AnonymousArgument = mempty
@@ -263,9 +263,9 @@ lintUnused (Module modSS _ mn modDecls exports) =
     declIdents _ = (S.empty, S.empty)
 
     onDecls :: [ Declaration ] -> (S.Set Ident, MultipleErrors) -> (S.Set Ident, MultipleErrors)
-    onDecls ds errs = 
-      let 
-        onDecl d (accErrs, accLetNamesRec) = 
+    onDecls ds errs =
+      let
+        onDecl d (accErrs, accLetNamesRec) =
             let (letNames, recNames) = declIdents d
                 dErrs = underDecl d
                 errs' = dErrs <> removeAndWarn letNames accErrs
@@ -294,7 +294,7 @@ lintUnused (Module modSS _ mn modDecls exports) =
       let newNames = S.map snd newNamesWithSpans
           filteredUsed = used `S.difference` newNames
           warnUnused = S.filter (not . Text.isPrefixOf "_" . runIdent) (newNames `S.difference` used)
-          warnUnusedSpans = S.filter (\(_,ident) -> ident `elem` warnUnused) newNamesWithSpans 
+          warnUnusedSpans = S.filter (\(_,ident) -> ident `elem` warnUnused) newNamesWithSpans
           combinedErrors = if not $ S.null warnUnusedSpans then errors <> mconcat (map (\(ss,ident) -> errorMessage' ss $ UnusedName ident) $ S.toList warnUnusedSpans) else errors
       in
         (filteredUsed, combinedErrors)

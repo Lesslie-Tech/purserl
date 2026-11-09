@@ -181,11 +181,11 @@ expr :: Env -> Expr Ann -> R (Expr Ann)
 expr env e0 = do
   r@(e, _) <- case e0 of
     Abs a ident e1 -> do
-      (e1', i) <- inScope env False [ident] (\env' -> exprWithBinds env' e1)
+      (e1', i) <- inScope env False [ident] (`exprWithBinds` e1)
       pure (Abs a ident e1', enterAbs i)
     Var _ qname -> pure (e0, summarizeName env qname)
     Let a bs e1 -> do
-      ((bs', e1'), i) <- bindsThen env False (\env' -> expr env' e1) bs
+      ((bs', e1'), i) <- bindsThen env False (`expr` e1) bs
       pure (Let a bs' e1', i)
     Literal a (ArrayLiteral xs) -> do
       (xs', i) <- traverseR (expr env) xs

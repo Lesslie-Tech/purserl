@@ -94,10 +94,9 @@ instance FromJSON ImportCommand where
     (command :: Text) <- o .: "importCommand"
     case command of
       "addImplicitImport" ->
-        AddImplicitImport <$> (P.moduleNameFromString <$> o .: "module")
+        AddImplicitImport . P.moduleNameFromString <$> (o .: "module")
       "addQualifiedImport" ->
-        AddQualifiedImport
-          <$> (P.moduleNameFromString <$> o .: "module")
+        (AddQualifiedImport . P.moduleNameFromString <$> (o .: "module"))
           <*> (P.moduleNameFromString <$> o .: "qualifier")
       "addImport" ->
         AddImportForIdentifier
@@ -130,7 +129,7 @@ instance FromJSON Command where
         case params' of
           Nothing -> pure (Load [])
           Just params ->
-            Load <$> (map P.moduleNameFromString <$> params .:? "modules" .!= [])
+            Load . map P.moduleNameFromString <$> (params .:? "modules" .!= [])
       "type" -> do
         params <- o .: "params"
         Type
@@ -179,7 +178,7 @@ instance FromJSON Command where
       c -> fail ("Unknown command: " <> show c)
     where
       parseCodegenTargets ts =
-        case traverse (\t -> Map.lookup t P.codegenTargets) ts of
+        case traverse (`Map.lookup` P.codegenTargets) ts of
           Nothing ->
             fail ("Failed to parse codegen targets: " <> show ts)
           Just ts' ->

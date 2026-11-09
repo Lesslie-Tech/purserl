@@ -6,7 +6,6 @@ module Language.PureScript.CoreFn.Expr where
 
 import Prelude
 
-import Control.Arrow ((***))
 
 import Language.PureScript.AST.Literals (Literal)
 import Language.PureScript.CoreFn.Binders (Binder)
@@ -15,6 +14,7 @@ import Language.PureScript.CoreFn.Meta (Meta(IsSyntheticApp, IsForeign))
 import Language.PureScript.PSString (PSString)
 import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
+import Data.Bifunctor (bimap)
 
 -- |
 -- Data type for expressions and terms
@@ -105,7 +105,7 @@ instance Functor CaseAlternative where
 
   fmap f (CaseAlternative cabs car) = CaseAlternative
     (fmap (fmap f) cabs)
-    (either (Left . fmap (fmap f *** fmap f)) (Right . fmap f) car)
+    (either (Left . fmap (bimap (fmap f) (fmap f))) (Right . fmap f) car)
 
 -- |
 -- Extract the annotation from a term

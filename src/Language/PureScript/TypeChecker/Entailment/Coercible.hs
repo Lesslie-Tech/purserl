@@ -17,7 +17,6 @@ module Language.PureScript.TypeChecker.Entailment.Coercible
 import Prelude hiding (interact)
 
 import Control.Applicative ((<|>), empty)
-import Control.Arrow ((&&&))
 import Control.Monad ((<=<), guard, unless, when)
 import Control.Monad.Error.Class (MonadError, catchError, throwError)
 import Control.Monad.State.Strict (MonadState, StateT, get, gets, modify, put)
@@ -270,7 +269,7 @@ unify
   :: (SourceType, SourceType)
   -> Check (SourceType, SourceType, SourceType)
 unify (a, b) = do
-  let kindOf = sequence . (id &&& elaborateKind) <=< replaceAllTypeSynonyms
+  let kindOf = sequence . (\k -> (k, elaborateKind k)) <=< replaceAllTypeSynonyms
   (a', kind) <- kindOf a
   (b', kind') <- kindOf b
   unifyKinds' kind kind'
@@ -629,7 +628,7 @@ unwrapNewtype
 unwrapNewtype env = go (0 :: Int) where
   go n ty = runExceptT $ do
     when (n > 1000) $ throwError CannotUnwrapInfiniteNewtypeChain
-    (currentModuleName, currentModuleImports) <- gets $ checkCurrentModule &&& checkCurrentModuleImports
+    (currentModuleName, currentModuleImports) <- (,) <$> gets checkCurrentModule <*> gets checkCurrentModuleImports
     case unapplyTypes ty of
       (TypeConstructor _ newtypeName, ks, xs)
         | Just (inScope, fromModuleName, tvs, newtypeCtorName, wrappedTy) <-

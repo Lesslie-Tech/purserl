@@ -55,9 +55,7 @@ fromChar = toEnum . fromEnum
 
 escapeQuotedVar :: Text -> Text
 escapeQuotedVar x =
-  case "\"" `T.isInfixOf` x of
-    False -> x
-    True -> "'" <> x <> "'"
+  if "\"" `T.isInfixOf` x then "'" <> x <> "'" else x
 
 prettyPrintStringErl :: PSString -> Text
 prettyPrintStringErl s = "~\"" <> utf8BinaryContent s <> "\""

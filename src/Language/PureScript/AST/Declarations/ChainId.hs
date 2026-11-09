@@ -27,4 +27,4 @@ instance Binary ChainId where
   get = ChainId <$> get <*> get
 
 mkChainId :: T.Text -> Pos.SourcePos -> ChainId
-mkChainId fileName startingSourcePos = ChainId fileName startingSourcePos
+mkChainId = ChainId

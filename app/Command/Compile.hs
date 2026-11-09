@@ -55,7 +55,7 @@ printWarningsAndErrors verbose False files warnings errors = do
   pwd <- getCurrentDirectory
 
   probablySupportsANSI <- ANSI.hSupportsANSI stderr
-  colorOverride <- (/=) "" <$> Data.Maybe.fromMaybe "" <$> System.Environment.lookupEnv "PURS_FORCE_COLOR"
+  colorOverride <- (/=) "" . Data.Maybe.fromMaybe "" <$> System.Environment.lookupEnv "PURS_FORCE_COLOR"
   let cc = if colorOverride || probablySupportsANSI
            then Just P.defaultCodeColor
            else Nothing
@@ -69,7 +69,7 @@ printWarningsAndErrors verbose False files warnings errors = do
       exitFailure
     Right _ -> return ()
 printWarningsAndErrors verbose True files warnings errors = do
-  colorOverride <- (/=) "" <$> Data.Maybe.fromMaybe "" <$> System.Environment.lookupEnv "PURS_FORCE_COLOR"
+  colorOverride <- (/=) "" . Data.Maybe.fromMaybe "" <$> System.Environment.lookupEnv "PURS_FORCE_COLOR"
   let cc = if colorOverride
            then Just P.defaultCodeColor
            else Nothing
@@ -107,14 +107,11 @@ compile opts@PSCMakeOptions{..} = do
                 ExitSuccess -> pure 0
               )
         -- ASSUMPTION[em]: Any "erl-diff" messages have been outputted before the "done compiler" message
-        case shouldRunAgain of
-          True -> do
-            putStrLn ("### done compiler: " <> show res)
-            run
-          False ->
-            case res of
-              0 -> exitSuccess
-              _ -> exitFailure
+        (if shouldRunAgain then (do
+          putStrLn ("### done compiler: " <> show res)
+          run) else (case res of
+            0 -> exitSuccess
+            _ -> exitFailure))
   run
 
 compileImpl :: PSCMakeOptions -> P.ExternsMemCache -> IO Int

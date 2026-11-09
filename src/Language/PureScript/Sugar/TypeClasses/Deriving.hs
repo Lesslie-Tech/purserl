@@ -138,11 +138,11 @@ deriveGenericRep ss mn tyCon tyConArgs =
       pure (srcTypeConstructor Libs.NoArguments, NullBinder, [], [], Constructor ss Libs.C_NoArguments)
     makeProduct args = do
       (tys, bs1, es1, bs2, es2) <- unzip5 <$> traverse makeArg args
-      pure ( foldr1 (\f -> srcTypeApp (srcTypeApp (srcTypeConstructor Libs.Product) f)) tys
+      pure ( foldr1 (srcTypeApp . srcTypeApp (srcTypeConstructor Libs.Product)) tys
            , foldr1 (\b1 b2 -> ConstructorBinder ss Libs.C_Product [b1, b2]) bs1
            , es1
            , bs2
-           , foldr1 (\e1 -> App (App (Constructor ss Libs.C_Product) e1)) es2
+           , foldr1 (App . App (Constructor ss Libs.C_Product)) es2
            )
 
     makeArg :: SourceType -> DesugarM (SourceType, Binder, Expr, Binder, Expr)
@@ -165,7 +165,7 @@ deriveGenericRep ss mn tyCon tyConArgs =
     toRepTy :: [SourceType] -> SourceType
     toRepTy [] = srcTypeConstructor Libs.NoConstructors
     toRepTy [only] = only
-    toRepTy ctors = foldr1 (\f -> srcTypeApp (srcTypeApp (srcTypeConstructor Libs.Sum) f)) ctors
+    toRepTy ctors = foldr1 (srcTypeApp . srcTypeApp (srcTypeConstructor Libs.Sum)) ctors
 
 checkIsWildcard :: SourceSpan -> ProperName 'TypeName -> SourceType -> DesugarM ()
 checkIsWildcard _ _ (TypeWildcard _ UnnamedWildcard) = return ()

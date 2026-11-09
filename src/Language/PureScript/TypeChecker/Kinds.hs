@@ -27,14 +27,13 @@ module Language.PureScript.TypeChecker.Kinds
 
 import Prelude
 
-import Control.Arrow ((***))
 import Control.Lens ((^.), _1, _2, _3)
 import Control.Monad (join, unless, void, when, (<=<))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Strict (MonadState, gets, modify)
 import Control.Monad.Supply.Class (MonadSupply(..))
 
-import Data.Bifunctor (first, second)
+import Data.Bifunctor (bimap, first, second)
 import Data.Bitraversable (bitraverse)
 import Data.Foldable (for_, traverse_)
 import Data.Function (on)
@@ -336,7 +335,7 @@ instantiateKind (ty, kind1) kind2 = case kind1 of
     pure ty
   where
   shouldInstantiate = not . \case
-    ForAll _ _ _ _ _ _ -> True
+    ForAll {} -> True
     _ -> False
 
 subsumesKind
@@ -365,7 +364,7 @@ subsumesKind = go
     (a@(TypeApp _ (TypeApp _ arr _) _), TUnknown ann u)
       | eqType arr E.tyFunction
       , IS.notMember u (unknowns a) ->
-          join $ go <$> pure a <*> solveUnknownAsFunction ann u
+          go a =<< solveUnknownAsFunction ann u
     (a, b) ->
       unifyKinds a b
 
@@ -413,9 +412,9 @@ unifyKindsWithFailure onFailure = go
     (KindApp _ p1 p2, KindApp _ p3 p4) -> do
       go p1 p3
       join $ go <$> apply p2 <*> apply p4
-    (r1@(RCons _ _ _ _), r2) ->
+    (r1@(RCons {}), r2) ->
       unifyRows r1 r2
-    (r1, r2@(RCons _ _ _ _)) ->
+    (r1, r2@(RCons {})) ->
       unifyRows r1 r2
     (r1@(REmpty _), r2) ->
       unifyRows r1 r2
@@ -563,7 +562,7 @@ checkEscapedSkolems ty =
   go :: SourceType -> SourceType -> (SourceType, [(SourceSpan, Text, SourceType)])
   go ty' = \case
     Skolem ss name _ _ _ -> (ty', [(safst ss, name, ty')])
-    ty''@(KindApp _ _ _) -> (ty'', [])
+    ty''@(KindApp {}) -> (ty'', [])
     _ -> (ty', [])
 
   toSkolemError (ss, name, ty') =
@@ -695,7 +694,7 @@ checkQuantification =
 
   go acc _ [] = reverse acc
   go acc sco ((_, (arg, k)) : rest)
-    | not . all (flip elem sco) $ freeTypeVariables k = goDeps acc arg rest
+    | not . all (`elem` sco) $ freeTypeVariables k = goDeps acc arg rest
     | otherwise = go acc (arg : sco) rest
 
   goDeps acc _ [] = acc
@@ -956,7 +955,7 @@ kindsOfAll moduleName syns dats clss = withFreshSubstitution $ do
     datResultsWithKinds <- for datResultsWithUnks $ \(((datName, datKind), ctors), _) -> do
       let tyUnks = snd . fromJust $ lookup (mkQualified datName moduleName) tySubs
           replaceDataCtorField ty = replaceUnknownsWithVars (unknownVarNames (usedTypeVariables ty) tyUnks) $ replaceTypeCtors ty
-          ctors' = fmap (mapDataCtorFields (fmap (fmap replaceDataCtorField)) *** generalizeUnknowns tyUnks . replaceTypeCtors) ctors
+          ctors' = fmap (bimap (mapDataCtorFields (fmap (fmap replaceDataCtorField))) (generalizeUnknowns tyUnks . replaceTypeCtors)) ctors
       traverse_ (traverse_ checkTypeQuantification) ctors'
       pure (ctors', generalizeUnknowns tyUnks datKind)
     synResultsWithKinds <- for synResultsWithUnks $ \(((synName, synKind), synBody), _) -> do

@@ -40,7 +40,7 @@ desugarAdo d =
     (func, args) <- foldM (go pos) (yield, []) (reverse els)
     return $ case args of
       [] -> App (pure' pos m) func
-      hd : tl -> foldl' (\a b -> App (App (apply pos m) a) b) (App (App (map' pos m) func) hd) tl
+      hd : tl -> foldl' (App . App (apply pos m)) (App (App (map' pos m) func) hd) tl
   replace _ (PositionedValue pos com v) = PositionedValue pos com <$> rethrowWithPosition pos (replace pos v)
   replace _ other = return other
 

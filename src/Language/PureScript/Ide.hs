@@ -77,7 +77,7 @@ handleCommand c = case c of
   AddClause l wca ->
     MultilineTextResult <$> CS.addClause l wca
   FindUsages moduleName ident namespace -> do
-    Map.lookup moduleName <$> getAllModules Nothing >>= \case
+    getAllModules Nothing >>= (\case
       Nothing -> throwError (GeneralError "Module not found")
       Just decls -> do
         case find (\d -> namespaceForDeclaration (discardAnn d) == namespace
@@ -85,7 +85,7 @@ handleCommand c = case c of
           Nothing -> throwError (GeneralError "Declaration not found")
           Just declaration -> do
             let sourceModule = fromMaybe moduleName (declaration & _idaAnnotation & _annExportedFrom)
-            UsagesResult . foldMap toList <$> findUsages (discardAnn declaration) sourceModule
+            UsagesResult . foldMap toList <$> findUsages (discardAnn declaration) sourceModule) . Map.lookup moduleName
   Import fp outfp _ (AddImplicitImport mn) -> do
     rs <- addImplicitImport fp mn
     answerRequest outfp rs

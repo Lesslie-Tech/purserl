@@ -15,8 +15,7 @@ import Data.Text qualified as T
 
 import Control.Monad ((>=>))
 import Control.Monad.Identity
-import Control.Arrow (second)
-import Data.Bifunctor (bimap)
+import Data.Bifunctor (bimap, second)
 
 import Language.PureScript.PSString (PSString)
 import Language.PureScript.AST.SourcePos
@@ -191,21 +190,21 @@ curriedApp = flip (foldl (\fn a -> EApp RegularApp fn [a]))
 
 
 
-data EFunBinder
+newtype EFunBinder
  = EFunBinder [Erl]
  -- [drathier]: using ECaseOf instead of EFunBinder _ (Just _)
  -- = EFunBinder [Erl] (Maybe Guard)
 
    deriving (Show, Eq)
 
-data EBinder
+newtype EBinder
   = EBinder Erl -- TODO split out literals?
   -- [drathier]: using ECaseOf instead of EGuardedBinder
   -- | EGuardedBinder Erl Guard
 
   deriving (Show, Eq)
 
-data Guard
+newtype Guard
   = Guard Erl
   deriving (Show, Eq)
 

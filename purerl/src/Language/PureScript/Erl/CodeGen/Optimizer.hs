@@ -41,18 +41,16 @@ import Language.PureScript.PSString (PSString)
 optimize :: OwnModule -> [(Atom, Int)] -> [Erl] -> Supply [Erl]
 -- optimize exports es = pure es
 -- optimize exports es = pure (Inliner.inline es)
-optimize own exports es = do 
+optimize own exports es = do
   let symbolOf = dictSymbol (Map.fromList [(canonicalAtom own a, s) | (a, s) <- mapMaybe topLevelDict es])
   es
     & mapM
       (\b ->
-        b
+        fmap (localizeCalls own . go) (b
           & canonicalizeCalls own
           & inlineCommonOperators EC.effect EC.effectDictionaries id
           & specialize
-          & inlineCommonFnsM symbolOf
-          & fmap go
-          & fmap (localizeCalls own)
+          & inlineCommonFnsM symbolOf)
       )
 
   where

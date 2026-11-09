@@ -188,7 +188,7 @@ rebracketModule !caller pred_ valueOpTable typeOpTable valueAliased typeAliased 
   matchExpr = matchExprOperators valueOpTable
   matchBinder = matchBinderOperators valueOpTable
 
-  (goDecl, goExpr', goBinder') = updateTypes (flip matchTypeOperators typeOpTable)
+  (goDecl, goExpr', goBinder') = updateTypes (`matchTypeOperators` typeOpTable)
 
   wrap :: (a -> Either MultipleErrors a) -> (SourceSpan, a) -> Either MultipleErrors (SourceSpan, a)
   wrap go (ss', a) = (ss',) <$> go a

@@ -88,7 +88,7 @@ data SourceToken = SourceToken
   , tokValue :: !Token
   } deriving (Show, Eq, Ord, Generic, NFData)
 
-data Ident = Ident
+newtype Ident = Ident
   { getIdent :: Text
   } deriving (Show, Eq, Ord, Generic)
 

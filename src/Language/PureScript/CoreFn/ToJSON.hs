@@ -9,7 +9,7 @@ module Language.PureScript.CoreFn.ToJSON
 
 import Prelude
 
-import Control.Arrow ((***))
+import Data.Bifunctor (bimap)
 import Data.Either (isLeft)
 import Data.Map.Strict qualified as M
 import Data.Aeson (ToJSON(..), Value(..), object)
@@ -164,7 +164,7 @@ bindToJSON (Rec bs)
     ]
 
 recordToJSON :: (a -> Value) -> [(PSString, a)] -> Value
-recordToJSON f = toJSON . map (toJSON *** f)
+recordToJSON f = toJSON . map (bimap toJSON f)
 
 exprToJSON :: Expr Ann -> Value
 exprToJSON (Var ann i)              = object [ "type"        .= toJSON "Var"
@@ -210,7 +210,7 @@ exprToJSON (Case ann ss cs)         = object [ "type"        .= "Case"
                                              , "caseAlternatives"
                                                                     .= map caseAlternativeToJSON cs
                                              ]
-exprToJSON (Let ann bs e)           = object [ "type"        .= "Let" 
+exprToJSON (Let ann bs e)           = object [ "type"        .= "Let"
                                              , "annotation"  .= annToJSON ann
                                              , "binds"       .= map bindToJSON bs
                                              , "expression"  .= exprToJSON e

@@ -40,7 +40,7 @@ main = do
         ]
 
     para :: String -> Doc.Doc
-    para = foldr (Doc.</>) Doc.empty . map Doc.text . words
+    para = foldr ((Doc.</>) . Doc.text) Doc.empty . words
 
     -- | Displays full command help when invoked with no arguments.
     execParserPure :: Opts.ParserInfo a -> [String] -> Opts.ParserResult a

@@ -112,7 +112,7 @@ expandComposeFlippedF = traverse goBind
           x <- freshIdent "composeArg"
           let ann = extractAnn e
               xVar = Var ann (Qualified ByNullSourcePos x)
-              body = foldl' (\acc fi -> App ann fi acc) xVar chain'
+              body = foldl' (flip (App ann)) xVar chain'
           pure $ Abs ann x body
       | otherwise = goExprOneLevel e
 
@@ -385,8 +385,6 @@ step ann st = \case
     upsert l kind v ups
       | any (\(l', _, _) -> l' == l) ups = [if l' == l then (l', k, v) else u | u@(l', k, _) <- ups]
       | otherwise = ups ++ [(l, kind, v)]
-    -- A merged-in value overrides the label without changing how it is written.
-    replaceKind l v = upsert l Merge v
 
     delete l s = case [k | (l', k, _) <- stUps s, l' == l] of
       [Insert] -> s {stUps = [u | u@(l', _, _) <- stUps s, l' /= l]}
@@ -406,6 +404,8 @@ step ann st = \case
         x <- freshRecIdent "recBase"
         let v = Var ann (Qualified ByNullSourcePos x)
         pure (v, s {stBase = v, stLet = Just (x, b)})
+    -- A merged-in value overrides the label without changing how it is written.
+    replaceKind l = upsert l Merge
 
 flush :: Ann -> RecState -> Expr Ann
 flush ann st = maybe body (\(x, b) -> Let ann [NonRec ann x b] body) (stLet st)
@@ -468,8 +468,7 @@ altChainIdent :: Qualified Ident
 altChainIdent = Qualified (ByModuleName (ModuleName "CodeGen")) (Ident "altChain")
 
 translateBacktrace :: ModuleName -> [Ident] -> [Bind Ann] -> [Bind Ann]
-translateBacktrace modu foreignIdents binds =
-  map transformBinds binds
+translateBacktrace modu foreignIdents = map transformBinds
 
   where
   (transformBinds, _, _) = everywhereOnValues identity transformExprs identity
@@ -706,17 +705,16 @@ counterToLetters n = go (n + 1) []
 extendEnv :: Ident -> State RenameState Ident
 extendEnv old = do
   (counter, env, ignores, prefix, isCtor) <- get
-  case Map.member old ignores of
-    True ->
+  if Map.member old ignores
+    then
       -- (\res -> Debug.trace (show ("extendEnv ignored", old, "res", res)) res) <$>
       pure old
-    False -> do
+    else do
       let new = Ident (counterToLetters counter <> "_" <> runIdent old)
       -- (\res -> Debug.trace (show ("extendEnv change", old, counter, new, "res", res)) res) <$>
-      do
-        -- Debug.traceM (show ("CoreFn.Optimizer.extendEnv", old, new, counter, env))
-        put (counter + 1, Map.insert old new env, ignores, prefix, isCtor)
-        pure old
+      -- Debug.traceM (show ("CoreFn.Optimizer.extendEnv", old, new, counter, env))
+      put (counter + 1, Map.insert old new env, ignores, prefix, isCtor)
+      pure old
 
 
 renameIdentsAndVars :: forall a. NFData a => Show a => ModuleName -> Map Ident () -> Bind a -> Bind a
@@ -746,18 +744,14 @@ renameIdentsAndVars modu topLevelFunctions bind =
       -- (\res -> Debug.trace (show ("onIdent", ident, "res", res)) res) <$>
       do
         (_, _, ignores, _, _) <- get
-        case Map.member ident ignores of
-          True ->
-            pure ident
-          False ->
-            lookupIdent ident
+        (if Map.member ident ignores then pure ident else lookupIdent ident)
 
     -- Handle binders in CaseAlternatives
     onCaseAlt :: CaseAlternative a -> State RenameState (CaseAlternative a)
-    onCaseAlt caseAlt =
+    onCaseAlt =
       -- (\res -> Debug.trace (show ("onCaseAlt", caseAlt, "res", res)) res) <$>
       -- traverseCaseAlt caseAlt
-      pure caseAlt
+      pure
       -- case caseAlt of
       --   CaseAlternative binders result -> do
       --     newBinders <- traverse (\binder -> onBinder binder >>= onBinder) binders
@@ -804,11 +798,11 @@ renameIdentsAndVars modu topLevelFunctions bind =
       onBind b >>=
       \case
         NonRec ann ident expr -> do
-          NonRec <$> pure ann <*> goIdent ident <*> extendPrefix ident (goExpr expr)
+          (NonRec ann <$> goIdent ident) <*> extendPrefix ident (goExpr expr)
         Rec bindings -> do
           Rec <$>
             traverse (\((ann, ident), expr) -> do
-              isolated $ (,) <$> ((,) <$> pure ann <*> goIdent ident) <*> extendPrefix ident (goExpr expr)
+              isolated $ ((,) . (,) ann <$> goIdent ident) <*> extendPrefix ident (goExpr expr)
             ) bindings
 
     goExpr :: Expr a -> State RenameState (Expr a)
@@ -816,27 +810,27 @@ renameIdentsAndVars modu topLevelFunctions bind =
       onExpr expr >>=
       \case
         Literal ann lit ->
-          Literal <$> pure ann <*> goLitExpr lit
+          Literal ann <$> goLitExpr lit
         Constructor ann typeName ctorName fields -> do
           s@(a,b,c,d,isCtor) <- get
           put (a,b,c,d,True)
-          res <- Constructor <$> pure ann <*> pure typeName <*> pure ctorName <*> traverse goIdent fields
+          res <- Constructor ann typeName ctorName <$> traverse goIdent fields
           put (a,b,c,d,isCtor)
           pure res
         Accessor ann prop expr ->
-          Accessor <$> pure ann <*> pure prop <*> goExpr expr
+          Accessor ann prop <$> goExpr expr
         ObjectUpdate ann obj mCopy fields ->
-          ObjectUpdate <$> pure ann <*> goExpr obj <*> pure mCopy <*> traverse (\(k, v) -> (,) <$> pure k <*> goExpr v) fields
+          (ObjectUpdate ann <$> goExpr obj) <*> pure mCopy <*> traverse (\(k, v) -> (,) k <$> goExpr v) fields
         Abs ann ident body ->
-          Abs <$> pure ann <*> goIdent ident <*> goExpr body
+          (Abs ann <$> goIdent ident) <*> goExpr body
         App ann fn arg ->
-          App <$> pure ann <*> goExpr fn <*> goExpr arg
+          (App ann <$> goExpr fn) <*> goExpr arg
         Var ann qIdent ->
-          Var <$> pure ann <*> goQIdent qIdent
+          Var ann <$> goQIdent qIdent
         Case ann cases alts ->
-          Case <$> pure ann <*> traverse goExpr cases <*> traverse goCaseAlt alts
+          (Case ann <$> traverse goExpr cases) <*> traverse goCaseAlt alts
         Let ann binds body ->
-          Let <$> pure ann <*> traverse goBind binds <*> goExpr body
+          (Let ann <$> traverse goBind binds) <*> goExpr body
 
     goQIdent :: Qualified Ident -> State RenameState (Qualified Ident)
     goQIdent qi =
@@ -846,7 +840,7 @@ renameIdentsAndVars modu topLevelFunctions bind =
           Qualified (ByModuleName qmodu) a | qmodu /= modu -> pure qi
           Qualified qualifiedBy a ->
             -- [drathier]: internal modules are recursed into, and translated. We could translate them here directly, and make the code a bit easier to read
-            Qualified <$> pure qualifiedBy <*> goIdent a
+            Qualified qualifiedBy <$> goIdent a
 
     goBinder :: Binder a -> State RenameState (Binder a)
     goBinder b =
@@ -855,13 +849,13 @@ renameIdentsAndVars modu topLevelFunctions bind =
         NullBinder ann ->
           pure $ NullBinder ann
         LiteralBinder ann lit ->
-          LiteralBinder <$> pure ann <*> goLitBinder lit
+          LiteralBinder ann <$> goLitBinder lit
         VarBinder ann ident ->
-          VarBinder <$> pure ann <*> goIdent ident
+          VarBinder ann <$> goIdent ident
         ConstructorBinder ann qType qCtor binders ->
-          ConstructorBinder <$> pure ann <*> pure qType <*> pure qCtor <*> traverse goBinder binders
+          ConstructorBinder ann qType qCtor <$> traverse goBinder binders
         NamedBinder ann ident binder ->
-          NamedBinder <$> pure ann <*> goIdent ident <*> goBinder binder
+          (NamedBinder ann <$> goIdent ident) <*> goBinder binder
 
     goCaseAlt :: CaseAlternative a -> State RenameState (CaseAlternative a)
     goCaseAlt c =
@@ -889,7 +883,7 @@ renameIdentsAndVars modu topLevelFunctions bind =
         ListLiteral xs ->
           ListLiteral <$> traverse goExpr xs
         ObjectLiteral fields ->
-          ObjectLiteral <$> traverse (\(k, v) -> (,) <$> pure k <*> goExpr v) fields
+          ObjectLiteral <$> traverse (\(k, v) -> (,) k <$> goExpr v) fields
 
     goLitBinder :: Literal (Binder a) -> State RenameState (Literal (Binder a))
     goLitBinder lb =
@@ -908,7 +902,7 @@ renameIdentsAndVars modu topLevelFunctions bind =
         ListLiteral xs ->
           ListLiteral <$> traverse goBinder xs
         ObjectLiteral fields ->
-          ObjectLiteral <$> traverse (\(k, v) -> (,) <$> pure k <*> goBinder v) fields
+          ObjectLiteral <$> traverse (\(k, v) -> (,) k <$> goBinder v) fields
 
     onLitBinder = pure
     onLitExpr = pure

@@ -89,7 +89,7 @@ spec = context "Empty class dictionary elision" $ do
           , "inferredUser x = useEmpty x"
           ]
     compileAndFindBind Nothing src "inferredUser" $ \case
-      Abs _ _ (App _ _ _) -> pure ()
+      Abs _ _ (App {}) -> pure ()
       other -> expectationFailure $ "Expected a 1-argument function (Abs _ _ (App _ _ _)), got: " <> show other
 
   -- Regression test matching the exact shape that broke `Partial.Unsafe`'s

@@ -90,7 +90,7 @@ toModule verts (CyclicSCC ms) =
             let (graph, fromVertex, toVertex) = graphFromEdges verts in
             let msToVertex a = fromJust (toVertex (sigModuleName (snd a))) in
             let f z = sigModuleName <$> (\(x,_,_) -> snd x) $ fromVertex z in
-            let (sccNodes :: S.Set Vertex) = S.fromList $ fromJust <$> toVertex <$> sigModuleName <$> snd <$> (msRoot : msRest) in
+            let (sccNodes :: S.Set Vertex) = S.fromList (fromJust . toVertex . sigModuleName . snd <$> (msRoot : msRest)) in
             let startState = Seq.fromList $ filter (\(_,_,x) -> S.member x sccNodes) $ NE.toList $ (\x -> (S.empty, [], msToVertex x)) <$> ms' in
 
             let firstNode = fromJust (toVertex (sigModuleName (snd n))) in
@@ -106,7 +106,7 @@ toModule verts (CyclicSCC ms) =
                   in cycleWithTailFirst : reverse (cycleWithTailFirst : reverse (takeWhile (/= cycleWithTailFirst) cycleWithTailRest))
                 bfs i (rest Seq.:|> (aset,apath,a)) | S.member a aset = (a:apath)
                 bfs i (rest Seq.:|> (aset,apath,a)) =
-                  let outs = Seq.fromList $ (S.insert a aset, a:apath,) <$> filter (\x -> S.member x sccNodes) (graph ! a) in
+                  let outs = Seq.fromList $ (S.insert a aset, a:apath,) <$> filter (`S.member` sccNodes) (graph ! a) in
                   bfs (i + Seq.length outs) (outs <> rest)
 
                 cycleWithTail = bfs 0 startState

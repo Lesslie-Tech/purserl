@@ -44,7 +44,7 @@ properName :: Name (N.ProperName a) -> ProperName
 properName n = ProperName (N.coerceProperName <$> n)
 
 getProperName :: forall a. ProperName -> Name (N.ProperName a)
-getProperName pn = _getProperName pn -- eta expansion needed here due to simplified subsumption
+getProperName = _getProperName -- eta expansion needed here due to simplified subsumption
 
 -- |
 -- A newtype for a qualified operator name whose OpNameType has not yet been determined.

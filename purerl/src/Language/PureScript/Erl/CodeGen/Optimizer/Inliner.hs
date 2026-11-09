@@ -380,12 +380,11 @@ findKey k fields =
     (k2,v):_ | k == runAtom k2 -> Just v
     _:rest -> findKey k rest
 
-varsInExpr e =
-  everything (<>)
+varsInExpr = everything (<>)
     (\case
         EVar var -> [var]
         _ -> []
-    ) e
+    )
 
 
 data Binary
@@ -767,7 +766,7 @@ applySpine = go []
       _ -> Nothing
 
     canStep (ELet _ _) _ = True
-    canStep (EFun1 _ _ _) ((_, [_]) : _) = True
+    canStep (EFun1 {}) ((_, [_]) : _) = True
     canStep (EFun0 _ _) ((_, []) : _) = True
     canStep (ECaseOf _ alts) as = pushable alts as
     canStep _ _ = False
@@ -1346,8 +1345,8 @@ libRules =
     baseBind :: Base -> Erl -> (Erl -> Erl) -> Supply Erl
     baseBind = \case
       OkVeither -> \v k -> okCase v k id
-      JustMaybe -> \m k -> maybeCase m nothing k
-      RightEither -> \e k -> eitherCase e left k
+      JustMaybe -> (`maybeCase` nothing)
+      RightEither -> (`eitherCase` left)
 
     baseMap :: Base -> Erl -> (Erl -> Erl) -> Supply Erl
     baseMap base v f = baseBind base v (basePure base . f)

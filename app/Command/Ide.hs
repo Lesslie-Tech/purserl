@@ -72,7 +72,7 @@ data ServerOptions = ServerOptions
   , _serverNoWatch    :: Bool
   } deriving (Show)
 
-data ClientOptions = ClientOptions
+newtype ClientOptions = ClientOptions
   { clientPort :: Network.PortNumber
   }
 

@@ -45,13 +45,13 @@ desugarTypeDeclarationsModule (Module modSS coms name ds exps) =
   desugarTypeDeclarations (ValueDecl sa name' nameKind bs val : rest) = do
     let (_, f, _) = everywhereOnValuesTopDownM return go return
         f' = mapM (\(GuardedExpr g e) -> GuardedExpr g <$> f e)
-    (:) <$> (ValueDecl sa name' nameKind bs <$> f' val)
+    ((:) . ValueDecl sa name' nameKind bs <$> f' val)
         <*> desugarTypeDeclarations rest
     where
     go (Let w ds' val') = Let w <$> desugarTypeDeclarations ds' <*> pure val'
     go other = return other
   desugarTypeDeclarations (TypeInstanceDeclaration sa na ch idx nm deps cls args (ExplicitInstance ds') : rest) =
-    (:) <$> (TypeInstanceDeclaration sa na ch idx nm deps cls args . ExplicitInstance <$> desugarTypeDeclarations ds')
+    ((:) . TypeInstanceDeclaration sa na ch idx nm deps cls args . ExplicitInstance <$> desugarTypeDeclarations ds')
         <*> desugarTypeDeclarations rest
   desugarTypeDeclarations (d:rest) = (:) d <$> desugarTypeDeclarations rest
   desugarTypeDeclarations [] = return []

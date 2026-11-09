@@ -17,19 +17,10 @@
 # naming convention -- the underscores are the point, not a style slip.
 - ignore: {name: "Use camelCase", within: ["Language.PureScript.Constants.Libs", "Language.PureScript.Constants.Prim"]}
 
-# Warnings currently triggered by your code
-- ignore: {name: "Redundant do"}
-- ignore: {name: "Use newtype instead of data"}
-- ignore: {name: "Fuse foldr/map"}
-- ignore: {name: "Avoid lambda"}
-- ignore: {name: "Use record patterns"}
-- ignore: {name: "Use section"}
-- ignore: {name: "Reduce duplication"}
-- ignore: {name: "Functor law"}
-- ignore: {name: "Avoid lambda using `infix`"}
-- ignore: {name: "Fuse mapM/map"}
-- ignore: {name: "Eta reduce"} # This warning will often make suggestions that are no longer valid due to simplified subsumption
-- ignore: {name: "Redundant <$>"}
+# Control.Arrow's first/second/***/&&& are specialised to functions here; use
+# Data.Bifunctor (first, second, bimap) or write the lambda instead.
+- modules:
+  - {name: Control.Arrow, within: []}
 
 
 # Specify additional command line arguments
