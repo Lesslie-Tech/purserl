@@ -571,6 +571,32 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
           countAbs (Abs _ _ e) = 1 + countAbs e
           countAbs _ = 0
 
+          -- The lambda's own binders are the parameters of the definition, when it has enough of them and they
+          -- don't clash (an unused one is `_`).
+          peelParams :: Int -> Expr Ann -> Maybe ([T.Text], Expr Ann)
+          peelParams k e = do
+            (idents, body) <- go k e
+            let names = filter (/= "_") idents
+            if length (nub names) == length names then Just (idents, body) else Nothing
+            where
+              go 0 body = Just ([], body)
+              go i (Abs _ arg body) = first (param arg :) <$> go (i - 1 :: Int) body
+              -- Bindings between two parameters (a hoisted dictionary accessor) go to the body: names are unique.
+              go i (Let ann binds body) = fmap (Let ann binds) <$> go i body
+              go _ _ = Nothing
+              param = \case
+                UnusedIdent -> "_"
+                Ident "$__unused" -> "_"
+                arg -> identToVar arg
+
+          -- The first @k@ parameters and the body applied to them.
+          applyToParams :: Int -> ErlW ([T.Text], Erl)
+          applyToParams k = case peelParams k val of
+            Just (params, body) -> (params,) <$> valueToErl body
+            Nothing -> do
+              vars <- replicateM k freshNameErl
+              (vars,) <$> valueToErl (foldl applyStep val vars)
+
       let curriedWrappingUncurried arity = do
             vars <- replicateM arity freshNameErl
             let app = EApp RegularApp (EAtomLiteral ident') (EVar <$> vars)
@@ -600,8 +626,7 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
         Just (Arity (n, m))
           | canBeUncurriedOnly, uncurriedOnly qident, n + m > 0 -> do
               let arity = n + m
-              vars <- replicateM arity freshNameErl
-              erl' <- valueToErl $ foldl applyStep val vars
+              (vars, erl') <- applyToParams arity
               pure ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' vars (outerWrapper erl')])
         Just (Arity (n, m)) | n + m > 0 ->
           do
@@ -609,17 +634,16 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
 
             -- experimental split between typeclass & regular arguments
             -- TODO this still duplicates code
-            vars <- replicateM arity freshNameErl
             split <-
               if n == 0 || m == 0
                 then pure ([], [])
                 else do
-                  erl'' <- valueToErl $ foldl applyStep val (take n vars)
-                  pure ([(ident', n)], [EFunctionDef Nothing ss ident' (take n vars) (outerWrapper erl'')])
+                  (dictVars, erl'') <- applyToParams n
+                  pure ([(ident', n)], [EFunctionDef Nothing ss ident' dictVars (outerWrapper erl'')])
 
             if countAbs val == arity
               then do
-                erl' <- valueToErl $ foldl applyStep val vars
+                (vars, erl') <- applyToParams arity
                 curriedWrap <- curriedWrappingUncurried arity
                 let uncurried = ([(ident', arity)], [EFunctionDef (uncurryType arity =<< erlangType) ss ident' vars (outerWrapper erl')])
                 pure $ uncurried <> curriedWrap <> split
@@ -1030,3 +1054,4 @@ data DB
     , arrayConts :: [(T.Text, [Binder Ann])]
     , topmostValues :: [T.Text]
     }
+

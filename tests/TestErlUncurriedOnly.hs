@@ -6,6 +6,7 @@ import Prelude
 
 import Control.Monad.Error.Class (liftEither)
 import Control.Monad.IO.Class (liftIO)
+import Data.Char (isAlphaNum, isUpper)
 import Data.Map qualified as M
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -75,6 +76,12 @@ spec = do
       lib `shouldSatisfy` (not . T.isInfixOf "pick/0")
       lib `shouldSatisfy` (not . T.isInfixOf "pick() ->")
 
+    -- `unN k (N n)` is a case on all its parameters, whose variable patterns only name them.
+    it "takes its parameters by the names the body uses, with no aliases of them" $ do
+      (lib, user) <- compileLibAndUser
+      aliasLines lib `shouldBe` []
+      aliasLines user `shouldBe` []
+
     it "calls them with all their arguments, however they are used" $ do
       (_, user) <- compileLibAndUser
       -- Saturated (`full`), partially applied (`partial`, `later`) and as a value (`value`).
@@ -87,6 +94,12 @@ spec = do
     it "calls a class member through the dictionary alone" $ do
       (_, user) <- compileLibAndUser
       argCounts "lib@ps:size(" user `shouldBe` [1]
+
+-- | The statements that only give a variable another name, @X = Y,@.
+aliasLines :: Text -> [Text]
+aliasLines code = [l | l <- T.strip <$> T.lines code, [x, "=", y] <- [T.words (T.dropWhileEnd (== ',') l)], isVar x, isVar y]
+  where
+    isVar v = maybe False (\(c, _) -> isUpper c) (T.uncons v) && T.all (\c -> isAlphaNum c || c `elem` ("_@" :: String)) v
 
 -- | The number of arguments of each call of the function, given its text up to and including the opening parenthesis.
 argCounts :: Text -> Text -> [Int]
@@ -107,6 +120,11 @@ sources =
         [ "module Lib where",
           "pick :: Int -> Int -> Int",
           "pick a _ = a",
+          "newtype N = N Int",
+          "swap :: Int -> Int -> Int",
+          "swap a b = pick b a",
+          "unN :: Int -> N -> Int",
+          "unN k (N n) = pick k n",
           "class Sized a where",
           "  size :: a -> Int -> Int"
         ]

@@ -10,12 +10,13 @@ import Control.Monad ((>=>))
 
 import Data.Functor ((<&>))
 import Data.List (find)
-import Data.Maybe (fromJust, fromMaybe)
+import Data.Maybe (fromJust, fromMaybe, isJust)
 import Data.Map qualified as M
 import Data.Set qualified as S
 import Data.Text qualified as T
 
 import Language.PureScript.CoreFn (Ann, Bind(..), Binder(..), CaseAlternative(..), Expr(..), Literal(..), Module(..))
+import Language.PureScript.CoreFn.Meta (Meta(IsNewtype))
 import Language.PureScript.Names (Ident(..), Qualified(..), isBySourcePos, isPlainIdent, runIdent, showIdent)
 import Language.PureScript.Traversals (eitherM, pairM, sndM)
 
@@ -176,8 +177,15 @@ renameInValue (ObjectUpdate ann obj copy vs) =
   (\obj' -> ObjectUpdate ann obj' copy) <$> renameInValue obj <*> traverse (\(name, v) -> (name, ) <$> renameInValue v) vs
 renameInValue (Abs ann name v) =
   newScope $ Abs ann <$> updateScope name <*> renameInValue v
-renameInValue (App ann v1 v2) =
-  App ann <$> renameInValue v1 <*> renameInValue v2
+renameInValue (App ann v1 v2) = do
+  v2' <- renameInValue v2
+  case (v1, v2') of
+    -- A function applied to a local variable only names it, as the record update `r { a = 1 }` does.
+    (Abs _ name body, Var _ (Qualified qb arg)) | isBySourcePos qb ->
+      newScope $ do
+        modify $ \s -> s { rsBoundNames = M.insert name arg (rsBoundNames s) }
+        renameInValue body
+    _ -> (\v1' -> App ann v1' v2') <$> renameInValue v1
 renameInValue (Var ann (Qualified qb name)) | isBySourcePos qb || not (isPlainIdent name) =
   -- This should only rename identifiers local to the current module: either
   -- they aren't qualified, or they are but they have a name that should not
@@ -185,8 +193,20 @@ renameInValue (Var ann (Qualified qb name)) | isBySourcePos qb || not (isPlainId
   -- top-level scope.
   Var ann . Qualified qb <$> lookupIdent name
 renameInValue v@Var{} = return v
-renameInValue (Case ann vs alts) =
-  newScope $ Case ann <$> traverse renameInValue vs <*> traverse renameInCaseAlternative alts
+renameInValue (Case ann vs alts) = newScope $ do
+  vs' <- traverse renameInValue vs
+  -- A column that only names a local variable, in every alternative, is that variable: the names are
+  -- mapped to it and the column is dropped. Clauses with some other pattern bring it up, as
+  -- `\a b c -> case a, b, c of a, b, (N c) -> ...`.
+  let aliased = [localVar v && all (isJust . aliasOf . (!! i) . caseAlternativeBinders) alts | (i, v) <- zip [0 ..] vs']
+      keep xs = [x | (x, False) <- zip xs aliased]
+  alts' <- traverse (renameAliasing vs' aliased) alts
+  pure $ case (keep vs', alts') of
+    ([], [CaseAlternative [] (Right e)]) -> e
+    (vs'', _) -> Case ann vs'' alts'
+  where
+  localVar (Var _ (Qualified qb _)) = isBySourcePos qb
+  localVar _ = False
 renameInValue (Let ann ds v) =
   newScope $ Let ann <$> renameInDecls ds <*> renameInValue v
 
@@ -198,6 +218,31 @@ renameInLiteral rename (ArrayLiteral bs) = ArrayLiteral <$> traverse rename bs
 renameInLiteral rename (ListLiteral bs) = ListLiteral <$> traverse rename bs
 renameInLiteral rename (ObjectLiteral bs) = ObjectLiteral <$> traverse (sndM rename) bs
 renameInLiteral _ l = return l
+
+-- |
+-- The name a binder gives to what it matches, if it only does that: a variable, a wildcard (no name) or a
+-- newtype constructor around one of those, which is the value itself.
+--
+aliasOf :: Binder Ann -> Maybe (Maybe Ident)
+aliasOf = \case
+  NullBinder _ -> Just Nothing
+  VarBinder _ name -> Just (Just name)
+  ConstructorBinder (_, _, Just IsNewtype) _ _ [b] -> aliasOf b
+  _ -> Nothing
+
+-- |
+-- Renames within a case alternative of a case whose scrutinees, in the columns marked, are variables the
+-- alternative's names for them are mapped to.
+--
+renameAliasing :: [Expr Ann] -> [Bool] -> CaseAlternative Ann -> Rename (CaseAlternative Ann)
+renameAliasing vs aliased (CaseAlternative bs v) = newScope $ do
+  let columns = zip3 vs aliased bs
+  for_' [(name, scrutinee) | (Var _ (Qualified _ scrutinee), True, b) <- columns, Just (Just name) <- [aliasOf b]] $
+    \(name, scrutinee) -> modify $ \s -> s { rsBoundNames = M.insert name scrutinee (rsBoundNames s) }
+  CaseAlternative <$> traverse renameInBinder [b | (_, False, b) <- columns]
+                  <*> eitherM (traverse (pairM renameInValue renameInValue)) renameInValue v
+  where
+  for_' xs f = mapM_ f xs
 
 -- |
 -- Renames within case alternatives.
