@@ -4,6 +4,8 @@ permissions:
   contents: write
 
 on:
+  # A manual run builds and tests but never publishes: the release steps only run for tag pushes.
+  workflow_dispatch:
   push:
     tags:
       - "*"
@@ -50,7 +52,7 @@ jobs:
           - image: quay.io/benz0li/ghc-musl:9.8.4
             os: ubuntu-latest
 
-          - os: macos-14  # arm64
+          - os: macos-15  # arm64 (macos-14 was retired by GitHub on 2026-11-02)
 
     runs-on: "${{ matrix.os }}"
     container:
