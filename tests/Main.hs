@@ -7,7 +7,6 @@ import Prelude
 import Test.Hspec
 
 import TestAst qualified
-import TestCoreFn qualified
 import TestCst qualified
 import TestEmptyClassDictElision qualified
 import TestDiscard qualified
@@ -40,7 +39,6 @@ main = do
     describe "make" TestMake.spec
     describe "operator chains" TestOperatorChain.spec
     describe "unify" TestUnify.spec
-    describe "corefn" TestCoreFn.spec
     describe "empty class dict elision" TestEmptyClassDictElision.spec
     describe "discard" TestDiscard.spec
     describe "list literals" TestListLiterals.spec

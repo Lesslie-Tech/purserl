@@ -334,11 +334,6 @@ buildMakeActions outputDir filePathMap foreigns usePrefix mExternsMemCache =
     -- ### Purerl
 
     when (S.member Erl codegenTargets) $ do
-      -- generate the corefn
-      -- let coreFnFile = targetFilename mn CoreFn
-      --     json = CFJ.moduleToJSON Paths.version m
-      -- lift $ writeJSONFile coreFnFile json
-
       let externsFiles = exts
 
       let  getForeigns :: String -> Make [(T.Text, Int)]

@@ -220,11 +220,9 @@ library
     Language.PureScript.CoreFn.CSE
     Language.PureScript.CoreFn.Desugar
     Language.PureScript.CoreFn.Expr
-    Language.PureScript.CoreFn.FromJSON
     Language.PureScript.CoreFn.Meta
     Language.PureScript.CoreFn.Module
     Language.PureScript.CoreFn.Optimizer
-    Language.PureScript.CoreFn.ToJSON
     Language.PureScript.CoreFn.Traversals
     Language.PureScript.CST
     Language.PureScript.CST.Convert
@@ -425,7 +423,6 @@ test-suite tests
     Language.PureScript.Ide.UsageSpec
     PscIdeSpec
     TestAst
-    TestCoreFn
     TestCst
     TestEmptyClassDictElision
     TestDiscard
