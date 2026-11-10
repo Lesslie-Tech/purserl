@@ -13,6 +13,7 @@ import TestDiscard qualified
 import TestListLiterals qualified
 import TestErlFlatten qualified
 import TestErlAliases qualified
+import TestErlApplySpine qualified
 import TestErlHeadMatches qualified
 import TestErlIsSymbol qualified
 import TestErlMapLookup qualified
@@ -44,6 +45,7 @@ main = do
     describe "list literals" TestListLiterals.spec
     describe "erl flatten" TestErlFlatten.spec
     describe "erl aliases" TestErlAliases.spec
+    describe "erl apply spine" TestErlApplySpine.spec
     describe "erl head matches" TestErlHeadMatches.spec
     describe "erl is symbol" TestErlIsSymbol.spec
     describe "erl map lookup" TestErlMapLookup.spec

@@ -8,6 +8,7 @@ module Language.PureScript.Erl.CodeGen.Optimizer.Inliner
     inlineCommonFnsM,
     flattenFailureCases,
     mergeHandlerCases,
+    applySpine,
   )
 where
 
@@ -778,10 +779,10 @@ applySpine = go []
     canStep _ _ = False
 
     -- Running a choice between thunks runs the chosen one. With arguments the application is copied
-    -- into every arm, so only variables and literals, and only when every arm is a function.
+    -- into every arm, so only variables and literals, and only when some arm is a function, whose closure then goes away.
     pushable alts as
       | all (null . snd) as = any (thunk . snd) alts
-      | otherwise = all (all trivial . snd) as && all (fun . snd) alts
+      | otherwise = all (all trivial . snd) as && any (fun . snd) alts
 
     trivial = \case
       EVar _ -> True
@@ -802,7 +803,7 @@ applySpine = go []
       EFun1 {} -> True
       EFunFull Nothing [(EFunBinder [_], _)] -> True
       ELet _ body -> fun body
-      ECaseOf _ alts -> all (fun . snd) alts
+      ECaseOf _ alts -> any (fun . snd) alts
       _ -> False
 
     step (ELet b body) as = ELet b (step body as)

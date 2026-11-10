@@ -429,6 +429,7 @@ test-suite tests
     TestListLiterals
     TestErlFlatten
     TestErlAliases
+    TestErlApplySpine
     TestErlHeadMatches
     TestErlIsSymbol
     TestErlMapLookup
