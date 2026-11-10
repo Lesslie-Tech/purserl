@@ -220,7 +220,7 @@ buildCodegenEnvironment env = CodegenEnvironment env (explicitArities `M.union` 
 
     classMember :: Qualified Ident -> Bool
     classMember (Qualified (P.ByModuleName m) i) =
-      any (\tc -> any (\(i', _, _) -> i' == i) (P.typeClassMembers tc)) (M.findWithDefault [] m classesByModule)
+      any (any (\(i', _, _) -> i' == i) . P.typeClassMembers) (M.findWithDefault [] m classesByModule)
     classMember _ = False
 
     classesByModule :: M.Map ModuleName [P.TypeClassData]

@@ -1,7 +1,7 @@
 -- | Dropping @A = B,@ where both are variables, and @A = begin ..., B end,@, which the printer turns into one.
 module Language.PureScript.Erl.CodeGen.Optimizer.Aliases (dropVarAliases) where
 
-import Data.Bifunctor (bimap)
+import Data.Bifunctor (bimap, first)
 import Data.Maybe (maybeToList)
 import Data.Text (Text)
 import Language.PureScript.Erl.CodeGen.AST
@@ -30,7 +30,7 @@ dropVarAliases = everywhereOnErl $ \case
       (Nothing, EBind (EVar a) rhs) : rest
         | Just (pre, b) <- endsInVar rhs,
           aliasable a b (EMaybe ExitsOnFailure rest final) ->
-            let sub = replaceIdents [(a, EVar b)] in inMaybe (map ((,) Nothing) pre <> map (bimap (fmap sub) sub) rest) (sub final)
+            let sub = replaceIdents [(a, EVar b)] in inMaybe (map (Nothing,) pre <> map (bimap (fmap sub) sub) rest) (sub final)
       step : rest -> let (rest', final') = inMaybe rest final in (step : rest', final')
       [] -> ([], final)
     inBlock = \case
@@ -51,7 +51,7 @@ endsInVar e = do
   where
     go = \case
       EBlock es@(_ : _) -> Just (init es, last es)
-      ELet s r -> Just (maybe ([s], r) (\(pre, l) -> (s : pre, l)) (go r))
+      ELet s r -> Just (maybe ([s], r) (first (s :)) (go r))
       _ -> Nothing
 
 aliasable :: Text -> Text -> Erl -> Bool

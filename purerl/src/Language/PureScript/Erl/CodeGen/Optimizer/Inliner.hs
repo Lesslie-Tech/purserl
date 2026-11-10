@@ -15,6 +15,7 @@ where
 import Control.Monad ((>=>))
 import Control.Monad.Supply (Supply)
 import Control.Monad.Supply.Class (MonadSupply (fresh))
+import Data.Bifunctor (first)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.List (sortOn)
@@ -1176,7 +1177,7 @@ adapter lead names f = case peel (length names) f of
   where
     peel :: Int -> Erl -> Maybe ([Erl], Erl)
     peel 0 e = Just ([], e)
-    peel n (EFunFull Nothing [(EFunBinder [p], b)]) = (\(ps, e) -> (p : ps, e)) <$> peel (n - 1) b
+    peel n (EFunFull Nothing [(EFunBinder [p], b)]) = first (p :) <$> peel (n - 1) b
     peel _ _ = Nothing
     distinct vs = let named = filter (/= "_") vs in length named == Set.size (Set.fromList named)
 
