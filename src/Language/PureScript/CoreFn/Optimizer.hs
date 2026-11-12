@@ -857,6 +857,14 @@ renameIdentsAndVars modu topLevelFunctions bind =
           ConstructorBinder ann qType qCtor <$> traverse goBinder binders
         NamedBinder ann ident binder ->
           (NamedBinder ann <$> goIdent ident) <*> goBinder binder
+        ConsBinder ann hd tl ->
+          ConsBinder ann <$> goBinder hd <*> goBinder tl
+        StringPrefixBinder ann str binder ->
+          StringPrefixBinder ann str <$> goBinder binder
+        MapEntryBinder ann k v ->
+          MapEntryBinder ann <$> goBinder k <*> goBinder v
+        AndBinder ann l r ->
+          AndBinder ann <$> goBinder l <*> goBinder r
 
     goCaseAlt :: CaseAlternative a -> State RenameState (CaseAlternative a)
     goCaseAlt c =

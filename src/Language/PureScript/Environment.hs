@@ -24,7 +24,7 @@ import Data.List.NonEmpty qualified as NEL
 
 import Language.PureScript.AST.SourcePos (nullSourceAnn)
 import Language.PureScript.Crash (internalError)
-import Language.PureScript.Names (Ident, ModuleName(..), ProperName(..), ProperNameType(..), Qualified(..), QualifiedBy(..), coerceProperName)
+import Language.PureScript.Names (Ident(..), ModuleName(..), ProperName(..), ProperNameType(..), Qualified(..), QualifiedBy(..), coerceProperName)
 import Language.PureScript.Roles (Role(..))
 import Language.PureScript.TypeClassDictionaries (NamedDict)
 import Language.PureScript.Interning (Intern(..))
@@ -389,8 +389,9 @@ tyArray = srcTypeConstructor C.Array
 
 -- | The type of native Erlang lists (the project's @List@ module), which an
 -- array literal can also denote.
-qnList :: Qualified (ProperName 'TypeName)
+qnList, qnMap :: Qualified (ProperName 'TypeName)
 qnList = Qualified (ByModuleName (ModuleName "List")) (ProperName "List")
+qnMap = Qualified (ByModuleName (ModuleName "Map")) (ProperName "Map")
 
 -- | Type constructor for records
 tyRecord :: SourceType

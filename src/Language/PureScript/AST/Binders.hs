@@ -13,6 +13,7 @@ import Language.PureScript.AST.Literals (Literal(..))
 import Language.PureScript.Names (Ident, OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified)
 import Language.PureScript.Comments (Comment)
 import Language.PureScript.Types (SourceType)
+import Language.PureScript.PSString (PSString)
 
 -- |
 -- Data type for binders
@@ -69,6 +70,24 @@ data Binder
   -- but the typechecker requires the matched value to be of type `Unit`.
   --
   | DiscardBinder !SourceSpan
+  -- |
+  -- A native list cons pattern, @head : tail@. Introduced when the built-in
+  -- operator is resolved.
+  --
+  | ConsBinder !SourceSpan !Binder !Binder
+  -- |
+  -- A string prefix pattern, @"prefix" <> rest@. Introduced when the built-in
+  -- operator is resolved.
+  --
+  | StringPrefixBinder !SourceSpan !PSString !Binder
+  -- |
+  -- A map entry pattern, @key := value@. The key is a literal.
+  --
+  | MapEntryBinder !SourceSpan !Binder !Binder
+  -- |
+  -- A pattern that has to match along with another one, @left & right@.
+  --
+  | AndBinder !SourceSpan !Binder !Binder
   deriving (Show, Generic, NFData)
 
 -- Manual Eq and Ord instances for `Binder` were added on 2018-03-05. Comparing
@@ -101,6 +120,14 @@ instance Eq Binder where
     ty == ty' && b == b'
   DiscardBinder _ == DiscardBinder _ =
     True
+  (ConsBinder _ h t) == (ConsBinder _ h' t') =
+    h == h' && t == t'
+  (StringPrefixBinder _ s b) == (StringPrefixBinder _ s' b') =
+    s == s' && b == b'
+  (MapEntryBinder _ k v) == (MapEntryBinder _ k' v') =
+    k == k' && v == v'
+  (AndBinder _ l r) == (AndBinder _ l' r') =
+    l == l' && r == r'
   _ == _ = False
 
 instance Ord Binder where
@@ -123,6 +150,14 @@ instance Ord Binder where
     compare comments comments' <> compare b b'
   compare (TypedBinder ty b) (TypedBinder ty' b') =
     compare ty ty' <> compare b b'
+  compare (ConsBinder _ h t) (ConsBinder _ h' t') =
+    compare h h' <> compare t t'
+  compare (StringPrefixBinder _ s b) (StringPrefixBinder _ s' b') =
+    compare s s' <> compare b b'
+  compare (MapEntryBinder _ k v) (MapEntryBinder _ k' v') =
+    compare k k' <> compare v v'
+  compare (AndBinder _ l r) (AndBinder _ l' r') =
+    compare l l' <> compare r r'
   compare binder binder' =
     compare (orderOf binder) (orderOf binder')
       where
@@ -138,6 +173,10 @@ instance Ord Binder where
         orderOf PositionedBinder{} = 8
         orderOf TypedBinder{} = 9
         orderOf DiscardBinder{} = 10
+        orderOf ConsBinder{} = 11
+        orderOf StringPrefixBinder{} = 12
+        orderOf MapEntryBinder{} = 13
+        orderOf AndBinder{} = 14
 
 -- |
 -- Collect all names introduced in binders in an expression
@@ -156,6 +195,10 @@ binderNamesWithSpans = go []
   go ns (NamedBinder ss name b) = go ((ss, name) : ns) b
   go ns (PositionedBinder _ _ b) = go ns b
   go ns (TypedBinder _ b) = go ns b
+  go ns (ConsBinder _ h t) = foldl go ns [h, t]
+  go ns (StringPrefixBinder _ _ b) = go ns b
+  go ns (MapEntryBinder _ k v) = foldl go ns [k, v]
+  go ns (AndBinder _ l r) = foldl go ns [l, r]
   go ns _ = ns
   lit ns (ObjectLiteral bs) = foldl go ns (map snd bs)
   lit ns (ArrayLiteral bs) = foldl go ns bs

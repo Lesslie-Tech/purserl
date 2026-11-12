@@ -427,6 +427,8 @@ test-suite tests
     TestEmptyClassDictElision
     TestDiscard
     TestListLiterals
+    TestPatternOperators
+    TestErlPatternOperators
     TestErlFlatten
     TestErlAliases
     TestErlApplySpine

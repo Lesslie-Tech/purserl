@@ -33,6 +33,10 @@ everywhereOnValues f g h = (f', g', h')
 
   h' (LiteralBinder a b) = h (LiteralBinder a (handleLiteral h' b))
   h' (NamedBinder a name b) = h (NamedBinder a name (h' b))
+  h' (ConsBinder a hd tl) = h (ConsBinder a (h' hd) (h' tl))
+  h' (StringPrefixBinder a str b) = h (StringPrefixBinder a str (h' b))
+  h' (MapEntryBinder a k v) = h (MapEntryBinder a (h' k) (h' v))
+  h' (AndBinder a l r) = h (AndBinder a (h' l) (h' r))
   h' (ConstructorBinder a q1 q2 bs) = h (ConstructorBinder a q1 q2 (map h' bs))
   h' b = h b
 
@@ -78,6 +82,10 @@ traverseCoreFn f g h i = (f', g', h', i')
 
   h' (LiteralBinder a b) = LiteralBinder a <$> handleLiteral h b
   h' (NamedBinder a name b) = NamedBinder a name <$> h b
+  h' (ConsBinder a hd tl) = ConsBinder a <$> h hd <*> h tl
+  h' (StringPrefixBinder a str b) = StringPrefixBinder a str <$> h b
+  h' (MapEntryBinder a k v) = MapEntryBinder a <$> h k <*> h v
+  h' (AndBinder a l r) = AndBinder a <$> h l <*> h r
   h' (ConstructorBinder a q1 q2 bs) = ConstructorBinder a q1 q2 <$> traverse h bs
   h' b = pure b
 

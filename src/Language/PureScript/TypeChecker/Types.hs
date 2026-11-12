@@ -708,6 +708,33 @@ inferBinder val (NamedBinder ss name binder) =
   warnAndRethrowWithPositionTC ss $ do
     m <- inferBinder val binder
     return $ M.insert name (ss, val) m
+inferBinder val (ConsBinder ss hd tl) =
+  warnAndRethrowWithPositionTC ss $ do
+    el <- freshTypeWithKind kindType
+    unifyTypes val (srcTypeApp (srcTypeConstructor qnList) el)
+    m1 <- inferBinder el hd
+    m2 <- inferBinder val tl
+    return $ M.union m1 m2
+inferBinder val (MapEntryBinder ss key value) =
+  warnAndRethrowWithPositionTC ss $ do
+    unless (validKey key) . throwError . errorMessage' ss $ InvalidMapEntryPattern
+    keyTy <- freshTypeWithKind kindType
+    valueTy <- freshTypeWithKind kindType
+    unifyTypes val (srcTypeApp (srcTypeApp (srcTypeConstructor qnMap) keyTy) valueTy)
+    m1 <- inferBinder keyTy key
+    m2 <- inferBinder valueTy value
+    return $ M.union m1 m2
+inferBinder val (AndBinder ss left right) =
+  warnAndRethrowWithPositionTC ss $ do
+    unless (isMapPattern left && isMapPattern right) . throwError . errorMessage' ss $ InvalidAndPattern
+    m1 <- inferBinder val left
+    m2 <- inferBinder val right
+    return $ M.union m1 m2
+inferBinder val (StringPrefixBinder ss _ binder) =
+  warnAndRethrowWithPositionTC ss $ do
+    unless (validTail binder) . throwError . errorMessage' ss $ InvalidAppendPattern
+    unifyTypes val tyString
+    inferBinder tyString binder
 inferBinder val (PositionedBinder pos _ binder) =
   warnAndRethrowWithPositionTC pos $ inferBinder val binder
 inferBinder val (TypedBinder ty binder) = do
@@ -722,6 +749,41 @@ inferBinder _ BinaryNoParensBinder{} =
   internalError "BinaryNoParensBinder should have been desugared before inferBinder"
 inferBinder _ ParensInBinder{} =
   internalError "ParensInBinder should have been desugared before inferBinder"
+
+-- | What may follow the prefix in a string prefix pattern: it has to be
+-- something an Erlang binary pattern can match the rest of the string with.
+validTail :: Binder -> Bool
+validTail = \case
+  NullBinder -> True
+  VarBinder{} -> True
+  LiteralBinder _ StringLiteral{} -> True
+  StringPrefixBinder{} -> True
+  PositionedBinder _ _ b -> validTail b
+  TypedBinder _ b -> validTail b
+  _ -> False
+
+-- | Whether a pattern is a map pattern, which can be merged with another one
+-- into a single Erlang map pattern.
+isMapPattern :: Binder -> Bool
+isMapPattern = \case
+  MapEntryBinder{} -> True
+  AndBinder _ l r -> isMapPattern l && isMapPattern r
+  PositionedBinder _ _ b -> isMapPattern b
+  TypedBinder _ b -> isMapPattern b
+  _ -> False
+
+-- | The key of a map entry pattern is a literal, which an Erlang map pattern can look up.
+validKey :: Binder -> Bool
+validKey = \case
+  LiteralBinder _ lit -> case lit of
+    StringLiteral{} -> True
+    CharLiteral{} -> True
+    NumericLiteral{} -> True
+    BooleanLiteral{} -> True
+    _ -> False
+  PositionedBinder _ _ b -> validKey b
+  TypedBinder _ b -> validKey b
+  _ -> False
 
 -- | A statement in a do block whose result is discarded must be of type
 -- `Unit`; otherwise report it as an implicitly discarded result.

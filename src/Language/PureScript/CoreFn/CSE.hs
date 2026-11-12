@@ -351,6 +351,10 @@ identsFromBinders = foldMap identsFromBinder where
     VarBinder _ ident                  -> [ident]
     ConstructorBinder _ _ _ xs         -> identsFromBinders xs
     NamedBinder _ ident x              -> ident : identsFromBinder x
+    ConsBinder _ x y                   -> identsFromBinder x ++ identsFromBinder y
+    StringPrefixBinder _ _ x           -> identsFromBinder x
+    MapEntryBinder _ k v               -> identsFromBinder k ++ identsFromBinder v
+    AndBinder _ l r                    -> identsFromBinder l ++ identsFromBinder r
     LiteralBinder _ BooleanLiteral{}   -> []
     LiteralBinder _ CharLiteral{}      -> []
     LiteralBinder _ NumericLiteral{}   -> []

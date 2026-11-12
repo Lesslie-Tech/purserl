@@ -21,14 +21,16 @@ import Data.Maybe (fromMaybe)
 import Data.Map qualified as M
 import Data.Text qualified as T
 
-import Language.PureScript.AST.Binders (Binder(..))
+import Language.PureScript.AST.Binders (Binder(..), isIrrefutable)
 import Language.PureScript.AST.Declarations (CaseAlternative(..), Expr(..), Guard(..), GuardedExpr(..), pattern MkUnguarded, isTrueExpr)
 import Language.PureScript.AST.Literals (Literal(..))
-import Language.PureScript.AST.Traversals (everywhereOnValuesM)
+import Language.PureScript.AST.SourcePos (nullSourceSpan)
+import Language.PureScript.AST.Traversals (everywhereOnValues, everywhereOnValuesM)
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Environment (DataDeclType, Environment(..), TypeKind(..))
 import Language.PureScript.Errors (MultipleErrors, pattern NullSourceAnn, SimpleErrorMessage(..), SourceSpan, errorMessage')
 import Language.PureScript.Names as P
+import Language.PureScript.PSString (PSString, decodeString, mkString)
 import Language.PureScript.Pretty.Values (prettyPrintBinderAtom)
 import Language.PureScript.TypeChecker.Monad (Check)
 import Language.PureScript.Types as P
@@ -148,9 +150,169 @@ missingCasesSingle _ _ NullBinder (LiteralBinder ss (BooleanLiteral b)) = ([Lite
 missingCasesSingle _ _ (LiteralBinder ss (BooleanLiteral bl)) (LiteralBinder _ (BooleanLiteral br))
   | bl == br = ([], return True)
   | otherwise = ([LiteralBinder ss $ BooleanLiteral bl], return False)
+missingCasesSingle env mn row alt
+  | Just av <- seqView alt = seqCases env mn row av
+-- A string pattern with the empty prefix matches whatever the rest matches.
+missingCasesSingle env mn row (StringPrefixBinder _ prefix rest)
+  | prefix == "" = missingCasesSingle env mn row rest
 missingCasesSingle env mn b (PositionedBinder _ _ cb) = missingCasesSingle env mn b cb
 missingCasesSingle env mn b (TypedBinder _ cb) = missingCasesSingle env mn b cb
 missingCasesSingle _ _ b _ = ([b], Left Unknown)
+
+-- |
+-- Native lists are checked like a data type with two constructors, the empty
+-- list and a cons, whether they are matched with @:@ or a list literal. The
+-- binder is nothing for the empty list, and the head and the tail for a cons.
+--
+seqView :: Binder -> Maybe (Maybe (Binder, Binder))
+seqView = \case
+  ConsBinder _ hd tl -> Just (Just (hd, tl))
+  LiteralBinder _ (ListLiteral []) -> Just Nothing
+  LiteralBinder ss (ListLiteral (x : xs)) -> Just (Just (x, LiteralBinder ss (ListLiteral xs)))
+  _ -> Nothing
+
+-- |
+-- The uncovered set between a row and a list binder, see 'seqView'. An
+-- unsplit wildcard row is split into the empty list and a cons.
+--
+seqCases :: Environment -> ModuleName -> Binder -> Maybe (Binder, Binder) -> ([Binder], Either RedundancyError Bool)
+seqCases env mn row alt =
+  case row of
+    NullBinder -> (concatMap (\r -> fst (seqCases env mn r alt)) [nilRow, consRow], return True)
+    _ -> case (seqView row, alt) of
+      (Just Nothing, Nothing) -> ([], return True)
+      (Just (Just (rh, rt)), Just (ah, at)) ->
+        let (misses, pr) = missingCasesMultiple env mn [rh, rt] [ah, at]
+        in (concatMap (rebuild row) misses, pr)
+      (Just _, _) -> ([row], return False)
+      (Nothing, _) -> ([row], Left Unknown)
+  where
+  nilRow = LiteralBinder nullSourceSpan (ListLiteral [])
+  consRow = ConsBinder nullSourceSpan NullBinder NullBinder
+  rebuild (ConsBinder ss _ _) [h, t] = [ConsBinder ss h t]
+  rebuild (LiteralBinder ss _) [h, t] = [ConsBinder ss h t]
+  rebuild _ _ = []
+
+-- |
+-- The binders directly inside a binder.
+--
+binderChildren :: Binder -> [Binder]
+binderChildren = \case
+  LiteralBinder _ lit -> case lit of
+    ArrayLiteral bs -> bs
+    ListLiteral bs -> bs
+    ObjectLiteral bs -> map snd bs
+    _ -> []
+  ConstructorBinder _ _ bs -> bs
+  NamedBinder _ _ b -> [b]
+  PositionedBinder _ _ b -> [b]
+  TypedBinder _ b -> [b]
+  ConsBinder _ h t -> [h, t]
+  StringPrefixBinder _ _ b -> [b]
+  MapEntryBinder _ k v -> [k, v]
+  AndBinder _ l r -> [l, r]
+  _ -> []
+
+-- |
+-- Whether a binder or something inside it satisfies a predicate.
+--
+anyBinder :: (Binder -> Bool) -> Binder -> Bool
+anyBinder p b = p b || any (anyBinder p) (binderChildren b)
+
+-- |
+-- Whether a binder has a cons pattern somewhere in it.
+--
+containsCons :: Binder -> Bool
+containsCons = anyBinder (\case ConsBinder{} -> True; _ -> False)
+
+-- |
+-- Whether a binder has a string prefix or map pattern somewhere in it.
+--
+containsPrefixOrMap :: Binder -> Bool
+containsPrefixOrMap = anyBinder (\case StringPrefixBinder{} -> True; MapEntryBinder{} -> True; AndBinder{} -> True; _ -> False)
+
+-- |
+-- The alternatives that an earlier alternative makes unreachable, when one of
+-- them has a string prefix or map pattern. The exact algorithm can't tell
+-- anything about those, since a string or a map is never covered by a finite
+-- set of patterns, so this asks instead if an earlier alternative matches
+-- everything the later one does. It only finds what a single earlier
+-- alternative covers.
+--
+subsumedAlternatives :: Environment -> ModuleName -> [CaseAlternative] -> [[Binder]]
+subsumedAlternatives env mn cas
+  | any (any containsPrefixOrMap . caseAlternativeBinders) cas = go [] cas
+  | otherwise = []
+  where
+  go _ [] = []
+  go earlier (ca : rest)
+    | any (covers bs) earlier = bs : go earlier rest
+    | isExhaustiveGuard env mn (caseAlternativeResult ca) = go (bs : earlier) rest
+    | otherwise = go earlier rest
+    where
+    bs = caseAlternativeBinders ca
+  covers later earlier =
+    any containsPrefixOrMap (later <> earlier) && and (zipWith subsumes earlier later)
+
+-- |
+-- Whether the first pattern matches everything the second one matches.
+--
+subsumes :: Binder -> Binder -> Bool
+subsumes general specific = go (normalize general) (normalize specific)
+  where
+  go g s
+    | isIrrefutable g = True
+  go (AndBinder _ l r) s = go l s && go r s
+  go g (AndBinder _ l r) = go g l || go g r
+  go (StringPrefixBinder _ gp gr) (StringPrefixBinder _ sp sr) =
+    case stripPrefixOf gp sp of
+      Just rest -> go gr (normalize (StringPrefixBinder nullSourceSpan rest sr))
+      Nothing -> False
+  go (StringPrefixBinder _ gp gr) (LiteralBinder _ (StringLiteral s)) =
+    case stripPrefixOf gp s of
+      Just rest -> go gr (LiteralBinder nullSourceSpan (StringLiteral rest))
+      Nothing -> False
+  go (MapEntryBinder _ gk gv) (MapEntryBinder _ sk sv) = go gk sk && go gv sv
+  go (ConstructorBinder _ gc gbs) (ConstructorBinder _ sc sbs) =
+    gc == sc && length gbs == length sbs && and (zipWith go gbs sbs)
+  go g s
+    | Just gv <- seqView g, Just sv <- seqView s =
+        case (gv, sv) of
+          (Nothing, Nothing) -> True
+          (Just (gh, gt), Just (sh, st)) -> go gh sh && go gt st
+          _ -> False
+  go g s = g == s
+
+  -- Names and annotations don't change what a pattern matches, and a string
+  -- pattern with the empty prefix is its rest.
+  normalize = \case
+    PositionedBinder _ _ b -> normalize b
+    TypedBinder _ b -> normalize b
+    NamedBinder _ _ b -> normalize b
+    StringPrefixBinder _ p b | p == mkString "" -> normalize b
+    b -> b
+
+  stripPrefixOf :: PSString -> PSString -> Maybe PSString
+  stripPrefixOf p s = do
+    p' <- decodeString p
+    s' <- decodeString s
+    mkString <$> T.stripPrefix p' s'
+
+-- |
+-- The checker runs before type inference, so it can't tell a list literal
+-- from an array literal. When a case has a cons pattern somewhere, its array
+-- literal patterns are checked as list patterns. That is also right for an
+-- array, since no array literal covers all lengths.
+--
+asLists :: [CaseAlternative] -> [CaseAlternative]
+asLists cas
+  | any (any containsCons . caseAlternativeBinders) cas = map listify cas
+  | otherwise = cas
+  where
+  (_, _, promote) = everywhereOnValues id id toList
+  toList (LiteralBinder ss (ArrayLiteral bs)) = LiteralBinder ss (ListLiteral bs)
+  toList b = b
+  listify (CaseAlternative bs res) = CaseAlternative (map promote bs) res
 
 -- |
 -- Returns the uncovered set of binders
@@ -238,9 +400,10 @@ missingAlternative env mn ca uncovered
 buildExhaustiveResult
   :: SourceSpan
   -> Expr
+  -> [[Binder]]
   -> ([[Binder]], (Either RedundancyError Bool, [[Binder]]))
   -> Check Expr
-buildExhaustiveResult ss expr (bss, (rr, bss')) =
+buildExhaustiveResult ss expr subsumed (bss, (rr, redundant)) =
   do unless (null bss') tellRedundant
      case rr of
        Left Incomplete -> tellIncomplete
@@ -249,6 +412,7 @@ buildExhaustiveResult ss expr (bss, (rr, bss')) =
        then expr
        else addPartialConstraint (second null (splitAt 5 bss)) expr
   where
+    bss' = ordNub (redundant <> subsumed)
     tellRedundant = tell . errorMessage' ss . uncurry OverlappingPattern . second null . splitAt 5 $ bss'
     tellIncomplete = tell . errorMessage' ss $ IncompleteExhaustivityCheck
 
@@ -279,7 +443,7 @@ checkExhaustive
   -> [CaseAlternative]
   -> Expr
   -> Check Expr
-checkExhaustive ss env mn numArgs cas expr = buildExhaustiveResult ss expr . first ordNub $ foldl' step ([initialize numArgs], (pure True, [])) cas
+checkExhaustive ss env mn numArgs cas expr = buildExhaustiveResult ss expr (subsumedAlternatives env mn cas) . first ordNub $ foldl' step ([initialize numArgs], (pure True, [])) cas
   where
   step :: ([[Binder]], (Either RedundancyError Bool, [[Binder]])) -> CaseAlternative -> ([[Binder]], (Either RedundancyError Bool, [[Binder]]))
   step (uncovered, (nec, redundant)) ca =
@@ -353,7 +517,7 @@ checkExhaustiveSingle
   -> Maybe (Check Expr)
 checkExhaustiveSingle ss env mn cas expr = do
   (finalState, (nec, redundant)) <- foldl' step (Just (initialState, (pure True, []))) cas
-  pure $ buildExhaustiveResult ss expr (finalBss finalState, (nec, ordNub redundant))
+  pure $ buildExhaustiveResult ss expr (subsumedAlternatives env mn cas) (finalBss finalState, (nec, ordNub redundant))
   where
   initialState :: BucketState
   initialState = BucketState { bsExpanded = False, bsBuckets = M.empty, bsTotalRows = 0 }
@@ -476,10 +640,10 @@ checkExhaustiveExpr ss env mn = onExpr'
   onExpr :: Expr -> Check Expr
   onExpr e = case e of
     Case [_] cas
-      | Just result <- checkExhaustiveSingle ss env mn cas e ->
+      | Just result <- checkExhaustiveSingle ss env mn (asLists cas) e ->
           result
     Case es cas ->
-      checkExhaustive ss env mn (length es) cas e
+      checkExhaustive ss env mn (length es) (asLists cas) e
     _ ->
       pure e
 

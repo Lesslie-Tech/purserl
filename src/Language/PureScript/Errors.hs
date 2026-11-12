@@ -167,7 +167,10 @@ data SimpleErrorMessage
   | HidingImport ModuleName [DeclarationRef]
   | CaseBinderLengthDiffers Int [Binder]
   | IncorrectAnonymousArgument
-  | InvalidOperatorInBinder (Qualified (OpName 'ValueOpName)) (Qualified Ident)
+  | InvalidOperatorInBinder (Qualified (OpName 'ValueOpName))
+  | InvalidAppendPattern
+  | InvalidMapEntryPattern
+  | InvalidAndPattern
   | CannotGeneralizeRecursiveFunction Ident SourceType
   | CannotDeriveNewtypeForData (ProperName 'TypeName)
   | ExpectedWildcard (ProperName 'TypeName)
@@ -338,6 +341,9 @@ errorCode em = case unwrapErrorMessage em of
   CaseBinderLengthDiffers{} -> "CaseBinderLengthDiffers"
   IncorrectAnonymousArgument -> "IncorrectAnonymousArgument"
   InvalidOperatorInBinder{} -> "InvalidOperatorInBinder"
+  InvalidAppendPattern -> "InvalidAppendPattern"
+  InvalidMapEntryPattern -> "InvalidMapEntryPattern"
+  InvalidAndPattern -> "InvalidAndPattern"
   CannotGeneralizeRecursiveFunction{} -> "CannotGeneralizeRecursiveFunction"
   CannotDeriveNewtypeForData{} -> "CannotDeriveNewtypeForData"
   ExpectedWildcard{} -> "ExpectedWildcard"
@@ -1246,9 +1252,21 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
     renderSimpleErrorMessage IncorrectAnonymousArgument =
       line "An anonymous function argument appears in an invalid context."
 
-    renderSimpleErrorMessage (InvalidOperatorInBinder op fn) =
-      paras [ line $ "Operator " <> markCode (showQualified showOp op) <> " cannot be used in a pattern as it is an alias for function " <> showQualified showIdent fn <> "."
-            , line "Only aliases for data constructors may be used in patterns."
+    renderSimpleErrorMessage (InvalidOperatorInBinder op) =
+      paras [ line $ "Operator " <> markCode (showQualified showOp op) <> " cannot be used in a pattern."
+            , line "Only the built-in pattern operators :, <>, := and & may be used in patterns."
+            ]
+
+    renderSimpleErrorMessage InvalidAppendPattern =
+      paras [ line "A string pattern built with the operator <> must be a string literal followed by a variable, a wildcard or another such pattern."
+            ]
+
+    renderSimpleErrorMessage InvalidAndPattern =
+      paras [ line "The operator & in a pattern can only combine map entries built with :=."
+            ]
+
+    renderSimpleErrorMessage InvalidMapEntryPattern =
+      paras [ line "The key of a map entry pattern built with the operator := must be a literal."
             ]
 
     renderSimpleErrorMessage (CannotGeneralizeRecursiveFunction ident ty) =

@@ -69,7 +69,7 @@ spec = describe "Finding Usages" $ do
         Test.runIde [ load ["FindUsage", "FindUsage.Definition", "FindUsage.Reexport"]
                     , usage (Test.mn "FindUsage.Definition") "$%" IdeNSValue
                     ]
-      usage1 `shouldBeUsage` ("src" </> "FindUsage.purs", "9:5-9:7")
+      usage1 `shouldBeUsage` ("src" </> "FindUsage.purs", "15:19-15:21")
     it "finds a reexported usage" $ do
       ([_, Right (UsagesResult [usage1])], _) <- Test.inProject $
         Test.runIde [ load ["FindUsage", "FindUsage.Definition", "FindUsage.Reexport"]

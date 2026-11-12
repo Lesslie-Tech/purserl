@@ -943,6 +943,29 @@ moduleToErl' cgEnv@(CodegenEnvironment env explicitArities uncurriedOnlyTyped is
                 pushArrayCont arrayVar items
                 pure (EVar arrayVar)
               ListLiteral items -> EListLiteral <$> mapM binderToErl items
+          ConsBinder _ hd tl -> do
+            hd' <- binderToErl hd
+            tl' <- binderToErl tl
+            pure $ case tl' of
+              EListCons hds t -> EListCons (hd' : hds) t
+              EListLiteral items -> EListLiteral (hd' : items)
+              _ -> EListCons [hd'] tl'
+          MapEntryBinder _ key value -> do
+            key' <- binderToErl key
+            value' <- binderToErl value
+            pure $ EMapPattern [(key', value')]
+          AndBinder _ left right -> do
+            left' <- binderToErl left
+            right' <- binderToErl right
+            pure $ case (left', right') of
+              (EMapPattern a, EMapPattern b) -> EMapPattern (a <> b)
+              _ -> EBind left' right'
+          StringPrefixBinder _ prefix rest -> do
+            rest' <- binderToErl rest
+            pure $ case rest' of
+              EStringLiteral s -> EStringLiteral (prefix <> s)
+              EBinPrefix s r -> EBinPrefix (prefix <> s) r
+              _ -> EBinPrefix prefix rest'
 
     valueToErl'' ann _ (Let _ ds val) = do
       ds2 <- mapM bindToErl ds

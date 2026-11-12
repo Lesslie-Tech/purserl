@@ -265,3 +265,11 @@ renameInBinder (ConstructorBinder ann tctor dctor bs) =
   ConstructorBinder ann tctor dctor <$> traverse renameInBinder bs
 renameInBinder (NamedBinder ann name b) =
   NamedBinder ann <$> updateScope name <*> renameInBinder b
+renameInBinder (ConsBinder ann hd tl) =
+  ConsBinder ann <$> renameInBinder hd <*> renameInBinder tl
+renameInBinder (StringPrefixBinder ann str b) =
+  StringPrefixBinder ann str <$> renameInBinder b
+renameInBinder (MapEntryBinder ann k v) =
+  MapEntryBinder ann <$> renameInBinder k <*> renameInBinder v
+renameInBinder (AndBinder ann l r) =
+  AndBinder ann <$> renameInBinder l <*> renameInBinder r

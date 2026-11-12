@@ -324,6 +324,8 @@ render ind = go
 
   go (EListCons es e) = "[" <> commaSep ind es <> " | " <> go e <> "]"
 
+  go (EBinPrefix s e) = "<<\"" <> B.fromText (utf8BinaryContent s) <> "\"/utf8, " <> go e <> "/binary>>"
+
   go (ETryAnyAny e1 e2) =
     let base = ind + 2
     in "\n" <> sp base <> "try\n"

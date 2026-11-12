@@ -195,6 +195,10 @@ prettyPrintBinderAtom (LiteralBinder _ l) = prettyPrintLiteralBinder l
 prettyPrintBinderAtom (VarBinder _ ident) = showIdent ident
 prettyPrintBinderAtom (ConstructorBinder _ ctor []) = runProperName (disqualify ctor)
 prettyPrintBinderAtom b@ConstructorBinder{} = parensT (prettyPrintBinder b)
+prettyPrintBinderAtom b@ConsBinder{} = parensT (prettyPrintBinder b)
+prettyPrintBinderAtom b@StringPrefixBinder{} = parensT (prettyPrintBinder b)
+prettyPrintBinderAtom b@MapEntryBinder{} = parensT (prettyPrintBinder b)
+prettyPrintBinderAtom b@AndBinder{} = parensT (prettyPrintBinder b)
 prettyPrintBinderAtom (NamedBinder _ ident binder) = showIdent ident Monoid.<> "@" Monoid.<> prettyPrintBinder binder
 prettyPrintBinderAtom (PositionedBinder _ _ binder) = prettyPrintBinderAtom binder
 prettyPrintBinderAtom (TypedBinder _ binder) = prettyPrintBinderAtom binder
@@ -216,10 +220,12 @@ prettyPrintLiteralBinder (ObjectLiteral bs) =
   where
   prettyPrintObjectPropertyBinder :: (PSString, Binder) -> Text
   prettyPrintObjectPropertyBinder (key, binder) = prettyPrintObjectKey key Monoid.<> ": " Monoid.<> prettyPrintBinder binder
+prettyPrintLiteralBinder (ArrayLiteral []) = "[]"
 prettyPrintLiteralBinder (ArrayLiteral bs) =
   "[ "
   Monoid.<> T.intercalate ", " (map prettyPrintBinder bs)
   Monoid.<> " ]"
+prettyPrintLiteralBinder (ListLiteral []) = "[]"
 prettyPrintLiteralBinder (ListLiteral bs) =
   "[ "
   Monoid.<> T.intercalate ", " (map prettyPrintBinder bs)
@@ -233,4 +239,8 @@ prettyPrintBinder (ConstructorBinder _ ctor []) = runProperName (disqualify ctor
 prettyPrintBinder (ConstructorBinder _ ctor args) = runProperName (disqualify ctor) Monoid.<> " " Monoid.<> T.unwords (map prettyPrintBinderAtom args)
 prettyPrintBinder (PositionedBinder _ _ binder) = prettyPrintBinder binder
 prettyPrintBinder (TypedBinder _ binder) = prettyPrintBinder binder
+prettyPrintBinder (ConsBinder _ hd tl) = prettyPrintBinderAtom hd Monoid.<> " : " Monoid.<> prettyPrintBinder tl
+prettyPrintBinder (StringPrefixBinder _ str binder) = prettyPrintString str Monoid.<> " <> " Monoid.<> prettyPrintBinder binder
+prettyPrintBinder (MapEntryBinder _ k v) = prettyPrintBinderAtom k Monoid.<> " := " Monoid.<> prettyPrintBinderAtom v
+prettyPrintBinder (AndBinder _ l r) = prettyPrintBinderAtom l Monoid.<> " & " Monoid.<> prettyPrintBinderAtom r
 prettyPrintBinder b = prettyPrintBinderAtom b

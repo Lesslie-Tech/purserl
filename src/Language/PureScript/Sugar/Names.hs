@@ -18,7 +18,7 @@ import Control.Monad.State.Strict (MonadState, StateT(..), gets, modify)
 
 import Data.Bifunctor (first, second)
 import Data.List.NonEmpty qualified as NEL
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Map.Strict qualified as M
 import Data.Set qualified as S
 
@@ -27,7 +27,7 @@ import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage, errorMessage'', nonEmpty, parU, warnAndRethrow, warnAndRethrowWithPosition)
 import Language.PureScript.Externs (ExternsDeclaration(..), ExternsFile(..))
 import Language.PureScript.Linter.Imports (Name(..), UsedImports)
-import Language.PureScript.Names (pattern ByNullSourcePos, Ident, OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..))
+import Language.PureScript.Names (pattern ByNullSourcePos, Ident, OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), patternOperator)
 import Language.PureScript.Sugar.Names.Env (Env, Exports(..), ImportProvenance(..), ImportRecord(..), Imports(..), checkImportConflicts, nullImports, primEnv)
 import Language.PureScript.Sugar.Names.Exports (findExportable, resolveExports)
 import Language.PureScript.Sugar.Names.Imports (resolveImports)
@@ -303,8 +303,9 @@ renameInModule imports (Module modSS coms mn decls exps) =
     return ((pos, bound), v)
   updateBinder (_, bound) (ConstructorBinder ss name b) =
     ((ss, bound), ) <$> (ConstructorBinder ss <$> updateDataConstructorName name ss <*> pure b)
-  updateBinder (_, bound) (OpBinder ss op) =
-    ((ss, bound), ) . OpBinder ss <$> updateValueOpName op ss
+  updateBinder (_, bound) (OpBinder ss op)
+    | isJust (patternOperator op) = return ((ss, bound), OpBinder ss op)
+    | otherwise = ((ss, bound), ) . OpBinder ss <$> updateValueOpName op ss
   updateBinder s (TypedBinder t b) = do
     t' <- updateTypesEverywhere t
     return (s, TypedBinder t' b)

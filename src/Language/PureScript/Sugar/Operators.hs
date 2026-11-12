@@ -19,7 +19,7 @@ import Language.PureScript.AST
 import Language.PureScript.Crash (internalError)
 import Language.PureScript.Errors (MultipleErrors, SimpleErrorMessage(..), addHint, errorMessage, errorMessage', parU, rethrow, rethrowWithPosition)
 import Language.PureScript.Externs (ExternsFile(..), ExternsFixity(..), ExternsTypeFixity(..))
-import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), Name(..), OpName, OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), freshIdent')
+import Language.PureScript.Names (pattern ByNullSourcePos, Ident(..), Name(..), OpName(..), OpNameType(..), ProperName, ProperNameType(..), Qualified(..), QualifiedBy(..), freshIdent', patternOperator)
 import Language.PureScript.Sugar.Operators.Binders (matchBinderOperators)
 import Language.PureScript.Sugar.Operators.Expr (matchExprOperators)
 import Language.PureScript.Sugar.Operators.Types (matchTypeOperators)
@@ -63,6 +63,18 @@ type ValueFixityRecord = FixityRecord (OpName 'ValueOpName) (Either Ident (Prope
 type TypeFixityRecord = FixityRecord (OpName 'TypeOpName) (ProperName 'TypeName)
 
 -- |
+-- The fixities of the built-in pattern operators: list cons, string prefix,
+-- map entry and conjunction.
+--
+patternFixities :: [(Qualified (OpName 'ValueOpName), Fixity)]
+patternFixities =
+  [ (Qualified ByNullSourcePos (OpName ":"), Fixity Infixr 6)
+  , (Qualified ByNullSourcePos (OpName "<>"), Fixity Infixr 5)
+  , (Qualified ByNullSourcePos (OpName ":="), Fixity Infix 4)
+  , (Qualified ByNullSourcePos (OpName "&"), Fixity Infixr 3)
+  ]
+
+-- |
 -- Remove explicit parentheses and reorder binary operator applications.
 --
 -- This pass requires name desugaring and export elaboration to have run first.
@@ -96,7 +108,7 @@ rebracketFiltered !caller pred_ externs m = do
   ensureNoDuplicates' MultipleValueOpFixities valueFixities
   ensureNoDuplicates' MultipleTypeOpFixities typeFixities
 
-  let valueOpTable = customOperatorTable' valueFixities
+  let valueOpTable = customOperatorTable (map (\(i, _, f, _) -> (i, f)) valueFixities ++ patternFixities)
   let valueAliased = M.fromList (map makeLookupEntry valueFixities)
   let typeOpTable = customOperatorTable' typeFixities
   let typeAliased = M.fromList (map makeLookupEntry typeFixities)
@@ -235,17 +247,26 @@ rebracketModule !caller pred_ valueOpTable typeOpTable valueAliased typeAliased 
   goBinder2 pos = \case
     ParensInBinder b -> goBinderFull pos b
     b@(PositionedBinder pos' _ _) -> return (pos', b)
-    BinaryNoParensBinder (OpBinder pos' op) lhs rhs ->
-      case op `M.lookup` valueAliased of
-        Just (Qualified mn' (Left alias)) ->
-          throwError . errorMessage' pos' $ InvalidOperatorInBinder op (Qualified mn' alias)
-        Just (Qualified mn' (Right alias)) ->
-          return (pos', ConstructorBinder pos' (Qualified mn' alias) [lhs, rhs])
-        Nothing ->
-          throwError . errorMessage' pos' . UnknownName $ fmap ValOpName op
+    BinaryNoParensBinder (OpBinder pos' op) lhs rhs
+      | Just name <- patternOperator op ->
+          (pos',) <$> case name of
+            ":" -> pure $ ConsBinder pos' lhs rhs
+            "<>" -> case stringLiteral lhs of
+              Just str -> pure $ StringPrefixBinder pos' str rhs
+              Nothing -> throwError . errorMessage' pos' $ InvalidAppendPattern
+            ":=" -> pure $ MapEntryBinder pos' lhs rhs
+            _ -> pure $ AndBinder pos' lhs rhs
+      | otherwise ->
+          throwError . errorMessage' pos' $ InvalidOperatorInBinder op
     BinaryNoParensBinder{} ->
       internalError "BinaryNoParensBinder has no OpBinder"
     other -> return (pos, other)
+
+  stringLiteral = \case
+    LiteralBinder _ (StringLiteral str) -> Just str
+    PositionedBinder _ _ b -> stringLiteral b
+    ParensInBinder b -> stringLiteral b
+    _ -> Nothing
 
   goType2 :: SourceSpan -> SourceType -> DesugarM SourceType
   goType2 pos = \case

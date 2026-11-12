@@ -11,6 +11,8 @@ import TestCst qualified
 import TestEmptyClassDictElision qualified
 import TestDiscard qualified
 import TestListLiterals qualified
+import TestPatternOperators qualified
+import TestErlPatternOperators qualified
 import TestErlFlatten qualified
 import TestErlAliases qualified
 import TestErlApplySpine qualified
@@ -43,6 +45,8 @@ main = do
     describe "empty class dict elision" TestEmptyClassDictElision.spec
     describe "discard" TestDiscard.spec
     describe "list literals" TestListLiterals.spec
+    describe "pattern operators" TestPatternOperators.spec
+    describe "erl pattern operators" TestErlPatternOperators.spec
     describe "erl flatten" TestErlFlatten.spec
     describe "erl aliases" TestErlAliases.spec
     describe "erl apply spine" TestErlApplySpine.spec

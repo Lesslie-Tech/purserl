@@ -168,6 +168,21 @@ everywhereOnValues f g h = (f', g', h')
   h' (NamedBinder ss name b) =
     let !b' = h' b
     in h (NamedBinder ss name b')
+  h' (ConsBinder ss hd tl) =
+    let !hd' = h' hd
+        !tl' = h' tl
+    in h (ConsBinder ss hd' tl')
+  h' (StringPrefixBinder ss str b) =
+    let !b' = h' b
+    in h (StringPrefixBinder ss str b')
+  h' (MapEntryBinder ss k v) =
+    let !k' = h' k
+        !v' = h' v
+    in h (MapEntryBinder ss k' v')
+  h' (AndBinder ss l r) =
+    let !l' = h' l
+        !r' = h' r
+    in h (AndBinder ss l' r')
   h' (PositionedBinder pos com b) =
     let !b' = h' b
     in h (PositionedBinder pos com b')
@@ -321,6 +336,21 @@ everywhereOnValuesTopDownM f g h = (f' <=< f, g' <=< g, h' <=< h)
   h' (NamedBinder ss name b) = do
     !b' <- h b >>= h'
     pure (NamedBinder ss name b')
+  h' (ConsBinder ss hd tl) = do
+    !hd' <- h hd >>= h'
+    !tl' <- h tl >>= h'
+    pure (ConsBinder ss hd' tl')
+  h' (StringPrefixBinder ss str b) = do
+    !b' <- h b >>= h'
+    pure (StringPrefixBinder ss str b')
+  h' (MapEntryBinder ss k v) = do
+    !k' <- h k >>= h'
+    !v' <- h v >>= h'
+    pure (MapEntryBinder ss k' v')
+  h' (AndBinder ss l r) = do
+    !l' <- h l >>= h'
+    !r' <- h r >>= h'
+    pure (AndBinder ss l' r')
   h' (PositionedBinder pos com b) = do
     !b' <- h b >>= h'
     pure (PositionedBinder pos com b')
@@ -468,6 +498,21 @@ everywhereOnValuesM f g h = (f', g', h')
   h' (NamedBinder ss name b) = do
     !b' <- h' b
     h (NamedBinder ss name b')
+  h' (ConsBinder ss hd tl) = do
+    !hd' <- h' hd
+    !tl' <- h' tl
+    h (ConsBinder ss hd' tl')
+  h' (StringPrefixBinder ss str b) = do
+    !b' <- h' b
+    h (StringPrefixBinder ss str b')
+  h' (MapEntryBinder ss k v) = do
+    !k' <- h' k
+    !v' <- h' v
+    h (MapEntryBinder ss k' v')
+  h' (AndBinder ss l r) = do
+    !l' <- h' l
+    !r' <- h' r
+    h (AndBinder ss l' r')
   h' (PositionedBinder pos com b) = do
     !b' <- h' b
     h (PositionedBinder pos com b')
@@ -546,6 +591,10 @@ everythingOnValues (<>.) f g h i j = (f', g', h', i', j')
   h' b@(BinaryNoParensBinder b1 b2 b3) = h b <>. h' b1 <>. h' b2 <>. h' b3
   h' b@(ParensInBinder b1) = h b <>. h' b1
   h' b@(NamedBinder _ _ b1) = h b <>. h' b1
+  h' b@(ConsBinder _ hd tl) = h b <>. h' hd <>. h' tl
+  h' b@(StringPrefixBinder _ _ b1) = h b <>. h' b1
+  h' b@(MapEntryBinder _ k v) = h b <>. h' k <>. h' v
+  h' b@(AndBinder _ l r) = h b <>. h' l <>. h' r
   h' b@(PositionedBinder _ _ b1) = h b <>. h' b1
   h' b@(TypedBinder _ b1) = h b <>. h' b1
   h' b = h b
@@ -633,6 +682,10 @@ everythingWithContextOnValues s0 r0 (<>.) f g h i j = (f'' s0, g'' s0, h'' s0, i
   h' s (BinaryNoParensBinder b1 b2 b3) = h'' s b1 <>. h'' s b2 <>. h'' s b3
   h' s (ParensInBinder b) = h'' s b
   h' s (NamedBinder _ _ b1) = h'' s b1
+  h' s (ConsBinder _ hd tl) = h'' s hd <>. h'' s tl
+  h' s (StringPrefixBinder _ _ b1) = h'' s b1
+  h' s (MapEntryBinder _ k v) = h'' s k <>. h'' s v
+  h' s (AndBinder _ l r) = h'' s l <>. h'' s r
   h' s (PositionedBinder _ _ b1) = h'' s b1
   h' s (TypedBinder _ b1) = h'' s b1
   h' _ _ = r0
@@ -742,6 +795,10 @@ everywhereWithContextOnValuesM s0 f g h i j k = (f'' s0, g'' s0, h'' s0, i'' s0,
   h' s (BinaryNoParensBinder b1 b2 b3) = BinaryNoParensBinder <$> h'' s b1 <*> h'' s b2 <*> h'' s b3
   h' s (ParensInBinder b) = ParensInBinder <$> h'' s b
   h' s (NamedBinder ss name b) = NamedBinder ss name <$> h'' s b
+  h' s (ConsBinder ss hd tl) = ConsBinder ss <$> h'' s hd <*> h'' s tl
+  h' s (StringPrefixBinder ss str b) = StringPrefixBinder ss str <$> h'' s b
+  h' s (MapEntryBinder ss k v) = MapEntryBinder ss <$> h'' s k <*> h'' s v
+  h' s (AndBinder ss l r) = AndBinder ss <$> h'' s l <*> h'' s r
   h' s (PositionedBinder pos com b) = PositionedBinder pos com <$> h'' s b
   h' s (TypedBinder t b) = TypedBinder t <$> h'' s b
   h' _ other = return other
@@ -859,6 +916,10 @@ everythingWithScope f g h i j = (f'', g'', h'', i'', \s -> snd . j'' s)
   h' s (BinaryNoParensBinder b1 b2 b3) = foldMap (h'' s) [b1, b2, b3]
   h' s (ParensInBinder b) = h'' s b
   h' s (NamedBinder _ name b1) = h'' (S.insert (LocalIdent name) s) b1
+  h' s (ConsBinder _ hd tl) = h'' s hd <> h'' s tl
+  h' s (StringPrefixBinder _ _ b1) = h'' s b1
+  h' s (MapEntryBinder _ k v) = h'' s k <> h'' s v
+  h' s (AndBinder _ l r) = h'' s l <> h'' s r
   h' s (PositionedBinder _ _ b1) = h'' s b1
   h' s (TypedBinder _ b1) = h'' s b1
   h' _ _ = mempty

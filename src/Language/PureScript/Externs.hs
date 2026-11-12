@@ -729,6 +729,10 @@ instance ToCS Binder () where
       BinaryNoParensBinder {} -> internalError "[drathier]: should be unreachable, all BinaryNoParensBinder ctors should have been desugared already"
       ParensInBinder _ -> internalError "[drathier]: should be unreachable, all ParensInBinder ctors should have been desugared already"
       NamedBinder _ _ innerBinder -> toCS innerBinder
+      ConsBinder _ hd tl -> toCS hd >> toCS tl
+      StringPrefixBinder _ _ innerBinder -> toCS innerBinder
+      MapEntryBinder _ k v -> toCS k >> toCS v
+      AndBinder _ l r -> toCS l >> toCS r
       PositionedBinder _ _ innerBinder -> toCS innerBinder
       TypedBinder sourceType innerBinder -> do
         toCS sourceType

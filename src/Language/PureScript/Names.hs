@@ -357,3 +357,14 @@ instance FromJSONKey ModuleName where
   fromJSONKey = fmap moduleNameFromString fromJSONKey
 
 $(deriveJSON (defaultOptions { sumEncoding = ObjectWithSingleField }) ''Ident)
+
+-- | The operators with a built-in meaning in patterns. They are written
+-- unqualified, and mean the same whatever is in scope.
+patternOperators :: [Text]
+patternOperators = [":", "<>", ":=", "&"]
+
+-- | The name of the built-in pattern operator an operator is, if it is one.
+patternOperator :: Qualified (OpName 'ValueOpName) -> Maybe Text
+patternOperator (Qualified ByNullSourcePos (OpName name))
+  | name `elem` patternOperators = Just name
+patternOperator _ = Nothing
