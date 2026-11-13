@@ -46,9 +46,13 @@ spec = describe "dropVarAliases" $ do
     dropVarAliases shadowed `shouldBe` shadowed
     dropVarAliases named `shouldBe` named
 
-  it "leaves the wildcard alone" $ do
-    let wild = alias "_" "B" (use "B")
-    dropVarAliases wild `shouldBe` wild
+  it "drops a wildcard binding, keeping the effect of what it binds" $ do
+    dropVarAliases (alias "_" "B" (use "B")) `shouldBe` use "B"
+    dropVarAliases (ELet (EBind (EVar "_") (use "A")) (use "B")) `shouldBe` ELet (use "A") (use "B")
+    dropVarAliases (EBlock [EBind (EVar "_") (use "A"), EBind (EVar "_") (EVar "B"), use "B"])
+      `shouldBe` EBlock [use "A", use "B"]
+    dropVarAliases (EMaybe ExitsOnFailure [(Nothing, EBind (EVar "_") (use "A"))] (use "B"))
+      `shouldBe` EMaybe ExitsOnFailure [(Nothing, use "A")] (use "B")
 
   -- The printer splices `A = begin P, B end` into `P, A = B`.
   it "drops the binding of a variable to a block that ends in a variable" $ do

@@ -1,4 +1,5 @@
 -- | Dropping @A = B,@ where both are variables, and @A = begin ..., B end,@, which the printer turns into one.
+-- Also @_ = E,@, which is the statement @E,@.
 module Language.PureScript.Erl.CodeGen.Optimizer.Aliases (dropVarAliases) where
 
 import Data.Bifunctor (bimap, first)
@@ -13,6 +14,7 @@ import Prelude.Compat
 -- those inside what follows, the alias stays.
 dropVarAliases :: Erl -> Erl
 dropVarAliases = everywhereOnErl $ \case
+  ELet (EBind (EVar "_") rhs) rest -> if pureTerm rhs then rest else ELet rhs rest
   ELet (EBind (EVar a) (EVar b)) rest | aliasable a b rest -> replaceIdents [(a, EVar b)] rest
   ELet (EBind (EVar a) rhs) rest
     | Just (pre, b) <- endsInVar rhs, aliasable a b rest -> foldr ELet (replaceIdents [(a, EVar b)] rest) pre
@@ -24,6 +26,7 @@ dropVarAliases = everywhereOnErl $ \case
   where
     -- A step without a pattern is a statement of the block.
     inMaybe steps final = case steps of
+      (Nothing, EBind (EVar "_") rhs) : rest -> inMaybe ([(Nothing, rhs) | not (pureTerm rhs)] <> rest) final
       (Nothing, EBind (EVar a) (EVar b)) : rest
         | aliasable a b (EMaybe ExitsOnFailure rest final) ->
             let sub = replaceIdents [(a, EVar b)] in inMaybe (map (bimap (fmap sub) sub) rest) (sub final)
@@ -34,12 +37,25 @@ dropVarAliases = everywhereOnErl $ \case
       step : rest -> let (rest', final') = inMaybe rest final in (step : rest', final')
       [] -> ([], final)
     inBlock = \case
+      EBind (EVar "_") rhs : rest@(_ : _) -> [rhs | not (pureTerm rhs)] <> inBlock rest
       EBind (EVar a) (EVar b) : rest@(_ : _)
         | aliasable a b (EBlock rest) -> inBlock (map (replaceIdents [(a, EVar b)]) rest)
       EBind (EVar a) rhs : rest@(_ : _)
         | Just (pre, b) <- endsInVar rhs, aliasable a b (EBlock rest) -> inBlock (pre <> map (replaceIdents [(a, EVar b)]) rest)
       e : rest -> e : inBlock rest
       [] -> []
+
+-- | Evaluating the expression has no effect, so a statement of it can go.
+pureTerm :: Erl -> Bool
+pureTerm = \case
+  EVar _ -> True
+  ENumericLiteral _ -> True
+  EStringLiteral _ -> True
+  ECharLiteral _ -> True
+  EAtomLiteral _ -> True
+  EFunRef _ _ -> True
+  EFunFull _ _ -> True
+  _ -> False
 
 -- | The statements of a block that ends in a variable, and the variable.
 endsInVar :: Erl -> Maybe ([Erl], Text)
