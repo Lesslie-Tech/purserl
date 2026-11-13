@@ -191,6 +191,7 @@ prettyPrintDoNotationElement d (PositionedDoNotationElement _ _ el) = prettyPrin
 prettyPrintBinderAtom :: Binder -> Text
 prettyPrintBinderAtom NullBinder = "_"
 prettyPrintBinderAtom (DiscardBinder _) = "_"
+prettyPrintBinderAtom (UnitDiscardBinder _) = "_"
 prettyPrintBinderAtom (LiteralBinder _ l) = prettyPrintLiteralBinder l
 prettyPrintBinderAtom (VarBinder _ ident) = showIdent ident
 prettyPrintBinderAtom (ConstructorBinder _ ctor []) = runProperName (disqualify ctor)

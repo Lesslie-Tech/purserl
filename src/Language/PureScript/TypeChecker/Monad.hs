@@ -244,11 +244,14 @@ data CheckState = CheckState
   , checkPendingLists :: [(SourceSpan, SourceType)]
   -- ^ Container types of array literals whose representation (Array or
   -- List) is not yet known. Resolved at the end of each binding group.
+  , checkPendingUnitDiscards :: [(SourceSpan, SourceType)]
+  -- ^ Result types of explicit @_ <- x@ statements, which must not turn out
+  -- to be @Unit@. Resolved at the end of each binding group.
   }
 
 -- | Create an empty @CheckState@
 emptyCheckState :: Environment -> CheckState
-emptyCheckState env = CheckState env 0 0 0 Nothing [] emptySubstitution mempty mempty []
+emptyCheckState env = CheckState env 0 0 0 Nothing [] emptySubstitution mempty mempty [] []
 
 -- | Unification variables
 type Unknown = Int

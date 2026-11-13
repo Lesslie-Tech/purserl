@@ -62,7 +62,7 @@ desugarDo d =
     let ss = fromMaybe pos mss
     case binder' of
       NullBinder ->
-        return $ App (App (bind pos m) val) (Abs (VarBinder ss UnusedIdent) rest')
+        return $ App (App (bind pos m) val) (Abs (UnitDiscardBinder ss) rest')
       VarBinder _ ident ->
         return $ App (App (bind pos m) val) (Abs (VarBinder ss ident) rest')
       _ -> do

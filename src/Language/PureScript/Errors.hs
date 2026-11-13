@@ -94,6 +94,7 @@ data SimpleErrorMessage
   | DuplicateTypeArgument Text
   | InvalidDoBind
   | InvalidDoLet
+  | UnnecessaryUnitDiscard
   | CycleInDeclaration Ident
   | CycleInTypeSynonym (NEL.NonEmpty (ProperName 'TypeName))
   | CycleInTypeClassDeclaration (NEL.NonEmpty (Qualified (ProperName 'ClassName)))
@@ -271,6 +272,7 @@ errorCode em = case unwrapErrorMessage em of
   DuplicateTypeArgument{} -> "DuplicateTypeArgument"
   InvalidDoBind -> "InvalidDoBind"
   InvalidDoLet -> "InvalidDoLet"
+  UnnecessaryUnitDiscard -> "UnnecessaryUnitDiscard"
   CycleInDeclaration{} -> "CycleInDeclaration"
   CycleInTypeSynonym{} -> "CycleInTypeSynonym"
   CycleInTypeClassDeclaration{} -> "CycleInTypeClassDeclaration"
@@ -716,6 +718,8 @@ prettyPrintSingleError (PPEOptions codeColor full level _showDocs relPath fileCo
             ]
     renderSimpleErrorMessage InvalidDoBind =
       line "The last statement in a 'do' block must be an expression, but this block ends with a binder."
+    renderSimpleErrorMessage UnnecessaryUnitDiscard =
+      line ("The result of this statement is " <> markCode "Unit" <> ", so " <> markCode "_ <-" <> " is redundant. Remove it and write the statement on its own.")
     renderSimpleErrorMessage InvalidDoLet =
       line "The last statement in a 'do' block must be an expression, but this block ends with a let binding."
     renderSimpleErrorMessage (OverlappingNamesInLet name) =

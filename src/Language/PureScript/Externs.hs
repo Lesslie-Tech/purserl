@@ -720,6 +720,7 @@ instance ToCS Binder () where
     case binder of
       NullBinder -> pure ()
       DiscardBinder _ -> pure ()
+      UnitDiscardBinder _ -> pure ()
       LiteralBinder _ literal -> toCS literal
       VarBinder _ _ -> pure ()
       ConstructorBinder _ ctorName binders -> do

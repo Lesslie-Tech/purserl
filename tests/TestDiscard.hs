@@ -50,3 +50,19 @@ spec =
         -- Reported at the offending statement (line 10), not the start of the block.
         rendered `shouldSatisfy` T.isInfixOf "Test.purs:10:3"
       Right () -> expectationFailure "Expected a non-Unit discarded statement to be rejected"
+    -- An explicit `_ <-` is for non-Unit results only.
+    typecheck (T.unlines $ prelude <> ["ok2 :: Box Int", "ok2 = do", "  _ <- Box 1", "  Box 2"]) >>= \case
+      Left errs -> expectationFailure $ P.prettyPrintMultipleErrors P.defaultPPEOptions errs
+      Right () -> pure ()
+    typecheck (T.unlines $ prelude <> ["bad2 :: Box Int", "bad2 = do", "  _ <- tick", "  Box 2"]) >>= \case
+      Left errs -> do
+        let rendered = T.pack (P.prettyPrintMultipleErrors P.defaultPPEOptions errs)
+        rendered `shouldSatisfy` T.isInfixOf "is redundant"
+        rendered `shouldSatisfy` T.isInfixOf "Test.purs:10:3"
+      Right () -> expectationFailure "Expected `_ <-` on a Unit result to be rejected"
+    -- The result type may only be known after later unification.
+    typecheck (T.unlines $ prelude <> ["bad3 :: Box Int", "bad3 = do", "  _ <- Box (id Unit)", "  Box 2", "id :: forall a. a -> a", "id a = a"]) >>= \case
+      Left errs -> do
+        let rendered = T.pack (P.prettyPrintMultipleErrors P.defaultPPEOptions errs)
+        rendered `shouldSatisfy` T.isInfixOf "is redundant"
+      Right () -> expectationFailure "Expected `_ <-` on an inferred Unit result to be rejected"

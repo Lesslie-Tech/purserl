@@ -92,6 +92,24 @@ swapPendingLists new = state $ \st -> (checkPendingLists st, st { checkPendingLi
 addPendingList :: SourceSpan -> SourceType -> Check ()
 addPendingList ss c = state $ \st -> ((), st { checkPendingLists = (ss, c) : checkPendingLists st })
 
+addPendingUnitDiscard :: SourceSpan -> SourceType -> Check ()
+addPendingUnitDiscard ss t = state $ \st -> ((), st { checkPendingUnitDiscards = (ss, t) : checkPendingUnitDiscards st })
+
+-- | Replace the pending explicit-discard result types, returning the previous ones.
+swapPendingUnitDiscards :: [(SourceSpan, SourceType)] -> Check [(SourceSpan, SourceType)]
+swapPendingUnitDiscards new = state $ \st -> (checkPendingUnitDiscards st, st { checkPendingUnitDiscards = new })
+
+-- | Report every explicit @_ <-@ whose result type ended up being @Unit@.
+resolvePendingUnitDiscards :: Check ()
+resolvePendingUnitDiscards = do
+  pending <- gets checkPendingUnitDiscards
+  sub <- gets checkSubstitution
+  forM_ (reverse pending) $ \(ss, ty) ->
+    case substituteType sub ty of
+      TypeConstructor _ q | q == C.Unit ->
+        throwError . errorMessage' ss $ UnnecessaryUnitDiscard
+      _ -> pure ()
+
 -- | Settle the container of every pending array literal: unresolved ones
 -- become arrays, and anything other than an array or list is a type error.
 -- Returns the pending containers, which may need promoting.
@@ -124,13 +142,16 @@ typesOf
   -> Check [((SourceAnn, Ident), (Expr, SourceType))]
 typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
     outerPending <- swapPendingLists []
+    outerDiscards <- swapPendingUnitDiscards []
     (tys, wInfer) <- capturingSubstitution tidyUp $ do
       (SplitBindingGroup untyped typed dict, w) <- withoutWarnings $ typeDictionaryForBindingGroup (Just moduleName) vals
       ds1 <- parU typed $ \e -> withoutWarnings $ checkTypedBindingGroupElement moduleName e dict
       ds2 <- forM untyped $ \e -> withoutWarnings $ typeForBindingGroupElement e dict
       pending <- resolvePendingLists
+      resolvePendingUnitDiscards
       return ((map (False, ) ds1 ++ map (True, ) ds2, w), pending)
     _ <- swapPendingLists outerPending
+    _ <- swapPendingUnitDiscards outerDiscards
 
     inferred <- forM tys $ \(shouldGeneralize, ((sai@(SourceAnn ss _, ident), (val, ty)), _)) -> do
       -- Replace type class dictionary placeholders with actual dictionaries
@@ -492,6 +513,12 @@ infer' (Abs binder ret)
   | DiscardBinder ss <- binder = do
       ty <- freshTypeWithKind kindType
       checkDiscarded ss ty
+      body@(TypedValue' _ _ bodyTy) <- withBindingGroupVisible $ infer' ret
+      (body', bodyTy') <- instantiatePolyTypeWithUnknowns (tvToExpr body) bodyTy
+      return $ TypedValue' True (Abs (VarBinder ss UnusedIdent) body') (function ty bodyTy')
+  | UnitDiscardBinder ss <- binder = do
+      ty <- freshTypeWithKind kindType
+      addPendingUnitDiscard ss ty
       body@(TypedValue' _ _ bodyTy) <- withBindingGroupVisible $ infer' ret
       (body', bodyTy') <- instantiatePolyTypeWithUnknowns (tvToExpr body) bodyTy
       return $ TypedValue' True (Abs (VarBinder ss UnusedIdent) body') (function ty bodyTy')
@@ -941,6 +968,11 @@ check' (Abs binder ret) ty@(TypeApp _ (TypeApp _ t argTy) retTy)
   | DiscardBinder ss <- binder = do
       unifyTypes t tyFunction
       checkDiscarded ss argTy
+      ret' <- withBindingGroupVisible $ check ret retTy
+      return $ TypedValue' True (Abs (VarBinder ss UnusedIdent) (tvToExpr ret')) ty
+  | UnitDiscardBinder ss <- binder = do
+      unifyTypes t tyFunction
+      addPendingUnitDiscard ss argTy
       ret' <- withBindingGroupVisible $ check ret retTy
       return $ TypedValue' True (Abs (VarBinder ss UnusedIdent) (tvToExpr ret')) ty
   | VarBinder ss arg <- binder = do

@@ -71,6 +71,11 @@ data Binder
   --
   | DiscardBinder !SourceSpan
   -- |
+  -- Wildcard binder for an explicit @_ <- x@ do-notation statement. The
+  -- typechecker rejects it when the matched value is of type `Unit`.
+  --
+  | UnitDiscardBinder !SourceSpan
+  -- |
   -- A native list cons pattern, @head : tail@. Introduced when the built-in
   -- operator is resolved.
   --
@@ -119,6 +124,8 @@ instance Eq Binder where
   (TypedBinder ty b) == (TypedBinder ty' b') =
     ty == ty' && b == b'
   DiscardBinder _ == DiscardBinder _ =
+    True
+  UnitDiscardBinder _ == UnitDiscardBinder _ =
     True
   (ConsBinder _ h t) == (ConsBinder _ h' t') =
     h == h' && t == t'
@@ -176,6 +183,7 @@ instance Ord Binder where
         orderOf ConsBinder{} = 11
         orderOf StringPrefixBinder{} = 12
         orderOf MapEntryBinder{} = 13
+        orderOf UnitDiscardBinder{} = 15
         orderOf AndBinder{} = 14
 
 -- |
@@ -209,6 +217,7 @@ binderNamesWithSpans = go []
 isIrrefutable :: Binder -> Bool
 isIrrefutable NullBinder = True
 isIrrefutable (DiscardBinder _) = True
+isIrrefutable (UnitDiscardBinder _) = True
 isIrrefutable (VarBinder _ _) = True
 isIrrefutable (PositionedBinder _ _ b) = isIrrefutable b
 isIrrefutable (TypedBinder _ b) = isIrrefutable b
